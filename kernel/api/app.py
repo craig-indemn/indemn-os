@@ -7,6 +7,7 @@ goes through it.
 
 from fastapi import FastAPI
 
+from kernel.api.bootstrap import bootstrap_router
 from kernel.api.errors import register_error_handlers
 from kernel.api.health import health_router
 from kernel.api.meta import meta_router
@@ -45,6 +46,7 @@ def create_app() -> FastAPI:
     app.add_middleware(AuthMiddleware)
     app.include_router(meta_router)
     app.include_router(health_router)
+    app.include_router(bootstrap_router)
 
     return app
 

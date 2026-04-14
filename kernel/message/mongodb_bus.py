@@ -105,18 +105,21 @@ class MongoDBMessageBus:
         if not message:
             return
         if message.attempt_count >= message.max_attempts:
-            new_status = "dead_letter"
+            # Dead-letter: preserve claimed_by for debugging (who last had it)
+            await Message.get_motor_collection().update_one(
+                {"_id": message_id},
+                {"$set": {"status": "dead_letter", "last_error": error}},
+            )
         else:
-            new_status = "pending"
-        update = {
-            "$set": {
-                "status": new_status,
-                "last_error": error,
-            }
-        }
-        if new_status == "pending":
-            update["$set"]["claimed_by"] = None
-            update["$set"]["visibility_timeout"] = None
-        await Message.get_motor_collection().update_one(
-            {"_id": message_id}, update
-        )
+            # Return to pending: clear claim state
+            await Message.get_motor_collection().update_one(
+                {"_id": message_id},
+                {
+                    "$set": {
+                        "status": "pending",
+                        "claimed_by": None,
+                        "visibility_timeout": None,
+                        "last_error": error,
+                    }
+                },
+            )

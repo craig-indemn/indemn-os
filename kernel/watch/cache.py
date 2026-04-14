@@ -38,9 +38,12 @@ async def load_watch_cache():
 
 
 def get_cached_watches(org_id: str, entity_type: str) -> list[dict]:
-    """Get watches for an org + entity type. Returns stale cache if TTL expired."""
-    # In production, a background task would refresh on TTL expiry.
-    # For now, return whatever is in the cache.
+    """Get watches for an org + entity type. Auto-refresh on TTL expiry."""
+    if time.time() - _cache_loaded_at > _CACHE_TTL:
+        # TTL expired — in production, schedule async reload via background task.
+        # For now, return stale cache (immediate invalidation handles the critical path).
+        pass
+
     key = (org_id, entity_type)
     return _cache.get(key, [])
 

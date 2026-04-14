@@ -114,4 +114,8 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             )
             render(result, "json")
 
+    # Register bulk commands for this entity type
+    from kernel.cli.bulk_commands import register_bulk_commands
+    register_bulk_commands(name, entity_app)
+
     parent.add_typer(entity_app, name=slug)

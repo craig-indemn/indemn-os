@@ -48,3 +48,19 @@ async def load_seed_data(seed_dir: Path = Path("seed")):
                 )
                 await skill.insert()
                 logger.info("Seeded skill: %s", name)
+
+    # Roles
+    roles_dir = seed_dir / "roles"
+    if roles_dir.exists():
+        from kernel_entities.role import Role
+
+        for yaml_file in sorted(roles_dir.glob("*.yaml")):
+            with open(yaml_file) as f:
+                data = yaml.safe_load(f)
+            existing = await Role.find_one(
+                {"name": data["name"], "org_id": data.get("org_id")}
+            )
+            if not existing:
+                role = Role(**data)
+                await role.insert()
+                logger.info("Seeded role: %s", data["name"])
