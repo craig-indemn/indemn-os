@@ -12,7 +12,7 @@ from typing import Optional
 from bson import ObjectId
 from pydantic import create_model
 
-from kernel.entity.base import BaseEntity
+from kernel.entity.base import DomainBaseEntity
 from kernel.entity.definition import EntityDefinition
 
 TYPE_MAP = {
@@ -29,7 +29,7 @@ TYPE_MAP = {
 }
 
 
-def create_entity_class(definition: EntityDefinition) -> type[BaseEntity]:
+def create_entity_class(definition: EntityDefinition) -> type[DomainBaseEntity]:
     """Create a Beanie Document subclass from an EntityDefinition."""
 
     # Build field definitions for create_model
@@ -50,10 +50,10 @@ def create_entity_class(definition: EntityDefinition) -> type[BaseEntity]:
     if definition.flexible_data:
         field_definitions["data"] = (dict, {})
 
-    # Create dynamic class
+    # Create dynamic class — uses DomainBaseEntity (Pydantic + Motor, no Beanie lazy model)
     DynamicEntity = create_model(
         definition.name,
-        __base__=BaseEntity,
+        __base__=DomainBaseEntity,
         **field_definitions,
     )
 
@@ -99,18 +99,7 @@ def create_entity_class(definition: EntityDefinition) -> type[BaseEntity]:
     DynamicEntity._flexible_data_config = definition.flexible_data
     DynamicEntity._is_kernel_entity = False
 
-    # Create Settings for Beanie — collection name and indexes
-    idx_list = [[("org_id", 1)] + list(idx.fields) for idx in definition.indexes]
-    # Always add org_id as base index
-    idx_list.append([("org_id", 1)])
-
-    DynamicEntity.Settings = type(
-        "Settings",
-        (),
-        {
-            "name": definition.collection_name,
-            "indexes": idx_list if idx_list else None,
-        },
-    )
+    # Set collection name for Motor operations (no Beanie Settings needed)
+    DynamicEntity._collection_name = definition.collection_name
 
     return DynamicEntity

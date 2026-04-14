@@ -115,7 +115,7 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                     if not entity.id:
                         entity.id = ObjectId()
                     await entity.get_motor_collection().insert_one(
-                        entity.model_dump(by_alias=True), session=session
+                        _serialize_entity(entity), session=session
                     )
                 else:
                     # Update with optimistic concurrency
@@ -155,15 +155,20 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                     )
 
         # Update loaded state for next change tracking
-        entity._loaded_state = entity.model_dump(by_alias=True)
+        entity._loaded_state = _serialize_entity(entity)
 
         # Return created messages for optimistic dispatch (Phase 2)
         return created_messages
 
 
+def _serialize_entity(entity) -> dict:
+    """Serialize an entity to dict. Works for both kernel (Beanie) and domain (Pydantic) entities."""
+    return entity.model_dump(by_alias=True)
+
+
 def _compute_changes(entity) -> list[dict]:
     """Compare current state against loaded state to find field-level changes."""
-    current = entity.model_dump(by_alias=True)
+    current = _serialize_entity(entity)
     loaded = entity._loaded_state
     changes = []
     for key in set(list(current.keys()) + list(loaded.keys())):
@@ -200,7 +205,7 @@ def _is_heartbeat_only(entity) -> bool:
     loaded = entity._loaded_state
     if not loaded:
         return False
-    current = entity.model_dump(by_alias=True)
+    current = _serialize_entity(entity)
     changed_fields = {k for k in current if current.get(k) != loaded.get(k)}
     changed_fields -= {"version", "updated_at"}
     return changed_fields <= {"last_heartbeat", "expires_at"}

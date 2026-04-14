@@ -124,13 +124,25 @@ async def init_database():
             continue
         try:
             dynamic_cls = create_entity_class(defn)
+            # Set the database reference so domain entities can access Motor
+            dynamic_cls._db_ref = _db
             ENTITY_REGISTRY[defn.name] = dynamic_cls
         except Exception as e:
             logger.error("Failed to create entity class for %s: %s", defn.name, e)
 
-    # Initialize Beanie with all registered models
-    all_models = list(ENTITY_REGISTRY.values())
-    await init_beanie(database=_db, document_models=all_models)
+    # Initialize Beanie with KERNEL models only (not domain entities).
+    # Domain entities use Pydantic + Motor directly — no Beanie lazy model.
+    await init_beanie(database=_db, document_models=kernel_models)
+
+    # Ensure indexes exist for domain entity collections
+    for defn in seen_names.values():
+        if defn.name in RESERVED_NAMES:
+            continue
+        coll = _db[defn.collection_name]
+        # Always index by org_id
+        await coll.create_index([("org_id", 1)])
+        for idx in defn.indexes:
+            await coll.create_index([("org_id", 1)] + list(idx.fields), unique=idx.unique)
 
     # Load watch cache
     from kernel.watch.cache import load_watch_cache

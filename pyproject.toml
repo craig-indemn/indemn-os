@@ -3,9 +3,9 @@ name = "indemn-os"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "beanie>=1.26",
-    "motor>=3.4",
-    "pymongo>=4.7",
+    "beanie>=1.26,<1.28",
+    "motor>=3.3,<3.6",
+    "pymongo>=4.6,<4.8",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "typer>=0.12",
