@@ -31,6 +31,15 @@ async def get_entity_metadata(actor=Depends(get_current_actor)):
                 for cap in getattr(cls, "_activated_capabilities", [])
             ],
             "is_kernel_entity": getattr(cls, "_is_kernel_entity", False),
+            "exposed_methods": [
+                {"name": attr._exposed_name}
+                for attr_name in dir(cls)
+                if (attr := getattr(cls, attr_name, None)) and getattr(attr, "_exposed", False)
+            ],
+            "permissions": {
+                "read": _check_permission(actor, name, "read"),
+                "write": _check_permission(actor, name, "write"),
+            },
         }
         result.append(meta)
 

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     mongodb_max_pool_size: int = 50
 
     # Auth
-    jwt_signing_key: str = "dev-signing-key-not-for-production"
+    jwt_signing_key: str  # Required — no default. Set via env var or .env file.
     jwt_access_token_expire_minutes: int = 15
     jwt_algorithm: str = "HS256"
 
