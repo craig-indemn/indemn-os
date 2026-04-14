@@ -1,0 +1,56 @@
+"""FastAPI application factory.
+
+The API server is the gateway — the only service that faces the internet.
+Every CLI command, UI interaction, harness operation, and Tier 3 API call
+goes through it.
+"""
+
+from fastapi import FastAPI
+
+from kernel.api.errors import register_error_handlers
+from kernel.api.health import health_router
+from kernel.api.meta import meta_router
+from kernel.auth.middleware import AuthMiddleware
+from kernel.observability.tracing import init_tracing
+
+
+def create_app() -> FastAPI:
+    """Create the FastAPI application."""
+    app = FastAPI(title="Indemn OS API", version="0.1.0")
+
+    register_error_handlers(app)
+
+    @app.on_event("startup")
+    async def startup():
+        init_tracing()
+
+        from kernel.db import init_database, ENTITY_REGISTRY
+        from kernel.api.registration import register_entity_routes
+
+        await init_database()
+
+        # Register routes for all entity types
+        for name, cls in ENTITY_REGISTRY.items():
+            register_entity_routes(app, name, cls)
+
+    @app.on_event("shutdown")
+    async def shutdown():
+        """Graceful shutdown: close connections."""
+        from kernel.db import get_client
+
+        client = get_client()
+        if client:
+            client.close()
+
+    app.add_middleware(AuthMiddleware)
+    app.include_router(meta_router)
+    app.include_router(health_router)
+
+    return app
+
+
+# Entry point for `python -m kernel.api.app`
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(create_app, host="0.0.0.0", port=8000, factory=True)

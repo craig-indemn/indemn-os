@@ -1,0 +1,148 @@
+"""Auto-register API routes from entity definitions.
+
+Every entity type gets CRUD + transition + @exposed methods + capability routes.
+This is the self-evidence property: define an entity, its API exists.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional
+
+from kernel.auth.middleware import check_permission, get_current_actor
+from kernel.context import current_org_id
+
+
+def register_entity_routes(app, entity_name: str, entity_cls: type):
+    """Register CRUD + transition + @exposed method + capability routes."""
+    slug = entity_name.lower() + "s"
+    router = APIRouter(prefix=f"/api/{slug}", tags=[entity_name])
+
+    @router.get("/")
+    async def list_entities(
+        limit: int = Query(20, le=100),
+        offset: int = 0,
+        status: Optional[str] = None,
+        sort: str = "-created_at",
+        actor=Depends(get_current_actor),
+    ):
+        check_permission(actor, entity_name, "read")
+        filter_doc = {}
+        if status:
+            filter_doc["status"] = status
+        entities = await entity_cls.find_scoped(filter_doc).skip(offset).limit(limit).to_list()
+        return [e.model_dump() for e in entities]
+
+    @router.get("/{entity_id}")
+    async def get_entity(entity_id: str, actor=Depends(get_current_actor)):
+        check_permission(actor, entity_name, "read")
+        entity = await entity_cls.get_scoped(entity_id)
+        if not entity:
+            raise HTTPException(404)
+        return entity.model_dump()
+
+    @router.post("/")
+    async def create_entity(data: dict, actor=Depends(get_current_actor)):
+        check_permission(actor, entity_name, "write")
+        entity = entity_cls(org_id=current_org_id.get(), **data)
+        await entity.save_tracked(method="create")
+        return entity.model_dump()
+
+    @router.put("/{entity_id}")
+    async def update_entity(entity_id: str, data: dict, actor=Depends(get_current_actor)):
+        check_permission(actor, entity_name, "write")
+        entity = await entity_cls.get_scoped(entity_id)
+        if not entity:
+            raise HTTPException(404)
+        for key, value in data.items():
+            if key not in ("id", "_id", "org_id", "version"):
+                setattr(entity, key, value)
+        await entity.save_tracked()
+        return entity.model_dump()
+
+    @router.post("/{entity_id}/transition")
+    async def transition_entity(
+        entity_id: str,
+        to: str,
+        reason: str = None,
+        actor=Depends(get_current_actor),
+    ):
+        check_permission(actor, entity_name, "write")
+        entity = await entity_cls.get_scoped(entity_id)
+        if not entity:
+            raise HTTPException(404)
+        entity.transition_to(to, reason)
+        await entity.save_tracked(method="transition")
+        return entity.model_dump()
+
+    # Register @exposed methods as additional routes
+    for attr_name in dir(entity_cls):
+        attr = getattr(entity_cls, attr_name, None)
+        if attr and getattr(attr, "_exposed", False):
+            method_name = attr._exposed_name
+            _register_exposed_route(router, entity_cls, entity_name, method_name, attr)
+
+    # Register capability-activated methods
+    for cap_activation in getattr(entity_cls, "_activated_capabilities", []):
+        cap_name = (
+            cap_activation.capability
+            if hasattr(cap_activation, "capability")
+            else cap_activation.get("capability", "")
+        )
+        _register_capability_route(router, entity_cls, entity_name, cap_name, cap_activation)
+
+    app.include_router(router)
+
+
+def _register_exposed_route(router, entity_cls, entity_name, method_name, method):
+    """Register an @exposed method as POST /api/{entities}/{id}/{method_name}"""
+
+    @router.post(f"/{{entity_id}}/{method_name.replace('_', '-')}")
+    async def exposed_method(
+        entity_id: str, data: dict = {}, actor=Depends(get_current_actor)
+    ):
+        check_permission(actor, entity_name, "write")
+        entity = await entity_cls.get_scoped(entity_id)
+        if not entity:
+            raise HTTPException(404)
+        result = await method(entity, **data)
+        return result
+
+
+def _register_capability_route(router, entity_cls, entity_name, cap_name, activation):
+    """Register a capability as POST /api/{entities}/{id}/{cap-name}?auto=true"""
+
+    @router.post(f"/{{entity_id}}/{cap_name.replace('_', '-')}")
+    async def capability_method(
+        entity_id: str,
+        auto: bool = False,
+        data: dict = {},
+        actor=Depends(get_current_actor),
+    ):
+        check_permission(actor, entity_name, "write")
+        entity = await entity_cls.get_scoped(entity_id)
+        if not entity:
+            raise HTTPException(404)
+        if auto:
+            from kernel.capability.registry import get_capability
+
+            capability_fn = get_capability(cap_name)
+            config = (
+                activation.config
+                if hasattr(activation, "config")
+                else activation.get("config", {})
+            )
+            result = await capability_fn(entity, config, entity.org_id)
+            # If not needs_reasoning, apply the result and save
+            if not result.get("needs_reasoning"):
+                for field, value in result.get("result", {}).items():
+                    setattr(entity, field, value)
+                await entity.save_tracked(
+                    method=cap_name,
+                    method_metadata={"rule_evaluation": result.get("rule_evaluation")},
+                )
+            return result
+        else:
+            # Manual invocation — just apply provided data
+            for field, value in data.items():
+                setattr(entity, field, value)
+            await entity.save_tracked(method=cap_name)
+            return entity.model_dump()
