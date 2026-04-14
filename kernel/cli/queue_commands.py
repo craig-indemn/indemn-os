@@ -1,0 +1,39 @@
+"""Queue management commands — stats, dead-letter, retry."""
+
+import typer
+
+from kernel.cli.client import CLIClient, render
+
+queue_app = typer.Typer(name="queue", help="Message queue management")
+
+
+@queue_app.command("stats")
+def queue_stats(role: str = None, fmt: str = typer.Option("table", "--format")):
+    """Show queue statistics (pending, processing, dead-letter counts per role)."""
+    client = CLIClient()
+    params = {}
+    if role:
+        params["role"] = role
+    result = client.get("/api/_meta/queue-stats", params=params)
+    render(result, fmt)
+
+
+@queue_app.command("dead-letter")
+def dead_letter_list(
+    limit: int = 20, fmt: str = typer.Option("table", "--format")
+):
+    """List dead-letter messages."""
+    client = CLIClient()
+    result = client.get(
+        "/api/message_queues", params={"status": "dead_letter", "limit": limit}
+    )
+    render(result, fmt)
+
+
+@queue_app.command("retry")
+def retry_message(message_id: str):
+    """Retry a dead-letter message by resetting to pending."""
+    client = CLIClient()
+    result = client.post(f"/api/message_queues/{message_id}/retry")
+    typer.echo(f"Message {message_id} reset to pending")
+    render(result, "json")
