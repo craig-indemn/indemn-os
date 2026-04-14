@@ -1,0 +1,36 @@
+version: "3.8"
+services:
+  indemn-api:
+    build: .
+    command: uv run uvicorn kernel.api.app:create_app --factory --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=${MONGODB_URI}  # Atlas dev cluster
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=us-east-1
+      - JWT_SIGNING_KEY=dev-signing-key-not-for-production
+      - INDEMN_API_URL=http://localhost:8000
+      - TEMPORAL_ADDRESS=localhost:7233
+      - TEMPORAL_NAMESPACE=default
+      - ENVIRONMENT=local
+    volumes:
+      - .:/app
+
+  indemn-queue-processor:
+    build: .
+    command: uv run python -m kernel.queue_processor
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - TEMPORAL_ADDRESS=localhost:7233
+      - TEMPORAL_NAMESPACE=default
+      - ENVIRONMENT=local
+    depends_on:
+      - indemn-api
+
+  temporal-dev:
+    image: temporalio/auto-setup:latest
+    ports:
+      - "7233:7233"
+      - "8233:8233"  # Temporal UI

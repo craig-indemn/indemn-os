@@ -1,0 +1,49 @@
+[project]
+name = "indemn-os"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "beanie>=1.26",
+    "motor>=3.4",
+    "pymongo>=4.7",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "typer>=0.12",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyjwt>=2.8",
+    "argon2-cffi>=23.1",
+    "pyotp>=2.9",
+    "temporalio>=1.6",
+    "opentelemetry-api>=1.25",
+    "opentelemetry-sdk>=1.25",
+    "opentelemetry-exporter-otlp>=1.25",
+    "boto3>=1.34",
+    "orjson>=3.10",
+    "python-multipart>=0.0.9",
+    "pyyaml>=6.0",
+    "jsonschema>=4.21",
+    "croniter>=2.0",
+]
+
+[project.scripts]
+indemn = "kernel.cli.app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "ruff>=0.4",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
