@@ -61,6 +61,17 @@ class CLIClient:
             self._handle_error(r)
             return r.json() if r.text else {}
 
+    def stream(self, method, path, params=None):
+        """Return an httpx streaming response context manager.
+
+        Usage:
+            with client.stream("GET", "/api/events", params={}) as response:
+                for line in response.iter_lines():
+                    print(line)
+        """
+        client = httpx.Client(base_url=self.base_url, timeout=None)
+        return client.stream(method, path, params=params, headers=self._headers())
+
 
 def render(data, fmt: str = "json"):
     """Render output in the requested format."""

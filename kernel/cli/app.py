@@ -18,6 +18,7 @@ def main():
     from kernel.cli.audit_commands import audit_app
     from kernel.cli.bulk_monitor import bulk_app
     from kernel.cli.entity_commands import entity_app
+    from kernel.cli.events_commands import events_app
     from kernel.cli.integration_commands import integration_app
     from kernel.cli.lookup_commands import lookup_app
     from kernel.cli.org_commands import org_app
@@ -32,6 +33,7 @@ def main():
     app.add_typer(bulk_app, name="bulk")
     app.add_typer(integration_app, name="integration")
     app.add_typer(audit_app, name="audit")
+    app.add_typer(events_app, name="events")
 
     # Fetch entity metadata and register dynamic commands
     try:
