@@ -4,8 +4,6 @@ Validates via adapter, parses into entity operations, applies via save_tracked()
 Entity operations go through the state machine for enforcement and event emission.
 """
 
-import logging
-
 import orjson
 from fastapi import APIRouter, HTTPException, Request
 
@@ -14,8 +12,6 @@ from kernel.db import ENTITY_REGISTRY
 from kernel.integration.credentials import fetch_credentials
 from kernel.integration.registry import get_adapter_class
 from kernel_entities.integration import Integration
-
-logger = logging.getLogger(__name__)
 
 webhook_router = APIRouter(tags=["webhooks"])
 

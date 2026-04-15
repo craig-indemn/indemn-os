@@ -4,15 +4,12 @@ Credentials are stored in Secrets Manager and cached in-process
 with a 5-minute TTL. Cache is invalidated on store/rotate.
 """
 
-import logging
 import time
 
 import boto3
 import orjson
 
 from kernel.config import settings
-
-logger = logging.getLogger(__name__)
 
 _secrets_client = None
 _cache: dict[str, tuple[dict, float]] = {}

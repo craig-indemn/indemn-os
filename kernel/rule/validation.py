@@ -7,8 +7,11 @@ heuristic overlap detection with existing rules.
 from kernel.rule.schema import Rule
 
 
-async def validate_rule(rule: Rule) -> list[str]:
-    """Validate a rule before creation. Returns list of errors."""
+async def validate_rule(rule: Rule, actor_roles: list[str] = None) -> list[str]:
+    """Validate a rule before creation. Returns list of errors.
+
+    actor_roles: list of role names for the creating actor (for future RBAC validation).
+    """
     errors = []
 
     # 1. Fields in 'sets' must exist in entity schema
