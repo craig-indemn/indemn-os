@@ -56,7 +56,7 @@ class BulkAbortError(Exception):
 async def claim_message(message_id: str, actor_id: str) -> bool:
     """Atomic claim via findOneAndUpdate. Returns False if already claimed."""
     bus = MongoDBMessageBus()
-    msg = await bus.claim_by_id(ObjectId(message_id), ObjectId(actor_id))
+    msg = await bus.claim_by_id(message_id, ObjectId(actor_id))
     return msg is not None
 
 
@@ -239,6 +239,8 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
                             )
                     elif spec.operation == "update":
                         if spec.sets:
+                            for field, value in spec.sets.items():
+                                setattr(entity, field, value)
                             # Silent update — bypasses save_tracked() to avoid event emission
                             await entity.get_motor_collection().update_one(
                                 {"_id": entity.id},
@@ -319,7 +321,7 @@ async def _load_skills(skill_names: list[str]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-async def _execute_deterministic(associate, skills: str, context: dict) -> dict:
+async def _execute_deterministic(associate: "Actor", skills: str, context: dict) -> dict:
     """Execute skill deterministically — no LLM.
 
     The deterministic interpreter [G-25]:
@@ -361,7 +363,7 @@ async def _execute_deterministic(associate, skills: str, context: dict) -> dict:
     return {"status": "completed", "results": results}
 
 
-async def _execute_reasoning(associate, skills: str, context: dict) -> dict:
+async def _execute_reasoning(associate: "Actor", skills: str, context: dict) -> dict:
     """Execute skill using LLM reasoning.
 
     The LLM reads the skill, analyzes the context, and decides which
@@ -481,7 +483,7 @@ async def _execute_reasoning(associate, skills: str, context: dict) -> dict:
     return {"status": "completed", "results": results, "warning": "max_iterations_reached"}
 
 
-async def _execute_hybrid(associate, skills: str, context: dict) -> dict:
+async def _execute_hybrid(associate: "Actor", skills: str, context: dict) -> dict:
     """Try deterministic first. If any step returns needs_reasoning,
     fall back to LLM for the remainder."""
     result = await _execute_deterministic(associate, skills, context)
@@ -550,7 +552,7 @@ def _parse_simple_condition(line: str) -> dict:
 # --- Helpers ---
 
 
-async def _get_roles(actor) -> list:
+async def _get_roles(actor: "Actor") -> list:
     """Load role entities for an actor."""
     from kernel_entities.role import Role
 
@@ -560,7 +562,7 @@ async def _get_roles(actor) -> list:
 # --- API call translation ---
 
 
-async def _execute_command_via_api(command: str, entity_data: dict, associate) -> dict:
+async def _execute_command_via_api(command: str, entity_data: dict, associate: "Actor") -> dict:
     """Execute an indemn CLI command by translating it to an API call. [G-21]"""
     parts = command.strip().split()
     if parts[0] != "indemn":

@@ -13,6 +13,7 @@ from kernel.api.direct_invoke import invoke_router
 from kernel.api.errors import register_error_handlers
 from kernel.api.health import health_router
 from kernel.api.human_review import review_router
+from kernel.api.integration_routes import integration_mgmt_router
 from kernel.api.meta import meta_router
 from kernel.api.webhook import webhook_router
 from kernel.auth.middleware import AuthMiddleware
@@ -37,9 +38,14 @@ def create_app() -> FastAPI:
 
         await init_database()
 
-        # Register routes for all entity types
+        # Register routes for entity types (skip infrastructure documents)
+        _INFRASTRUCTURE = {
+            "EntityDefinition", "Skill", "Rule", "RuleGroup", "Lookup",
+            "Message", "MessageLog", "ChangeRecord",
+        }
         for name, cls in ENTITY_REGISTRY.items():
-            register_entity_routes(app, name, cls)
+            if name not in _INFRASTRUCTURE:
+                register_entity_routes(app, name, cls)
 
     @app.on_event("shutdown")
     async def shutdown():
@@ -57,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(invoke_router)
     app.include_router(review_router)
     app.include_router(bulk_router)
+    app.include_router(integration_mgmt_router)
     app.include_router(webhook_router)
 
     return app

@@ -36,6 +36,29 @@ async def start_bulk_operation(
     return {"workflow_id": workflow_id, "status": "started"}
 
 
+@bulk_router.get("/")
+async def list_bulk_operations(
+    status: str = None,
+    actor=Depends(get_current_actor),
+):
+    """List active and recent bulk operations."""
+    client = await get_temporal_client()
+    if not client:
+        raise HTTPException(503, "Temporal not available")
+
+    # Query Temporal for bulk workflows
+    workflows = []
+    async for wf in client.list_workflows(query="WorkflowType = 'BulkExecuteWorkflow'"):
+        info = {
+            "workflow_id": wf.id,
+            "status": wf.status.name if wf.status else "unknown",
+            "start_time": str(wf.start_time) if wf.start_time else None,
+        }
+        if status is None or info["status"].lower() == status.lower():
+            workflows.append(info)
+    return workflows
+
+
 @bulk_router.get("/{workflow_id}")
 async def get_bulk_status(
     workflow_id: str,

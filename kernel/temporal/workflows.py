@@ -119,7 +119,8 @@ class HumanReviewWorkflow:
 
     @workflow.signal
     async def submit_decision(self, decision: dict):
-        """Signal handler — called when human makes their decision via UI/CLI."""
+        """Signal handler — called when human makes their decision via UI/CLI.
+        Decision format: {"action": "approve"|"reject"|"escalate", "reason": "...", "data": {...}}"""
         self._decision = decision
 
     @workflow.run

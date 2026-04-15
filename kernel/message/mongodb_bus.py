@@ -18,12 +18,13 @@ class MongoDBMessageBus:
         """Write a message to the queue within a transaction."""
         await message.insert(session=session)
 
-    async def claim_by_id(self, message_id: ObjectId, actor_id: ObjectId) -> Message:
+    async def claim_by_id(self, message_id, actor_id: ObjectId) -> Message:
         """Claim a specific message by ID. Used by Temporal activities."""
         now = datetime.now(timezone.utc)
+        _id = ObjectId(message_id) if not isinstance(message_id, ObjectId) else message_id
         result = await Message.get_motor_collection().find_one_and_update(
             {
-                "_id": message_id,
+                "_id": _id,
                 "$or": [
                     {"status": "pending"},
                     {"status": "processing", "visibility_timeout": {"$lt": now}},
