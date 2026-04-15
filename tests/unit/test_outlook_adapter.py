@@ -1,6 +1,6 @@
 """Tests for Outlook adapter — field mapping and token refresh detection."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from kernel.integration.adapters.outlook import OutlookAdapter
 
@@ -51,7 +51,7 @@ class TestOutlookTokenRefresh:
             config={"tenant_id": "t", "client_id": "c"},
             credentials={
                 "access_token": "tok",
-                "expires_at": (datetime.utcnow() - timedelta(minutes=10)).isoformat(),
+                "expires_at": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
                 "client_secret": "s",
                 "refresh_token": "r",
             },
@@ -63,7 +63,7 @@ class TestOutlookTokenRefresh:
             config={"tenant_id": "t", "client_id": "c"},
             credentials={
                 "access_token": "tok",
-                "expires_at": (datetime.utcnow() + timedelta(hours=1)).isoformat(),
+                "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
                 "client_secret": "s",
                 "refresh_token": "r",
             },

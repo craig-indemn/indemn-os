@@ -4,7 +4,7 @@ Supports: fetch emails, send emails, OAuth token refresh.
 Uses async httpx for all HTTP calls. [G-31]
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -25,7 +25,7 @@ class OutlookAdapter(Adapter):
         expires_at = self.credentials.get("expires_at")
         if not expires_at:
             return False
-        return datetime.fromisoformat(expires_at) < datetime.utcnow() + timedelta(minutes=5)
+        return datetime.fromisoformat(expires_at) < datetime.now(timezone.utc) + timedelta(minutes=5)
 
     async def refresh_token(self) -> dict:
         """Refresh OAuth tokens using the refresh token. [G-26]"""
@@ -52,7 +52,7 @@ class OutlookAdapter(Adapter):
                     "refresh_token", self.credentials["refresh_token"]
                 ),
                 "expires_at": (
-                    datetime.utcnow() + timedelta(seconds=token_data["expires_in"])
+                    datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
                 ).isoformat(),
             }
 

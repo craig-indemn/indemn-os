@@ -4,7 +4,7 @@ Uses the Stripe Python SDK. Sync SDK calls run in executor. [G-31]
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import stripe
@@ -62,7 +62,7 @@ class StripeAdapter(Adapter):
                 "operation": "transition",
                 "params": {
                     "to_status": "completed",
-                    "charged_at": datetime.utcnow().isoformat(),
+                    "charged_at": datetime.now(timezone.utc).isoformat(),
                 },
             }
         elif event_type == "payment_intent.payment_failed":

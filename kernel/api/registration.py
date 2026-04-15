@@ -102,6 +102,9 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         )
         _register_capability_route(router, entity_cls, entity_name, cap_name, cap_activation)
 
+    # Register per-entity bulk endpoint
+    _register_bulk_route(router, entity_name)
+
     app.include_router(router)
 
 
@@ -159,3 +162,27 @@ def _register_capability_route(router, entity_cls, entity_name, cap_name, activa
                 setattr(entity, field, value)
             await entity.save_tracked(method=cap_name)
             return entity.model_dump()
+
+
+def _register_bulk_route(router, entity_name: str):
+    """Register POST /api/{entities}/bulk — starts BulkExecuteWorkflow."""
+    from uuid import uuid4
+
+    @router.post("/bulk")
+    async def start_bulk(spec: dict, actor=Depends(get_current_actor)):
+        check_permission(actor, entity_name, "write")
+        spec["entity_type"] = entity_name
+        from kernel.temporal.client import get_temporal_client
+        from kernel.temporal.workflows import BulkExecuteWorkflow
+
+        client = await get_temporal_client()
+        if not client:
+            raise HTTPException(503, "Temporal not available")
+        workflow_id = f"bulk-{uuid4().hex[:12]}"
+        await client.start_workflow(
+            BulkExecuteWorkflow.run,
+            args=[spec],
+            id=workflow_id,
+            task_queue="indemn-kernel",
+        )
+        return {"workflow_id": workflow_id, "status": "started"}

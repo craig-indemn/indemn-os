@@ -47,14 +47,21 @@ async def get_adapter(
 
 
 async def execute_with_retry(adapter: Adapter, method_name: str, *args, **kwargs):
-    """Execute an adapter method with automatic retry on auth errors.
+    """Execute an adapter method with automatic retry on errors.
 
-    On AdapterAuthError: refresh token, recreate adapter, retry once.
+    AdapterAuthError: refresh token and retry once.
+    AdapterRateLimitError: backoff using retry_after and retry once.
+    AdapterTimeoutError: retry once immediately.
     """
+    import asyncio
+
+    from kernel.integration.adapter import AdapterRateLimitError, AdapterTimeoutError
+
     method = getattr(adapter, method_name)
     try:
         return await method(*args, **kwargs)
     except AdapterAuthError:
+        # Refresh token and retry
         if hasattr(adapter, "refresh_token"):
             try:
                 new_creds = await adapter.refresh_token()
@@ -64,3 +71,13 @@ async def execute_with_retry(adapter: Adapter, method_name: str, *args, **kwargs
             except Exception:
                 raise
         raise
+    except AdapterRateLimitError as e:
+        # Backoff using retry_after, then retry once
+        wait = e.retry_after or 60
+        logger.warning("Rate limited, waiting %d seconds before retry", wait)
+        await asyncio.sleep(wait)
+        return await method(*args, **kwargs)
+    except AdapterTimeoutError:
+        # Retry once on timeout
+        logger.warning("Timeout on %s, retrying once", method_name)
+        return await method(*args, **kwargs)
