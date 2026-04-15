@@ -18,6 +18,7 @@ from kernel.api.integration_routes import integration_mgmt_router
 from kernel.api.lookup_routes import lookup_router
 from kernel.api.meta import meta_router
 from kernel.api.queue_routes import queue_router
+from kernel.api.skill_routes import skill_router
 from kernel.api.webhook import webhook_router
 from kernel.auth.middleware import AuthMiddleware
 from kernel.observability.tracing import init_tracing
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(queue_router)
     app.include_router(lookup_router)
     app.include_router(admin_router)
+    app.include_router(skill_router)
 
     return app
 

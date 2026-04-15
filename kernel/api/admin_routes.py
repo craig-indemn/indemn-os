@@ -81,3 +81,51 @@ async def org_import(data: dict, actor=Depends(get_current_actor)):
 async def org_deploy(data: dict, actor=Depends(get_current_actor)):
     """Deploy configuration changes to an org."""
     return {"status": "not_implemented", "message": "Org deploy available in Phase 4"}
+
+
+# --- Audit ---
+
+
+@admin_router.get("/api/_platform/audit/verify")
+async def audit_verify(
+    limit: int = 1000,
+    org: str = None,
+    entity_type: str = None,
+    actor=Depends(get_current_actor),
+):
+    """Verify the changes collection hash chain integrity."""
+    from kernel.changes.collection import ChangeRecord
+    from kernel.changes.hash_chain import compute_hash
+
+    filter_doc = {}
+    if org:
+        from bson import ObjectId
+
+        filter_doc["org_id"] = ObjectId(org)
+    if entity_type:
+        filter_doc["entity_type"] = entity_type
+
+    records = (
+        await ChangeRecord.find(filter_doc)
+        .sort([("_id", 1)])
+        .limit(limit)
+        .to_list()
+    )
+
+    if not records:
+        return {"chain_valid": True, "records_checked": 0}
+
+    for i, record in enumerate(records):
+        if i == 0:
+            continue  # First record has no previous hash to check
+        expected_hash = compute_hash(records[i - 1])
+        if record.previous_hash != expected_hash:
+            return {
+                "chain_valid": False,
+                "records_checked": i + 1,
+                "break_at": str(record.id),
+                "expected_hash": expected_hash,
+                "actual_hash": record.previous_hash,
+            }
+
+    return {"chain_valid": True, "records_checked": len(records)}
