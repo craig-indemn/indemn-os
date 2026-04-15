@@ -2,15 +2,11 @@
 
 import pytest
 
-from bson import ObjectId
-
 from kernel.auth.audit import write_auth_event
 from kernel.auth.jwt import (
-    create_access_token,
     revoke_in_cache,
     verify_access_token,
 )
-from kernel.auth.password import hash_password, verify_password
 from kernel.auth.rate_limit import (
     RATE_LIMIT_COLLECTION,
     check_rate_limit,
@@ -19,7 +15,6 @@ from kernel.auth.rate_limit import (
 from kernel.auth.session_manager import create_session, revoke_all_sessions
 from kernel.changes.collection import ChangeRecord
 from kernel.config import settings
-from kernel_entities.actor import Actor
 from kernel_entities.session import Session
 
 settings.jwt_signing_key = "test-secret-key-for-integration-tests"
