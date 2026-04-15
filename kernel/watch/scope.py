@@ -42,11 +42,21 @@ async def _resolve_field_path(scope: dict, entity, session) -> ObjectId | None:
     current_data = entity.model_dump(by_alias=True)
 
     for part in parts[:-1]:
-        # This part is a relationship field — load the related entity
+        # This part is a relationship field — load the related entity.
+        # Support dot-notation shorthand: "organization" resolves to
+        # field "organization_id" (the _id suffix is implicit).
         related_id = current_data.get(part)
+        field_name = part
+        if related_id is None:
+            # Try with _id suffix (spec shorthand)
+            related_id = current_data.get(part + "_id")
+            if related_id is not None:
+                field_name = part + "_id"
         if not related_id:
             return None
-        entity_cls = _resolve_entity_type_for_field(type(entity).__name__, part)
+        entity_cls = _resolve_entity_type_for_field(
+            type(entity).__name__, field_name,
+        )
         if not entity_cls:
             return None
         related = await entity_cls.get(related_id)

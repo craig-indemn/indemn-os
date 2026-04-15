@@ -113,6 +113,34 @@ async def modify_entity_definition(
     return {"status": "modified", "added": added, "removed": removed}
 
 
+# --- Role Management ---
+
+
+@admin_router.post("/api/_platform/role/add-watch")
+async def role_add_watch(data: dict, actor=Depends(get_current_actor)):
+    """Append a watch definition to an existing role by name."""
+    from kernel_entities.role import Role, WatchDefinition
+
+    role_name = data.get("role_name")
+    watch_data = data.get("watch")
+    if not role_name or not watch_data:
+        raise HTTPException(400, "role_name and watch required")
+
+    org_id = current_org_id.get()
+    role = await Role.find_one({"name": role_name, "org_id": org_id})
+    if not role:
+        raise HTTPException(404, f"Role '{role_name}' not found")
+
+    watch = WatchDefinition(**watch_data)
+    role.watches.append(watch)
+    await role.save_tracked(actor_id=str(actor.id), method="add_watch")
+
+    return {
+        "role": role_name,
+        "watches_count": len(role.watches),
+    }
+
+
 # --- Actor Management ---
 
 
@@ -302,22 +330,14 @@ async def report_compare(data: dict, actor=Depends(get_current_actor)):
         if key:
             old_by_key[key] = record
 
-    # Load all OS entities with matching field values
-    org_id = current_org_id.get()
-    match_values = list(old_by_key.keys())
-
-    # Query in batches
+    # Load ALL OS entities for this type (to detect extras)
     os_by_key = {}
-    batch_size = 500
-    for i in range(0, len(match_values), batch_size):
-        batch = match_values[i:i + batch_size]
-        filter_doc = {"org_id": org_id, match_field: {"$in": batch}}
-        entities = await entity_cls.find_scoped(filter_doc).to_list()
-        for entity in entities:
-            entity_data = entity.model_dump(by_alias=True)
-            key = entity_data.get(match_field)
-            if key:
-                os_by_key[key] = entity_data
+    all_entities = await entity_cls.find_scoped({}).to_list()
+    for entity in all_entities:
+        entity_data = entity.model_dump(by_alias=True)
+        key = entity_data.get(match_field)
+        if key:
+            os_by_key[key] = entity_data
 
     # Compare
     comparisons = []
@@ -331,6 +351,7 @@ async def report_compare(data: dict, actor=Depends(get_current_actor)):
             comparisons.append({
                 match_field: key,
                 "status": "missing_in_os",
+                "fields": {f: {"old": old_record.get(f)} for f in compare_fields},
             })
             missing_in_os += 1
             continue
@@ -363,12 +384,23 @@ async def report_compare(data: dict, actor=Depends(get_current_actor)):
             "fields": field_matches,
         })
 
+    # Detect entities in OS but not in old system
+    extra_in_os = 0
+    for key in os_by_key:
+        if key not in old_by_key:
+            extra_in_os += 1
+            comparisons.append({
+                match_field: key,
+                "status": "extra_in_os",
+            })
+
     return {
         "summary": {
             "total": len(old_by_key),
             "matched": matched,
             "mismatched": mismatched,
             "missing_in_os": missing_in_os,
+            "extra_in_os": extra_in_os,
         },
         "comparisons": comparisons,
     }

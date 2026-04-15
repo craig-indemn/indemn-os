@@ -16,10 +16,17 @@ def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str
 
     # Fields
     lines.append("## Fields\n")
-    lines.append("| Field | Type | Required |")
-    lines.append("|-------|------|----------|")
+    lines.append("| Field | Type | Required | Details |")
+    lines.append("|-------|------|----------|---------|")
     for name, fdef in definition.fields.items():
-        lines.append(f"| {name} | {fdef.type} | {'Yes' if fdef.required else 'No'} |")
+        details = []
+        if fdef.enum_values:
+            details.append(f"Values: {', '.join(fdef.enum_values)}")
+        if fdef.is_relationship and fdef.relationship_target:
+            details.append(f"→ {fdef.relationship_target}")
+        detail_str = "; ".join(details) if details else ""
+        req = "Yes" if fdef.required else "No"
+        lines.append(f"| {name} | {fdef.type} | {req} | {detail_str} |")
 
     # State machine
     if definition.state_machine:

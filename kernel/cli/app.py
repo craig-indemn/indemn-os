@@ -26,6 +26,7 @@ def main():
     from kernel.cli.platform_commands import platform_app
     from kernel.cli.queue_commands import queue_app
     from kernel.cli.report_commands import report_app
+    from kernel.cli.role_commands import role_app as role_mgmt_app
     from kernel.cli.rule_commands import rule_app
     from kernel.cli.skill_commands import skill_app
 
@@ -42,6 +43,19 @@ def main():
     app.add_typer(rule_app, name="rule")
     app.add_typer(actor_app, name="actor")
     app.add_typer(report_app, name="report")
+    app.add_typer(role_mgmt_app, name="role")
+
+    # Top-level deploy alias (spec: `indemn deploy --from-org --to-org`)
+    @app.command("deploy")
+    def deploy_alias(
+        from_org: str = typer.Option(..., "--from-org"),
+        to_org: str = typer.Option(..., "--to-org"),
+        dry_run: bool = True,
+        apply: bool = typer.Option(False, "--apply"),
+    ):
+        """Deploy configuration (alias for org deploy)."""
+        from kernel.cli.org_commands import deploy_org
+        deploy_org(from_org=from_org, to_org=to_org, dry_run=dry_run, apply=apply)
 
     # Fetch entity metadata and register dynamic commands
     try:

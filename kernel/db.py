@@ -141,8 +141,17 @@ async def init_database():
         coll = _db[defn.collection_name]
         # Always index by org_id
         await coll.create_index([("org_id", 1)])
+        # Compound indexes from IndexDef list
         for idx in defn.indexes:
             await coll.create_index([("org_id", 1)] + list(idx.fields), unique=idx.unique)
+        # Per-field indexes from FieldDefinition.indexed/unique flags
+        for fname, fdef in defn.fields.items():
+            if fdef.unique:
+                await coll.create_index(
+                    [("org_id", 1), (fname, 1)], unique=True,
+                )
+            elif fdef.indexed:
+                await coll.create_index([("org_id", 1), (fname, 1)])
 
     # Load watch cache
     from kernel.watch.cache import load_watch_cache

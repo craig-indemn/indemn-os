@@ -42,9 +42,10 @@ async def evaluate_watches_and_emit(
             if not _event_matches(watch.event, event_type, event_metadata):
                 continue
 
-            # Check conditions (entity-local only)
+            # Check conditions (entity data + event metadata merged)
             if watch.conditions:
-                if not evaluate_condition(watch.conditions, entity_data):
+                eval_data = {**entity_data, **(event_metadata or {})}
+                if not evaluate_condition(watch.conditions, eval_data):
                     continue
 
             # Resolve scope (if present)
@@ -84,6 +85,9 @@ def _event_matches(watch_event: str, actual_event: str, metadata: dict) -> bool:
     """Check if the watch event matches the actual event."""
     if watch_event == actual_event:
         return True
+    # "fields_changed" watches fire on method_invoked when fields changed
+    if watch_event == "fields_changed" and actual_event == "method_invoked":
+        return bool(metadata.get("fields_changed"))
     # "method_invoked" watches can match specific methods via "method:classify"
     if watch_event.startswith("method:") and actual_event == "method_invoked":
         return metadata.get("method") == watch_event.split(":", 1)[1]

@@ -16,21 +16,22 @@ def compare_report(
         ..., "--os-entity", help="Entity type in the OS to compare against"
     ),
     match_field: str = typer.Option(
-        "external_id", "--match-field", help="Field to join old and new records"
+        "external_id", "--match-field",
+        help="Field to join old and new records",
     ),
     compare_fields: str = typer.Option(
-        ..., "--compare-fields", help="Comma-separated fields to compare"
+        ..., "--compare-fields",
+        help="Comma-separated fields to compare",
     ),
-    output: str = typer.Option("comparison-report.json", "--output"),
-    fmt: str = typer.Option("json", "--format"),
+    output: str = typer.Option(
+        "comparison-report.csv", "--output",
+    ),
 ):
     """Compare old system decisions against OS entity data.
 
     Joins records by match_field, compares specified fields,
     and reports matches/mismatches.
     """
-    import orjson
-
     # Load old system data
     old_data = _load_export(old_system_export)
     fields = [f.strip() for f in compare_fields.split(",")]
@@ -46,9 +47,8 @@ def compare_report(
         },
     )
 
-    # Write output
-    with open(output, "wb") as f:
-        f.write(orjson.dumps(result, option=orjson.OPT_INDENT_2))
+    # Write output in CSV format
+    _write_csv(result, output, match_field, fields)
 
     # Summary
     summary = result.get("summary", {})
@@ -57,7 +57,34 @@ def compare_report(
     typer.echo(f"  Matched: {summary.get('matched', 0)}")
     typer.echo(f"  Mismatched: {summary.get('mismatched', 0)}")
     typer.echo(f"  Missing in OS: {summary.get('missing_in_os', 0)}")
+    typer.echo(f"  Extra in OS: {summary.get('extra_in_os', 0)}")
     typer.echo(f"  Output: {output}")
+
+
+def _write_csv(result: dict, path: str, match_field: str, fields: list):
+    """Write comparison results as CSV."""
+    import csv
+
+    comparisons = result.get("comparisons", [])
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        # Header
+        header = [match_field, "status"]
+        for field in fields:
+            header.extend([f"{field}_old", f"{field}_new", f"{field}_match"])
+        writer.writerow(header)
+        # Rows
+        for comp in comparisons:
+            row = [comp.get(match_field, ""), comp.get("status", "")]
+            field_data = comp.get("fields", {})
+            for field in fields:
+                fd = field_data.get(field, {})
+                row.extend([
+                    fd.get("old", ""),
+                    fd.get("new", ""),
+                    fd.get("match", ""),
+                ])
+            writer.writerow(row)
 
 
 def _load_export(path: str) -> list[dict]:

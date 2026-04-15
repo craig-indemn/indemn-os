@@ -23,6 +23,7 @@ async def export_org_config(org_id: ObjectId) -> dict:
     Returns a dict with categories as keys, each containing name→data mappings.
     """
     config = {
+        "org": {},
         "entities": {},
         "rules": {},
         "lookups": {},
@@ -30,7 +31,19 @@ async def export_org_config(org_id: ObjectId) -> dict:
         "roles": {},
         "actors": {},
         "integrations": {},
+        "capabilities": {},
     }
+
+    # Org-level settings
+    from kernel.db import get_database
+
+    db = get_database()
+    org_doc = await db["organizations"].find_one({"_id": org_id})
+    if org_doc:
+        config["org"] = _serialize_bson({
+            k: v for k, v in org_doc.items()
+            if k not in ("_id", "org_id", "created_at", "updated_at")
+        })
 
     # Entity definitions
     defs = await EntityDefinition.find({"org_id": org_id}).to_list()
@@ -38,6 +51,10 @@ async def export_org_config(org_id: ObjectId) -> dict:
         dumped = _dump_doc(d, exclude={
             "_id", "id", "org_id", "created_at", "updated_at", "created_by",
         })
+        # Extract capability activations into separate category
+        caps = dumped.pop("activated_capabilities", [])
+        if caps:
+            config["capabilities"][d.name] = caps
         config["entities"][d.name] = dumped
 
     # Rules
