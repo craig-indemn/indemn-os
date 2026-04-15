@@ -210,55 +210,66 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
     errors = []
     batch_processed = 0
 
-    for entity in entities:
-        try:
-            if operation == "transition":
-                entity.transition_to(target_state)
-                await entity.save_tracked(
-                    method="bulk_transition",
-                    method_metadata={"bulk_operation_id": activity.info().workflow_id},
-                )
-            elif operation == "method":
-                cap_fn = get_capability(method_name)
-                result = await cap_fn(entity, {}, entity.org_id)
-                if not result.get("needs_reasoning"):
-                    for field, value in result.get("result", {}).items():
-                        setattr(entity, field, value)
-                    await entity.save_tracked(
-                        method=method_name,
-                        method_metadata={
-                            "rule_evaluation": result.get("rule_evaluation"),
-                            "bulk_operation_id": activity.info().workflow_id,
-                        },
-                    )
-            elif operation == "update":
-                if sets:
-                    # Silent update — bypasses save_tracked() to avoid event emission
-                    await entity.get_motor_collection().update_one(
-                        {"_id": entity.id},
-                        {"$set": sets, "$inc": {"version": 1}},
-                    )
-            elif operation == "create":
-                new_entity = entity_cls(org_id=current_org_id.get(), **entity)
-                await new_entity.save_tracked(method="bulk_create")
-            elif operation == "delete":
-                await entity.get_motor_collection().delete_one({"_id": entity.id})
+    # Process batch within a MongoDB transaction
+    from kernel.db import get_client
 
-            batch_processed += 1
+    mongo_client = get_client()
+    async with await mongo_client.start_session() as session:
+        async with session.start_transaction():
+            for entity in entities:
+                try:
+                    if operation == "transition":
+                        entity.transition_to(target_state)
+                        await entity.save_tracked(
+                            method="bulk_transition",
+                            method_metadata={
+                                "bulk_operation_id": activity.info().workflow_id
+                            },
+                        )
+                    elif operation == "method":
+                        cap_fn = get_capability(method_name)
+                        result = await cap_fn(entity, {}, entity.org_id)
+                        if not result.get("needs_reasoning"):
+                            for field, value in result.get("result", {}).items():
+                                setattr(entity, field, value)
+                            await entity.save_tracked(
+                                method=method_name,
+                                method_metadata={
+                                    "rule_evaluation": result.get("rule_evaluation"),
+                                    "bulk_operation_id": activity.info().workflow_id,
+                                },
+                            )
+                    elif operation == "update":
+                        if sets:
+                            # Silent update — bypasses save_tracked() to avoid event emission
+                            await entity.get_motor_collection().update_one(
+                                {"_id": entity.id},
+                                {"$set": sets, "$inc": {"version": 1}},
+                                session=session,
+                            )
+                    elif operation == "create":
+                        new_entity = entity_cls(org_id=current_org_id.get(), **entity)
+                        await new_entity.save_tracked(method="bulk_create")
+                    elif operation == "delete":
+                        await entity.get_motor_collection().delete_one(
+                            {"_id": entity.id}, session=session
+                        )
 
-        except VersionConflictError:
-            # Transient — propagate for Temporal retry
-            raise
-        except (StateMachineError, ValueError, PermissionError) as e:
-            if failure_mode == "abort":
-                raise BulkAbortError(str(e))
-            errors.append({
-                "entity_id": str(entity.id) if hasattr(entity, "id") else str(entity),
-                "error_type": type(e).__name__,
-                "message": str(e),
-            })
+                    batch_processed += 1
 
-        activity.heartbeat(f"batch progress: {batch_processed}")
+                except VersionConflictError:
+                    # Transient — propagate for Temporal retry
+                    raise
+                except (StateMachineError, ValueError, PermissionError) as e:
+                    if failure_mode == "abort":
+                        raise BulkAbortError(str(e))
+                    errors.append({
+                        "entity_id": str(entity.id) if hasattr(entity, "id") else str(entity),
+                        "error_type": type(e).__name__,
+                        "message": str(e),
+                    })
+
+                activity.heartbeat(f"batch progress: {batch_processed}")
 
     total_count = offset + len(entities)
     done = len(entities) < batch_size
