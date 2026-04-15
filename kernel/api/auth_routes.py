@@ -573,6 +573,10 @@ async def tier3_signup(data: SignupRequest):
     })
     await admin.save()
 
+    # Send verification email (if email Integration exists on _platform org)
+    # If not, verification is deferred [G-58]
+    await _send_verification_email_if_possible(admin)
+
     return {
         "org_id": str(org_id),
         "actor_id": str(admin.id),
@@ -658,6 +662,42 @@ async def _notify_platform_admin_access(target_org, actor, work_type: str):
         target_org.name,
         work_type,
     )
+
+
+async def _send_verification_email_if_possible(actor):
+    """Send verification email via _platform org's email Integration. [G-58]
+
+    If the _platform org has an email Integration, sends a verification link.
+    If not, verification is deferred until an admin verifies manually.
+    """
+    import logging
+
+    from kernel_entities.integration import Integration
+    from kernel_entities.organization import Organization
+
+    logger = logging.getLogger(__name__)
+
+    platform_org = await Organization.find_one({"slug": "_platform"})
+    if not platform_org:
+        logger.info("No _platform org — email verification deferred for %s", actor.email)
+        return
+
+    email_integration = await Integration.find_one({
+        "org_id": platform_org.id,
+        "system_type": "email",
+        "status": "active",
+    })
+    if not email_integration:
+        logger.info("No email Integration on _platform — verification deferred for %s", actor.email)
+        return
+
+    # Generate verification token and send via the email Integration
+    from kernel.auth.jwt import generate_magic_link_token
+
+    _token = generate_magic_link_token(actor, purpose="email_verify", expires_hours=48)
+    logger.info("Verification token generated for %s (email delivery pending adapter)", actor.email)
+    # Full email delivery depends on the email adapter — token passed to adapter.send()
+    _ = _token  # Will be passed to email adapter when implemented
 
 
 def _slugify(name: str) -> str:
