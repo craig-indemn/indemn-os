@@ -180,6 +180,7 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
     """Process one batch of a bulk operation."""
     from kernel.capability.registry import get_capability
     from kernel.entity.save import VersionConflictError
+    from kernel.entity.state_machine import StateMachineError
 
     entity_type = spec_dict["entity_type"]
     operation = spec_dict["operation"]
@@ -248,7 +249,7 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
         except VersionConflictError:
             # Transient — propagate for Temporal retry
             raise
-        except (ValueError, PermissionError) as e:
+        except (StateMachineError, ValueError, PermissionError) as e:
             if failure_mode == "abort":
                 raise BulkAbortError(str(e))
             errors.append({

@@ -4,11 +4,21 @@ Every entity type gets CRUD + transition + @exposed methods + capability routes.
 This is the self-evidence property: define an entity, its API exists.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import asyncio
 from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
+
+
+def _fire_dispatch(created_messages):
+    """Fire-and-forget optimistic dispatch after save_tracked commits."""
+    if created_messages:
+        from kernel.message.dispatch import optimistic_dispatch
+
+        asyncio.create_task(optimistic_dispatch(created_messages))
 
 
 def register_entity_routes(app, entity_name: str, entity_cls: type):
@@ -43,7 +53,8 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
     async def create_entity(data: dict, actor=Depends(get_current_actor)):
         check_permission(actor, entity_name, "write")
         entity = entity_cls(org_id=current_org_id.get(), **data)
-        await entity.save_tracked(method="create")
+        created_messages = await entity.save_tracked(method="create")
+        _fire_dispatch(created_messages)
         return entity.model_dump()
 
     @router.put("/{entity_id}")
@@ -55,7 +66,8 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         for key, value in data.items():
             if key not in ("id", "_id", "org_id", "version"):
                 setattr(entity, key, value)
-        await entity.save_tracked()
+        created_messages = await entity.save_tracked()
+        _fire_dispatch(created_messages)
         return entity.model_dump()
 
     @router.post("/{entity_id}/transition")
@@ -70,7 +82,8 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         if not entity:
             raise HTTPException(404)
         entity.transition_to(to, reason)
-        await entity.save_tracked(method="transition")
+        created_messages = await entity.save_tracked(method="transition")
+        _fire_dispatch(created_messages)
         return entity.model_dump()
 
     # Register @exposed methods as additional routes
