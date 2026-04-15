@@ -52,12 +52,13 @@ class CapabilityActivation(BaseModel):
 class FlexibleDataSchema(BaseModel):
     """Configuration for the flexible data section.
 
-    schema_source="self" means the schema is on this entity's definition.
-    schema_source="product_id" means load the Product entity, read its form_schema field.
+    schema_source="self" means the schema is embedded here in the `schema` field.
+    schema_source="product_id" means load the Product entity, read its schema_field.
     """
 
     schema_source: str  # "self" or a relationship field name (e.g., "product_id")
     schema_field: str  # Field on the source entity holding the JSON schema
+    schema: Optional[dict] = None  # Embedded JSON Schema (used when schema_source="self")
 
 
 class EntityDefinition(Document):

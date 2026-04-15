@@ -105,6 +105,9 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
     # Register per-entity bulk endpoint
     _register_bulk_route(router, entity_name)
 
+    # Register integration dispatch route
+    _register_integration_route(router, entity_cls, entity_name)
+
     app.include_router(router)
 
 
@@ -162,6 +165,34 @@ def _register_capability_route(router, entity_cls, entity_name, cap_name, activa
                 setattr(entity, field, value)
             await entity.save_tracked(method=cap_name)
             return entity.model_dump()
+
+
+def _register_integration_route(router, entity_cls, entity_name: str):
+    """Register POST /api/{entities}/{id}/integration/{method} — adapter dispatch."""
+
+    @router.post("/{entity_id}/integration/{method_name}")
+    async def integration_method(
+        entity_id: str,
+        method_name: str,
+        data: dict = {},
+        actor=Depends(get_current_actor),
+    ):
+        """Execute an adapter method for this entity's integration."""
+        check_permission(actor, entity_name, "write")
+        entity = await entity_cls.get_scoped(entity_id)
+        if not entity:
+            raise HTTPException(404)
+
+        system_type = data.get("system_type")
+        if not system_type:
+            raise HTTPException(400, "system_type is required")
+
+        from kernel.integration.dispatch import execute_with_retry, get_adapter
+
+        adapter = await get_adapter(system_type)
+        result = await execute_with_retry(adapter, method_name, **data.get("params", {}))
+
+        return {"status": "ok", "result": result}
 
 
 def _register_bulk_route(router, entity_name: str):

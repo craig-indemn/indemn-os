@@ -82,3 +82,16 @@ async def retry_message(
         },
     )
     return {"status": "retried", "message_id": message_id}
+
+
+@queue_router.post("/api/messages/claim")
+async def claim_message(
+    role: str,
+    actor=Depends(get_current_actor),
+):
+    """Claim the next available message for a role. Used by human actors."""
+    bus = MongoDBMessageBus()
+    message = await bus.claim(role, actor.org_id, actor.id)
+    if not message:
+        return {"status": "no_messages"}
+    return {"status": "claimed", "message": message.model_dump(mode="json")}

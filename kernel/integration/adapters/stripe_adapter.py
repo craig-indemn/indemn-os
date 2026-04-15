@@ -11,7 +11,6 @@ import stripe
 
 from kernel.integration.adapter import (
     Adapter,
-    AdapterAuthError,
     AdapterValidationError,
 )
 from kernel.integration.registry import register_adapter

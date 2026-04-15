@@ -115,27 +115,32 @@ async def dispatch_associate_workflows():
                 "org_id": message.org_id,
             }).to_list()
 
-            if not associates:
-                continue
-
-            # Pick an associate (first available — simple for MVP)
-            associate = associates[0]
-
-            workflow_id = f"msg-{message.id}"
-
             try:
                 from temporalio.client import WorkflowAlreadyStartedError
 
-                await client.start_workflow(
-                    ProcessMessageWorkflow.run,
-                    args=[str(message.id), str(associate.id)],
-                    id=workflow_id,
-                    task_queue="indemn-kernel",
-                )
+                if associates:
+                    # Associate available — ProcessMessageWorkflow
+                    associate = associates[0]
+                    await client.start_workflow(
+                        ProcessMessageWorkflow.run,
+                        args=[str(message.id), str(associate.id)],
+                        id=f"msg-{message.id}",
+                        task_queue="indemn-kernel",
+                    )
+                else:
+                    # No associates — route to HumanReviewWorkflow
+                    from kernel.temporal.workflows import HumanReviewWorkflow
+
+                    await client.start_workflow(
+                        HumanReviewWorkflow.run,
+                        args=[str(message.id)],
+                        id=f"human-review-{message.id}",
+                        task_queue="indemn-kernel",
+                    )
             except WorkflowAlreadyStartedError:
                 pass  # Already dispatched — optimistic dispatch got it
             except Exception as e:
-                logger.warning("Failed to dispatch workflow %s: %s", workflow_id, e)
+                logger.warning("Failed to dispatch workflow %s: %s", message.id, e)
 
         except Exception as e:
             logger.error("Error dispatching message %s: %s", message.id, e)
