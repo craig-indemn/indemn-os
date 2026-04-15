@@ -177,30 +177,28 @@ async def fail_message(message_id: str, error: str) -> None:
 
 @activity.defn
 async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
-    """Process one batch of a bulk operation."""
+    """Process one batch of a bulk operation within a MongoDB transaction."""
     from kernel.capability.registry import get_capability
     from kernel.entity.save import VersionConflictError
     from kernel.entity.state_machine import StateMachineError
+    from kernel.temporal.workflows import BulkOperationSpec
 
-    entity_type = spec_dict["entity_type"]
-    operation = spec_dict["operation"]
-    batch_size = spec_dict.get("batch_size", 50)
-    failure_mode = spec_dict.get("failure_mode", "skip")
-    filter_query = spec_dict.get("filter_query")
-    source_data = spec_dict.get("source_data")
-    target_state = spec_dict.get("target_state")
-    method_name = spec_dict.get("method_name")
-    sets = spec_dict.get("sets")
+    spec = BulkOperationSpec(**spec_dict)
 
-    entity_cls = ENTITY_REGISTRY.get(entity_type)
+    entity_cls = ENTITY_REGISTRY.get(spec.entity_type)
     if not entity_cls:
-        raise PermanentProcessingError(f"Entity type {entity_type} not found")
+        raise PermanentProcessingError(f"Entity type {spec.entity_type} not found")
 
     # Query entities
-    if filter_query:
-        entities = await entity_cls.find_scoped(filter_query).skip(offset).limit(batch_size).to_list()
-    elif source_data:
-        entities = source_data[offset : offset + batch_size]
+    if spec.filter_query:
+        entities = (
+            await entity_cls.find_scoped(spec.filter_query)
+            .skip(offset)
+            .limit(spec.batch_size)
+            .to_list()
+        )
+    elif spec.source_data:
+        entities = spec.source_data[offset : offset + spec.batch_size]
     else:
         return {"done": True, "batch_processed": 0}
 
@@ -218,39 +216,39 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
         async with session.start_transaction():
             for entity in entities:
                 try:
-                    if operation == "transition":
-                        entity.transition_to(target_state)
+                    if spec.operation == "transition":
+                        entity.transition_to(spec.target_state)
                         await entity.save_tracked(
                             method="bulk_transition",
                             method_metadata={
                                 "bulk_operation_id": activity.info().workflow_id
                             },
                         )
-                    elif operation == "method":
-                        cap_fn = get_capability(method_name)
+                    elif spec.operation == "method":
+                        cap_fn = get_capability(spec.method_name)
                         result = await cap_fn(entity, {}, entity.org_id)
                         if not result.get("needs_reasoning"):
                             for field, value in result.get("result", {}).items():
                                 setattr(entity, field, value)
                             await entity.save_tracked(
-                                method=method_name,
+                                method=spec.method_name,
                                 method_metadata={
                                     "rule_evaluation": result.get("rule_evaluation"),
                                     "bulk_operation_id": activity.info().workflow_id,
                                 },
                             )
-                    elif operation == "update":
-                        if sets:
+                    elif spec.operation == "update":
+                        if spec.sets:
                             # Silent update — bypasses save_tracked() to avoid event emission
                             await entity.get_motor_collection().update_one(
                                 {"_id": entity.id},
-                                {"$set": sets, "$inc": {"version": 1}},
+                                {"$set": spec.sets, "$inc": {"version": 1}},
                                 session=session,
                             )
-                    elif operation == "create":
+                    elif spec.operation == "create":
                         new_entity = entity_cls(org_id=current_org_id.get(), **entity)
                         await new_entity.save_tracked(method="bulk_create")
-                    elif operation == "delete":
+                    elif spec.operation == "delete":
                         await entity.get_motor_collection().delete_one(
                             {"_id": entity.id}, session=session
                         )
@@ -261,7 +259,7 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
                     # Transient — propagate for Temporal retry
                     raise
                 except (StateMachineError, ValueError, PermissionError) as e:
-                    if failure_mode == "abort":
+                    if spec.failure_mode == "abort":
                         raise BulkAbortError(str(e))
                     errors.append({
                         "entity_id": str(entity.id) if hasattr(entity, "id") else str(entity),
@@ -272,7 +270,7 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
                 activity.heartbeat(f"batch progress: {batch_processed}")
 
     total_count = offset + len(entities)
-    done = len(entities) < batch_size
+    done = len(entities) < spec.batch_size
 
     return {
         "done": done,
@@ -285,21 +283,21 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
 @activity.defn
 async def preview_bulk_operation(spec_dict: dict) -> dict:
     """Dry-run preview — count and sample affected entities. [G-81]"""
-    entity_type = spec_dict["entity_type"]
-    filter_query = spec_dict.get("filter_query")
-    operation = spec_dict.get("operation")
+    from kernel.temporal.workflows import BulkOperationSpec
 
-    entity_cls = ENTITY_REGISTRY.get(entity_type)
+    spec = BulkOperationSpec(**spec_dict)
+
+    entity_cls = ENTITY_REGISTRY.get(spec.entity_type)
     if not entity_cls:
-        return {"count": 0, "error": f"Entity type {entity_type} not found"}
+        return {"count": 0, "error": f"Entity type {spec.entity_type} not found"}
 
-    if filter_query:
-        count = await entity_cls.find_scoped(filter_query).count()
-        sample = await entity_cls.find_scoped(filter_query).limit(5).to_list()
+    if spec.filter_query:
+        count = await entity_cls.find_scoped(spec.filter_query).count()
+        sample = await entity_cls.find_scoped(spec.filter_query).limit(5).to_list()
         return {
             "count": count,
             "sample": [e.model_dump(mode="json") for e in sample],
-            "operation": operation,
+            "operation": spec.operation,
             "dry_run": True,
         }
     return {"count": 0}
@@ -324,8 +322,17 @@ async def _load_skills(skill_names: list[str]) -> str:
 async def _execute_deterministic(associate, skills: str, context: dict) -> dict:
     """Execute skill deterministically — no LLM.
 
-    Parses the skill for CLI commands and executes them via the API.
-    Simple line-by-line interpreter for sequential commands with simple conditions.
+    The deterministic interpreter [G-25]:
+    - Reads markdown skill content
+    - Identifies lines that are CLI commands (lines starting with `indemn` or backtick-wrapped)
+    - Identifies simple conditions (lines starting with "If" or "When")
+    - Executes commands sequentially via HTTP API calls
+    - Evaluates conditions against entity data
+    - Returns the result of the last command
+
+    This is a simple line-by-line interpreter, NOT a full DSL engine.
+    Complex orchestration that can't be expressed as sequential commands
+    with simple conditions should use reasoning mode instead.
     """
     entity_data = context.get("entity", {}) or {}
     results = []
@@ -540,13 +547,21 @@ def _parse_simple_condition(line: str) -> dict:
     return {"field": "_always", "op": "equals", "value": True}  # Fallback: always true
 
 
+# --- Helpers ---
+
+
+async def _get_roles(actor) -> list:
+    """Load role entities for an actor."""
+    from kernel_entities.role import Role
+
+    return await Role.find({"_id": {"$in": actor.role_ids}}).to_list()
+
+
 # --- API call translation ---
 
 
 async def _execute_command_via_api(command: str, entity_data: dict, associate) -> dict:
     """Execute an indemn CLI command by translating it to an API call. [G-21]"""
-    from kernel_entities.role import Role
-
     parts = command.strip().split()
     if parts[0] != "indemn":
         raise PermanentProcessingError(f"Invalid command: {command}")
@@ -556,7 +571,7 @@ async def _execute_command_via_api(command: str, entity_data: dict, associate) -
     args = parts[3:] if len(parts) > 3 else []
 
     # Get a service token for the associate
-    roles = await Role.find({"_id": {"$in": associate.role_ids}}).to_list()
+    roles = await _get_roles(associate)
     role_names = [r.name for r in roles]
     token, _ = create_access_token(str(associate.id), str(associate.org_id), role_names)
 

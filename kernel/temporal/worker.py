@@ -9,6 +9,7 @@ kernel workflows (BulkExecute) with OTEL tracing.
 import asyncio
 import logging
 
+from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.worker import Worker
 
 from kernel.config import settings
@@ -46,13 +47,7 @@ async def main():
         return
 
     # [G-19] OTEL TracingInterceptor on every workflow + activity
-    interceptors = []
-    try:
-        from temporalio.contrib.opentelemetry import TracingInterceptor
-
-        interceptors.append(TracingInterceptor())
-    except ImportError:
-        logger.warning("temporalio opentelemetry contrib not available, skipping tracing")
+    interceptors = [TracingInterceptor()]
 
     worker = Worker(
         client,

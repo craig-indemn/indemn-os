@@ -39,6 +39,9 @@ class ProcessMessageWorkflow:
 
     @workflow.run
     async def run(self, message_id: str, associate_id: str) -> dict:
+        # Version gate for backward-compatible changes [G-77]
+        version = workflow.patched("v2-enhanced-error-handling")
+
         # Activity 1: Claim the message from the queue
         claimed = await workflow.execute_activity(
             claim_message,
@@ -177,6 +180,15 @@ class BulkOperationSpec:
     sets: Optional[dict] = None
 
 
+@dataclass
+class BulkResult:
+    status: str  # completed, completed_with_errors, failed
+    total: int
+    processed: int
+    skipped: int
+    errors: list
+
+
 @workflow.defn
 class BulkExecuteWorkflow:
     """Generic bulk operation workflow.
@@ -186,7 +198,9 @@ class BulkExecuteWorkflow:
 
     @workflow.run
     async def run(self, spec_dict: dict) -> dict:
-        if spec_dict.get("dry_run"):
+        spec = BulkOperationSpec(**spec_dict)
+
+        if spec.dry_run:
             preview = await workflow.execute_activity(
                 preview_bulk_operation,
                 args=[spec_dict],
@@ -223,10 +237,18 @@ class BulkExecuteWorkflow:
         if total_errors:
             status = "completed_with_errors"
 
+        result = BulkResult(
+            status=status,
+            total=total_count,
+            processed=processed,
+            skipped=len(total_errors),
+            errors=total_errors,
+        )
+
         return {
-            "status": status,
-            "total": total_count,
-            "processed": processed,
-            "skipped": len(total_errors),
-            "errors": total_errors,
+            "status": result.status,
+            "total": result.total,
+            "processed": result.processed,
+            "skipped": result.skipped,
+            "errors": result.errors,
         }
