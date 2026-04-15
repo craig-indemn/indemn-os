@@ -80,6 +80,14 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         entity = await entity_cls.get_scoped(entity_id)
         if not entity:
             raise HTTPException(404)
+        # Reject state field changes — must go through /transition endpoint
+        state_field = getattr(entity_cls, "_state_field_name", None) or "status"
+        if getattr(entity_cls, "_state_machine", None) and state_field in data:
+            raise HTTPException(
+                400,
+                f"Cannot set '{state_field}' via update. "
+                f"Use POST /{slug}/{{id}}/transition instead.",
+            )
         data = _coerce_objectid_fields(entity_cls, data)
         for key, value in data.items():
             if key not in ("id", "_id", "org_id", "version"):

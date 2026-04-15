@@ -30,7 +30,9 @@ async def platform_init(data: dict):
     if existing:
         raise HTTPException(400, "Platform already initialized")
 
-    # Create platform org (self-referencing for org_id)
+    # Create platform org (self-referencing: org_id = id).
+    # Uses Beanie insert because the self-reference requires pre-setting id,
+    # which save_tracked interprets as an update on a non-existent document.
     org_id = ObjectId()
     platform_org = Organization(
         id=org_id,
@@ -41,7 +43,7 @@ async def platform_init(data: dict):
     )
     await platform_org.insert()
 
-    # Create admin actor
+    # Create admin actor — uses save_tracked for audit trail
     admin = Actor(
         org_id=org_id,
         name="Platform Admin",
@@ -55,17 +57,17 @@ async def platform_init(data: dict):
             }
         ],
     )
-    await admin.insert()
+    await admin.save_tracked(actor_id="__bootstrap__")
 
-    # Create admin role
+    # Create admin role — uses save_tracked for audit trail
     admin_role = Role(
         org_id=org_id,
         name="platform_admin",
         permissions={"read": ["*"], "write": ["*"]},
     )
-    await admin_role.insert()
+    await admin_role.save_tracked(actor_id="__bootstrap__")
     admin.role_ids = [admin_role.id]
-    await admin.save()
+    await admin.save_tracked(actor_id="__bootstrap__")
 
     # Issue token
     token, jti = create_access_token(str(admin.id), str(org_id), ["platform_admin"])

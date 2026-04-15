@@ -24,13 +24,20 @@ def compute_hash(record) -> str:
             result.append(d)
         return result
 
+    # Two normalizations for MongoDB round-trip consistency:
+    # 1. strftime instead of isoformat — MongoDB returns naive datetimes,
+    #    Python creates aware ones. isoformat differs (+00:00 vs none).
+    # 2. Truncate microseconds to milliseconds — MongoDB drops the last 3 digits.
+    ts = record.timestamp.replace(
+        microsecond=(record.timestamp.microsecond // 1000) * 1000
+    )
     content = orjson.dumps(
         {
             "entity_type": record.entity_type,
             "entity_id": str(record.entity_id),
             "change_type": record.change_type,
             "actor_id": record.actor_id,
-            "timestamp": record.timestamp.isoformat(),
+            "timestamp": ts.strftime("%Y-%m-%dT%H:%M:%S.%f"),
             "changes": _serialize_changes(record.changes),
             "previous_hash": record.previous_hash,
         },
