@@ -1,0 +1,84 @@
+"""Queue management API — stats, dead-letter listing, retry.
+
+Provides controlled access to the message queue without exposing
+full CRUD on the Message collection.
+"""
+
+from datetime import datetime, timezone
+
+from bson import ObjectId
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from kernel.auth.middleware import check_permission, get_current_actor
+from kernel.message.mongodb_bus import MongoDBMessageBus
+from kernel.message.schema import Message
+
+queue_router = APIRouter(tags=["queue"])
+
+
+@queue_router.get("/api/_meta/queue-stats")
+async def queue_stats(actor=Depends(get_current_actor)):
+    """Aggregate queue statistics by role and status."""
+    pipeline = [
+        {"$group": {
+            "_id": {"target_role": "$target_role", "status": "$status"},
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"_id.target_role": 1, "_id.status": 1}},
+    ]
+    coll = Message.get_motor_collection()
+    results = await coll.aggregate(pipeline).to_list(length=100)
+    stats = []
+    for r in results:
+        stats.append({
+            "role": r["_id"]["target_role"],
+            "status": r["_id"]["status"],
+            "count": r["count"],
+        })
+    return stats
+
+
+@queue_router.get("/api/message_queues")
+async def list_messages(
+    status: str = Query(None),
+    role: str = Query(None),
+    limit: int = Query(20, le=100),
+    actor=Depends(get_current_actor),
+):
+    """List messages in the queue with filters."""
+    filter_doc = {}
+    if status:
+        filter_doc["status"] = status
+    if role:
+        filter_doc["target_role"] = role
+    messages = await Message.find(filter_doc).sort(
+        [("priority", -1), ("created_at", 1)]
+    ).limit(limit).to_list()
+    return [m.model_dump(mode="json") for m in messages]
+
+
+@queue_router.post("/api/message_queues/{message_id}/retry")
+async def retry_message(
+    message_id: str,
+    actor=Depends(get_current_actor),
+):
+    """Retry a dead-lettered or failed message by resetting to pending."""
+    message = await Message.get(ObjectId(message_id))
+    if not message:
+        raise HTTPException(404, "Message not found")
+    if message.status not in ("dead_letter", "failed"):
+        raise HTTPException(400, f"Cannot retry message in status '{message.status}'")
+
+    await Message.get_motor_collection().update_one(
+        {"_id": message.id},
+        {
+            "$set": {
+                "status": "pending",
+                "claimed_by": None,
+                "visibility_timeout": None,
+                "last_error": None,
+                "attempt_count": 0,
+            }
+        },
+    )
+    return {"status": "retried", "message_id": message_id}

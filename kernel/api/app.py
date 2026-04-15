@@ -7,6 +7,7 @@ goes through it.
 
 from fastapi import FastAPI
 
+from kernel.api.admin_routes import admin_router
 from kernel.api.bootstrap import bootstrap_router
 from kernel.api.bulk import bulk_router
 from kernel.api.direct_invoke import invoke_router
@@ -14,7 +15,9 @@ from kernel.api.errors import register_error_handlers
 from kernel.api.health import health_router
 from kernel.api.human_review import review_router
 from kernel.api.integration_routes import integration_mgmt_router
+from kernel.api.lookup_routes import lookup_router
 from kernel.api.meta import meta_router
+from kernel.api.queue_routes import queue_router
 from kernel.api.webhook import webhook_router
 from kernel.auth.middleware import AuthMiddleware
 from kernel.observability.tracing import init_tracing
@@ -65,6 +68,9 @@ def create_app() -> FastAPI:
     app.include_router(bulk_router)
     app.include_router(integration_mgmt_router)
     app.include_router(webhook_router)
+    app.include_router(queue_router)
+    app.include_router(lookup_router)
+    app.include_router(admin_router)
 
     return app
 
