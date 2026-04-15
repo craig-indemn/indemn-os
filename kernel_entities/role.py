@@ -14,7 +14,7 @@ class WatchDefinition(BaseModel):
     entity_type: str
     event: str  # "created", "transitioned", "method_invoked", "fields_changed", "deleted"
     conditions: Optional[dict] = None  # JSON condition (same language as rules)
-    scope: Optional[dict] = None  # {"type": "field_path", "path": "..."} or {"type": "active_context", "traverses": "..."}
+    scope: Optional[dict] = None  # field_path or active_context scope
     context_depth: int = 1  # How deep to resolve related entities in message context
 
 

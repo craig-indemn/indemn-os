@@ -16,10 +16,10 @@ async def optimistic_dispatch(messages: list[Message]):
 
     Primary dispatch path — the queue processor sweep is the backstop.
     """
-    from kernel_entities.actor import Actor
-    from kernel_entities.role import Role
     from kernel.temporal.client import get_temporal_client
     from kernel.temporal.workflows import HumanReviewWorkflow, ProcessMessageWorkflow
+    from kernel_entities.actor import Actor
+    from kernel_entities.role import Role
 
     try:
         client = await get_temporal_client()

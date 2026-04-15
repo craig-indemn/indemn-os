@@ -13,7 +13,7 @@ def create_entity_def(
     fields: str = typer.Option(..., "--fields", help="JSON field definitions"),
     state_machine: str = typer.Option(None, "--state-machine", help="JSON state machine"),
     computed_fields: str = typer.Option(None, "--computed-fields", help="JSON computed fields"),
-    collection_name: str = typer.Option(None, help="MongoDB collection name (default: lowercase plural)"),
+    collection_name: str = typer.Option(None, help="MongoDB collection name"),
     description: str = typer.Option(None),
 ):
     """Create a new domain entity definition."""

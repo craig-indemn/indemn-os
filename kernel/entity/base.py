@@ -15,7 +15,6 @@ from beanie import Document
 from bson import ObjectId
 from pydantic import BaseModel, Field
 
-
 # --- Shared mixin for common behavior ---
 
 class _EntityMixin:
@@ -38,8 +37,8 @@ class _EntityMixin:
 
     async def save_tracked(self, actor_id: str = None, **kwargs):
         """The ONLY save path. Returns list of created messages."""
-        from kernel.entity.save import save_tracked_impl
         from kernel.context import current_actor_id
+        from kernel.entity.save import save_tracked_impl
         _actor_id = actor_id or current_actor_id.get()
         return await save_tracked_impl(self, _actor_id, **kwargs)
 

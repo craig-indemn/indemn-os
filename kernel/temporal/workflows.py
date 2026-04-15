@@ -37,7 +37,7 @@ class ProcessMessageWorkflow:
     @workflow.run
     async def run(self, message_id: str, associate_id: str) -> dict:
         # Version gate for backward-compatible changes [G-77]
-        version = workflow.patched("v2-enhanced-error-handling")
+        workflow.patched("v2-enhanced-error-handling")
 
         # Activity 1: Claim the message from the queue
         claimed = await workflow.execute_activity(
@@ -116,8 +116,10 @@ class HumanReviewWorkflow:
 
     @workflow.signal
     async def submit_decision(self, decision: dict):
-        """Signal handler — called when human makes their decision via UI/CLI.
-        Decision format: {"action": "approve"|"reject"|"escalate", "reason": "...", "data": {...}}"""
+        """Signal handler — human makes their decision via UI/CLI.
+
+        Decision: {"action": "approve"|"reject"|"escalate",
+                   "reason": "...", "data": {...}}"""
         self._decision = decision
 
     @workflow.run

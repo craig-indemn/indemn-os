@@ -154,7 +154,7 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                         parent_entity_type=type(entity).__name__,
                         session=session,
                     )
-        except (VersionConflictError, Exception):
+        except Exception:
             # Restore entity version on failure so retries use correct expected_version
             entity.version = expected_version
             raise
@@ -167,7 +167,7 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
 
 
 def _serialize_entity(entity) -> dict:
-    """Serialize an entity to dict. Works for both kernel (Beanie) and domain (Pydantic) entities."""
+    """Serialize entity to dict. Works for kernel (Beanie) and domain (Pydantic)."""
     return entity.model_dump(by_alias=True)
 
 

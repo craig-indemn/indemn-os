@@ -51,22 +51,22 @@ async def platform_seed(data: dict = {}):
 @admin_router.post("/api/_platform/org/clone")
 async def org_clone(data: dict, actor=Depends(get_current_actor)):
     """Clone an organization's configuration to a new org."""
-    source_org = data.get("source_org")
-    target_name = data.get("target_name")
+    source_org = data.get("source_org_slug")
+    target_name = data.get("target_org_name")
     if not source_org or not target_name:
-        raise HTTPException(400, "source_org and target_name required")
+        raise HTTPException(400, "source_org_slug and target_org_name required")
     # Phase 4+ implementation
     return {"status": "not_implemented", "message": "Org clone available in Phase 4"}
 
 
 @admin_router.get("/api/_platform/org/diff")
-async def org_diff(source: str, target: str, actor=Depends(get_current_actor)):
+async def org_diff(org_a: str = None, org_b: str = None, actor=Depends(get_current_actor)):
     """Diff entity definitions between two orgs."""
     return {"status": "not_implemented", "message": "Org diff available in Phase 4"}
 
 
 @admin_router.get("/api/_platform/org/export")
-async def org_export(org_id: str, actor=Depends(get_current_actor)):
+async def org_export(org: str = None, actor=Depends(get_current_actor)):
     """Export an org's entity definitions and configuration."""
     return {"status": "not_implemented", "message": "Org export available in Phase 4"}
 

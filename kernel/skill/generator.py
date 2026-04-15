@@ -29,7 +29,7 @@ def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str
 
     # CLI commands
     slug = entity_name.lower()
-    lines.append(f"\n## Commands\n")
+    lines.append("\n## Commands\n")
     lines.append("| Command | Description |")
     lines.append("|---------|-------------|")
     lines.append(f"| `indemn {slug} list` | List with filters |")

@@ -70,7 +70,8 @@ def _older_than(actual, duration_str: str) -> bool:
 
     if delta is None:
         return False
-    now = datetime.now(timezone.utc) if actual.tzinfo else datetime.utcnow()
+    utc_now = datetime.now(timezone.utc)
+    now = utc_now if actual.tzinfo else utc_now.replace(tzinfo=None)
     return actual < (now - delta)
 
 

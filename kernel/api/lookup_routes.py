@@ -16,7 +16,7 @@ lookup_router = APIRouter(prefix="/api/lookups", tags=["lookups"])
 async def list_lookups(actor=Depends(get_current_actor)):
     """List all lookups for the current org."""
     lookups = await Lookup.find({"org_id": current_org_id.get()}).to_list()
-    return [l.model_dump(mode="json") for l in lookups]
+    return [lk.model_dump(mode="json") for lk in lookups]
 
 
 @lookup_router.get("/{name}")

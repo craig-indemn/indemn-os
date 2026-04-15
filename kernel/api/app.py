@@ -34,11 +34,10 @@ def create_app() -> FastAPI:
     async def startup():
         init_tracing()
 
-        from kernel.api.registration import register_entity_routes
-        from kernel.db import ENTITY_REGISTRY, init_database
-
         # Import adapters so they register via register_adapter()
         import kernel.integration.adapters  # noqa: F401
+        from kernel.api.registration import register_entity_routes
+        from kernel.db import ENTITY_REGISTRY, init_database
 
         await init_database()
 

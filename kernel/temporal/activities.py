@@ -6,11 +6,15 @@ processing via associate skills, completing/failing messages, and bulk operation
 
 import logging
 import re
+from typing import TYPE_CHECKING
 
 import httpx
 import orjson
 from bson import ObjectId
 from temporalio import activity
+
+if TYPE_CHECKING:
+    from kernel_entities.actor import Actor
 
 from kernel.auth.jwt import create_access_token
 from kernel.config import settings

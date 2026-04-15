@@ -1,7 +1,7 @@
 """Unit tests for the condition evaluator — the single condition language."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from kernel.watch.evaluator import evaluate_condition
 
@@ -133,12 +133,12 @@ def test_nested_composition():
 # --- Temporal operators ---
 
 def test_older_than():
-    old_time = (datetime.utcnow() - timedelta(days=10)).isoformat()
+    old_time = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=10)).isoformat()
     assert evaluate_condition({"field": "last_activity", "op": "older_than", "value": "7d"}, {"last_activity": old_time})
 
 
 def test_within():
-    recent = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+    recent = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)).isoformat()
     assert evaluate_condition({"field": "last_activity", "op": "within", "value": "24h"}, {"last_activity": recent})
 
 

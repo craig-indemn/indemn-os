@@ -25,7 +25,8 @@ class OutlookAdapter(Adapter):
         expires_at = self.credentials.get("expires_at")
         if not expires_at:
             return False
-        return datetime.fromisoformat(expires_at) < datetime.now(timezone.utc) + timedelta(minutes=5)
+        expiry = datetime.fromisoformat(expires_at)
+        return expiry < datetime.now(timezone.utc) + timedelta(minutes=5)
 
     async def refresh_token(self) -> dict:
         """Refresh OAuth tokens using the refresh token. [G-26]"""

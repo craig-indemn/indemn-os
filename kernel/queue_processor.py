@@ -78,10 +78,10 @@ async def dispatch_associate_workflows():
     This is the SWEEP BACKSTOP — optimistic dispatch from the API
     is the primary path. This catches anything that was missed.
     """
-    from kernel_entities.actor import Actor
-    from kernel_entities.role import Role
     from kernel.temporal.client import get_temporal_client
     from kernel.temporal.workflows import ProcessMessageWorkflow
+    from kernel_entities.actor import Actor
+    from kernel_entities.role import Role
 
     client = await get_temporal_client()
     if not client:

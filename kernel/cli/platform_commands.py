@@ -18,7 +18,7 @@ def platform_init(
         "/api/_platform/init",
         json={"admin_email": admin_email, "admin_password": admin_password},
     )
-    typer.echo(f"Platform initialized!")
+    typer.echo("Platform initialized!")
     typer.echo(f"  Org ID: {result['org_id']}")
     typer.echo(f"  Admin ID: {result['admin_id']}")
     typer.echo(f"  Access Token: {result['access_token']}")
