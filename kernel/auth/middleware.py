@@ -20,11 +20,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     # Paths that don't require authentication
     PUBLIC_PATHS = {"/health", "/api/_platform/init", "/docs", "/openapi.json"}
+    # Path prefixes that don't require authentication (pre-auth flows)
+    PUBLIC_PREFIXES = (
+        "/webhook/",
+        "/auth/providers",
+        "/auth/login",
+        "/auth/signup",
+        "/auth/sso/",
+        "/auth/mfa/",
+        "/auth/reset-password/",
+    )
 
     async def dispatch(self, request: Request, call_next):
-        # Skip auth for public paths and webhooks
+        # Skip auth for public paths, webhooks, and pre-auth flows
         path = request.url.path
-        if path in self.PUBLIC_PATHS or path.startswith("/webhook/"):
+        if path in self.PUBLIC_PATHS or path.startswith(self.PUBLIC_PREFIXES):
             return await call_next(request)
 
         auth = request.headers.get("authorization", "")
@@ -64,7 +74,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         actor._cached_roles = roles
 
         request.state.actor = actor
-        return await call_next(request)
+
+        # Claims refresh check [G-39]
+        response = await call_next(request)
+        if hasattr(request.state, "refreshed_token"):
+            response.headers["X-Refreshed-Token"] = request.state.refreshed_token
+        return response
 
 
 async def get_current_actor(request: Request) -> Actor:
