@@ -83,6 +83,29 @@ async def org_deploy(data: dict, actor=Depends(get_current_actor)):
     return {"status": "not_implemented", "message": "Org deploy available in Phase 4"}
 
 
+# --- Pipeline Metrics ---
+
+
+@admin_router.get("/api/metrics/state-distribution/{entity_name}")
+async def get_state_distribution(entity_name: str, actor=Depends(get_current_actor)):
+    """State distribution for an entity type."""
+    from kernel.capability.aggregations import state_distribution
+    from kernel.db import ENTITY_REGISTRY
+
+    cls = ENTITY_REGISTRY.get(entity_name)
+    if not cls:
+        raise HTTPException(404, f"Entity type '{entity_name}' not found")
+    return await state_distribution(cls, actor.org_id)
+
+
+@admin_router.get("/api/metrics/queue-depth")
+async def get_queue_depth(actor=Depends(get_current_actor)):
+    """Pending message count per role."""
+    from kernel.capability.aggregations import queue_depth
+
+    return await queue_depth(actor.org_id)
+
+
 # --- Audit ---
 
 

@@ -1,8 +1,12 @@
-"""Entity metadata endpoint — returns everything the UI and CLI need to auto-generate."""
+"""Entity metadata endpoint — returns everything the UI and CLI need to auto-generate.
+
+Phase 1: basic entity list metadata.
+Phase 4 adds: per-entity detail metadata with full field info [G-33].
+"""
 
 from typing import get_args
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from kernel.auth.middleware import get_current_actor
 from kernel.db import ENTITY_REGISTRY
@@ -110,3 +114,89 @@ def _check_permission(actor, entity_name: str, action: str) -> bool:
         if "*" in allowed or entity_name in allowed:
             return True
     return False
+
+
+# --- Per-entity detail metadata [G-33] ---
+
+
+@meta_router.get("/entities/{entity_name}")
+async def get_entity_detail_metadata(entity_name: str, actor=Depends(get_current_actor)):
+    """Full metadata for a specific entity type — everything the UI needs
+    to auto-generate list views, detail views, and forms."""
+    cls = ENTITY_REGISTRY.get(entity_name)
+    if not cls:
+        raise HTTPException(404, f"Entity type '{entity_name}' not found")
+
+    # Get field metadata — domain entities use EntityDefinition,
+    # kernel entities derive from Pydantic model_fields
+    fields = []
+    is_kernel = getattr(cls, "_is_kernel_entity", False)
+
+    if not is_kernel:
+        from kernel.entity.definition import EntityDefinition
+
+        defn = await EntityDefinition.find_one({"name": entity_name})
+        if defn:
+            for fname, fdef in defn.fields.items():
+                fields.append({
+                    "name": fname,
+                    "type": fdef.type,
+                    "required": fdef.required,
+                    "default": fdef.default,
+                    "enum_values": fdef.enum_values,
+                    "description": fdef.description,
+                    "is_state_field": fdef.is_state_field,
+                    "is_relationship": fdef.is_relationship,
+                    "relationship_target": fdef.relationship_target,
+                    "indexed": fdef.indexed,
+                    "unique": fdef.unique,
+                })
+        else:
+            fields = _get_field_metadata(cls, entity_name)
+    else:
+        fields = _get_field_metadata(cls, entity_name)
+
+    # State machine
+    state_machine = getattr(cls, "_state_machine", None)
+
+    # Capabilities
+    capabilities = []
+    for cap in getattr(cls, "_activated_capabilities", []):
+        cap_name = cap.capability if hasattr(cap, "capability") else cap.get("capability", "")
+        capabilities.append({
+            "name": cap_name,
+            "cli_command": (
+                f"indemn {entity_name.lower()} "
+                f"{cap_name.replace('_', '-')} <id> --auto"
+            ),
+        })
+
+    # @exposed methods (kernel entities only)
+    exposed_methods = []
+    for attr_name in dir(cls):
+        attr = getattr(cls, attr_name, None)
+        if attr and getattr(attr, "_exposed", False):
+            exposed_methods.append({
+                "name": attr._exposed_name,
+                "cli_command": (
+                    f"indemn {entity_name.lower()} "
+                    f"{attr._exposed_name.replace('_', '-')} <id>"
+                ),
+            })
+
+    # Permissions for the current actor
+    permissions = {
+        "read": _check_permission(actor, entity_name, "read"),
+        "write": _check_permission(actor, entity_name, "write"),
+    }
+
+    return {
+        "name": entity_name,
+        "collection": cls.Settings.name if hasattr(cls, "Settings") else entity_name.lower() + "s",
+        "is_kernel_entity": is_kernel,
+        "fields": fields,
+        "state_machine": state_machine,
+        "capabilities": capabilities,
+        "exposed_methods": exposed_methods,
+        "permissions": permissions,
+    }
