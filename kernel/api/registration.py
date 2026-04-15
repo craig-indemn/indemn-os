@@ -102,6 +102,9 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         )
         _register_capability_route(router, entity_cls, entity_name, cap_name, cap_activation)
 
+    # Register generic evaluate-rules route (works without capability activation)
+    _register_evaluate_rules_route(router, entity_cls, entity_name)
+
     # Register per-entity bulk endpoint
     _register_bulk_route(router, entity_name)
 
@@ -165,6 +168,46 @@ def _register_capability_route(router, entity_cls, entity_name, cap_name, activa
                 setattr(entity, field, value)
             await entity.save_tracked(method=cap_name)
             return entity.model_dump()
+
+
+def _register_evaluate_rules_route(router, entity_cls, entity_name: str):
+    """Register POST /api/{entities}/{id}/evaluate-rules?capability=X&auto=true.
+
+    Generic rules evaluation that works without explicit capability activation.
+    Used for patterns like health scoring where rules exist but the entity
+    doesn't have the capability formally activated.
+    """
+
+    @router.post("/{entity_id}/evaluate-rules")
+    async def evaluate_rules_route(
+        entity_id: str,
+        capability: str = "auto_classify",
+        auto: bool = False,
+        actor=Depends(get_current_actor),
+    ):
+        check_permission(actor, entity_name, "write")
+        entity = await entity_cls.get_scoped(entity_id)
+        if not entity:
+            raise HTTPException(404)
+
+        if not auto:
+            return {"error": "auto=true required"}
+
+        from kernel.capability.registry import get_capability
+
+        capability_fn = get_capability(capability)
+        result = await capability_fn(entity, {}, entity.org_id)
+
+        if not result.get("needs_reasoning"):
+            for field, value in result.get("result", {}).items():
+                setattr(entity, field, value)
+            await entity.save_tracked(
+                method=capability,
+                method_metadata={
+                    "rule_evaluation": result.get("rule_evaluation"),
+                },
+            )
+        return result
 
 
 def _register_integration_route(router, entity_cls, entity_name: str):

@@ -57,11 +57,16 @@ def main():
         from kernel.cli.org_commands import deploy_org
         deploy_org(from_org=from_org, to_org=to_org, dry_run=dry_run, apply=apply)
 
+    # Entities with dedicated static CLI apps — skip dynamic registration
+    _STATIC_CLI_ENTITIES = {"Role", "Actor", "Integration"}
+
     # Fetch entity metadata and register dynamic commands
     try:
         client = CLIClient()
         meta = client.get("/api/_meta/entities")
         for entity_meta in meta:
+            if entity_meta["name"] in _STATIC_CLI_ENTITIES:
+                continue  # Static CLI app handles these
             _register_entity_commands(app, entity_meta, client)
     except Exception:
         pass  # API unavailable — static commands still work
@@ -128,23 +133,42 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
 
         @entity_app.command(cap_slug)
         def cap_cmd(
-            entity_id: str,
+            entity_id: str = typer.Argument(None),
             auto: bool = False,
             data: str = None,
             _cap=cap["name"],
             _slug=slug,
         ):
-            """Invoke a capability on an entity."""
+            """Invoke a capability on an entity (or all if no ID given)."""
             import orjson
 
             params = {"auto": "true"} if auto else {}
             body = orjson.loads(data) if data else {}
-            result = client.post(
-                f"/api/{_slug}s/{entity_id}/{_cap.replace('_', '-')}",
-                json=body,
-                params=params,
-            )
-            render(result, "json")
+
+            if entity_id:
+                # Single entity
+                result = client.post(
+                    f"/api/{_slug}s/{entity_id}/{_cap.replace('_', '-')}",
+                    json=body,
+                    params=params,
+                )
+                render(result, "json")
+            else:
+                # Batch: run on all entities of this type
+                entities = client.get(f"/api/{_slug}s", params={"limit": 1000})
+                processed = 0
+                for entity in entities:
+                    eid = entity.get("_id") or entity.get("id")
+                    if not eid:
+                        continue
+                    result = client.post(
+                        f"/api/{_slug}s/{eid}/{_cap.replace('_', '-')}",
+                        json=body,
+                        params=params,
+                    )
+                    if result.get("matched") or result.get("result"):
+                        processed += 1
+                typer.echo(f"Processed {processed}/{len(entities)} {_slug}s")
 
     # Register bulk commands for this entity type
     from kernel.cli.bulk_commands import register_bulk_commands
