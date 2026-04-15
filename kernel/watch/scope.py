@@ -32,7 +32,6 @@ async def _resolve_field_path(scope: dict, entity, session) -> ObjectId | None:
     E.g., path="organization.primary_owner_id" traverses
     entity.organization_id → Organization → primary_owner_id.
     """
-    from kernel.db import ENTITY_REGISTRY
 
     path = scope["path"]
     parts = path.split(".")
@@ -69,7 +68,6 @@ async def _resolve_active_context(scope: dict, entity, session) -> ObjectId | No
 def _resolve_entity_type_for_field(entity_type_name: str, field_name: str):
     """Look up what entity type a relationship field points to."""
     from kernel.db import ENTITY_REGISTRY
-    from kernel.entity.definition import EntityDefinition
 
     # For kernel entities, check model field annotations
     cls = ENTITY_REGISTRY.get(entity_type_name)

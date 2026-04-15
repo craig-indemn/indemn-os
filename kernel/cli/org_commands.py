@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from kernel.cli.client import CLIClient, render
+from kernel.cli.client import CLIClient
 
 org_app = typer.Typer(name="org", help="Organization management")
 

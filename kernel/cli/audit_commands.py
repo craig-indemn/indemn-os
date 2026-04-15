@@ -6,7 +6,7 @@ reporting any breaks that indicate tampering or corruption.
 
 import typer
 
-from kernel.cli.client import CLIClient, render
+from kernel.cli.client import CLIClient
 
 audit_app = typer.Typer(name="audit", help="Audit and integrity verification")
 

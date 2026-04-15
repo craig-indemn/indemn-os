@@ -13,7 +13,7 @@ async def auto_classify(entity, config: dict, org_id) -> dict:
     """Try deterministic classification via rules. Return result or needs_reasoning."""
     with create_span("capability.auto_classify", entity_type=type(entity).__name__):
         result = await evaluate_rules(
-            org_id=str(org_id),
+            org_id=org_id,
             entity_type=type(entity).__name__,
             capability="auto_classify",
             entity_data=entity.model_dump(by_alias=True),

@@ -5,7 +5,6 @@ and creates messages for matching watches. Runs inside the save_tracked()
 transaction.
 """
 
-from bson import ObjectId
 
 from kernel.message.mongodb_bus import MongoDBMessageBus
 from kernel.message.schema import Message

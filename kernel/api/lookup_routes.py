@@ -46,6 +46,9 @@ async def create_or_update_lookup(data: dict, actor=Depends(get_current_actor)):
         )
         return {"status": "updated", "name": name}
     else:
-        lookup = Lookup(org_id=org_id, name=name, data=data.get("data", {}))
+        lookup = Lookup(
+            org_id=org_id, name=name, data=data.get("data", {}),
+            created_by=str(actor.id),
+        )
         await lookup.insert()
         return {"status": "created", "name": name}

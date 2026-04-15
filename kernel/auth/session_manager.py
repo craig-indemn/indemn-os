@@ -6,7 +6,6 @@ Phase 4 adds: SSO, MFA, platform admin sessions, revocation cache.
 """
 
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
 
 from bson import ObjectId
 

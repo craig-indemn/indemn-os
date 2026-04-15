@@ -45,8 +45,8 @@ async def _resolve_schema(entity: "BaseEntity", config: FlexibleDataSchema) -> d
     """Resolve the JSON Schema for flexible data validation."""
     if config.schema_source == "self":
         # Schema is embedded in the FlexibleDataSchema config itself
-        if config.schema:
-            return config.schema
+        if config.data_schema:
+            return config.data_schema
         # Fallback: check the entity definition for the schema_field
         defn = await EntityDefinition.find_one({"name": type(entity).__name__})
         if defn:

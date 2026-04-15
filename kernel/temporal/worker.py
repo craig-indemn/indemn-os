@@ -12,7 +12,6 @@ import logging
 from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.worker import Worker
 
-from kernel.config import settings
 from kernel.db import init_database
 from kernel.observability.logging import setup_logging
 from kernel.observability.tracing import init_tracing

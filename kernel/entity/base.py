@@ -119,7 +119,7 @@ class DomainBaseEntity(_EntityMixin, BaseModel):
         return self.__class__._db_ref[self.__class__._collection_name]
 
     @classmethod
-    async def find_scoped(cls, filter_doc: dict = None, **kwargs):
+    def find_scoped(cls, filter_doc: dict = None, **kwargs):
         """Find with automatic org_id injection. Returns a MotorCursor-like wrapper."""
         from kernel.context import current_org_id
         filter_doc = filter_doc or {}
@@ -127,6 +127,16 @@ class DomainBaseEntity(_EntityMixin, BaseModel):
         if org_id:
             filter_doc["org_id"] = org_id
         return _DomainQuery(cls, filter_doc)
+
+    @classmethod
+    async def find_one(cls, filter_doc: dict, **kwargs):
+        """Find a single document matching the filter."""
+        doc = await cls._db_ref[cls._collection_name].find_one(filter_doc)
+        if doc is None:
+            return None
+        entity = cls(**doc)
+        entity._loaded_state = entity.model_dump(by_alias=True)
+        return entity
 
     @classmethod
     async def get(cls, entity_id, **kwargs):

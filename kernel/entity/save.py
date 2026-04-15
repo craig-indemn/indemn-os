@@ -108,26 +108,27 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
 
         # Start MongoDB transaction
         client = entity.get_motor_collection().database.client
-        async with await client.start_session() as session:
-            async with session.start_transaction():
-                if is_new:
-                    # Insert
-                    if not entity.id:
-                        entity.id = ObjectId()
-                    await entity.get_motor_collection().insert_one(
-                        _serialize_entity(entity), session=session
-                    )
-                else:
-                    # Update with optimistic concurrency
-                    result = await entity.get_motor_collection().update_one(
-                        {"_id": entity.id, "version": expected_version},
-                        {"$set": entity.model_dump(by_alias=True)},
-                        session=session,
-                    )
-                    if result.modified_count == 0:
-                        raise VersionConflictError(
-                            f"{type(entity).__name__} {entity.id} was modified concurrently"
+        try:
+            async with await client.start_session() as session:
+                async with session.start_transaction():
+                    if is_new:
+                        # Insert
+                        if not entity.id:
+                            entity.id = ObjectId()
+                        await entity.get_motor_collection().insert_one(
+                            _serialize_entity(entity), session=session
                         )
+                    else:
+                        # Update with optimistic concurrency
+                        result = await entity.get_motor_collection().update_one(
+                            {"_id": entity.id, "version": expected_version},
+                            {"$set": entity.model_dump(by_alias=True)},
+                            session=session,
+                        )
+                        if result.modified_count == 0:
+                            raise VersionConflictError(
+                                f"{type(entity).__name__} {entity.id} was modified concurrently"
+                            )
 
                 # Write changes record
                 await write_change_record(
@@ -153,6 +154,10 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                         parent_entity_type=type(entity).__name__,
                         session=session,
                     )
+        except (VersionConflictError, Exception):
+            # Restore entity version on failure so retries use correct expected_version
+            entity.version = expected_version
+            raise
 
         # Update loaded state for next change tracking
         entity._loaded_state = _serialize_entity(entity)

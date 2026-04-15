@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends
 
 from kernel.auth.middleware import get_current_actor
 from kernel.db import ENTITY_REGISTRY
-from kernel.entity.definition import EntityDefinition
 
 meta_router = APIRouter(prefix="/api/_meta", tags=["meta"])
 

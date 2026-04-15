@@ -15,9 +15,6 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from kernel.temporal.activities import (
-        BulkAbortError,
-        PermanentProcessingError,
-        SkillTamperError,
         claim_message,
         complete_message,
         fail_message,
@@ -128,7 +125,7 @@ class HumanReviewWorkflow:
         # Claim the message
         claimed = await workflow.execute_activity(
             claim_message,
-            args=[message_id, "__human_review__"],
+            args=[message_id, "000000000000000000000000"],  # Sentinel ObjectId for human review
             start_to_close_timeout=timedelta(seconds=30),
         )
         if not claimed:

@@ -58,7 +58,7 @@ class FlexibleDataSchema(BaseModel):
 
     schema_source: str  # "self" or a relationship field name (e.g., "product_id")
     schema_field: str  # Field on the source entity holding the JSON schema
-    schema: Optional[dict] = None  # Embedded JSON Schema (used when schema_source="self")
+    data_schema: Optional[dict] = None  # Embedded JSON Schema (used when schema_source="self")
 
 
 class EntityDefinition(Document):

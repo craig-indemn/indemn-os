@@ -4,12 +4,11 @@ Provides controlled access to the message queue without exposing
 full CRUD on the Message collection.
 """
 
-from datetime import datetime, timezone
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from kernel.auth.middleware import check_permission, get_current_actor
+from kernel.auth.middleware import get_current_actor
 from kernel.message.mongodb_bus import MongoDBMessageBus
 from kernel.message.schema import Message
 

@@ -12,7 +12,7 @@ from kernel.watch.evaluator import evaluate_condition
 
 
 async def evaluate_rules(
-    org_id: str, entity_type: str, capability: str, entity_data: dict
+    org_id, entity_type: str, capability: str, entity_data: dict
 ) -> dict:
     """Evaluate all active rules for this org + entity type + capability.
     Returns the evaluation result with full context for debugging."""
