@@ -39,11 +39,13 @@ async def check_rate_limit(ip_address: str, email: str, org_id) -> bool:
 
     # Check active lockout
     locked_until = doc.get("locked_until")
-    if locked_until and locked_until > datetime.now(timezone.utc):
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    window_naive = window.replace(tzinfo=None)
+    if locked_until and locked_until > now_naive:
         return True
 
-    # Count recent failures
-    recent_failures = [t for t in doc.get("failures", []) if t > window]
+    # Count recent failures (MongoDB stores naive UTC datetimes)
+    recent_failures = [t for t in doc.get("failures", []) if t > window_naive]
     if len(recent_failures) >= MAX_FAILURES:
         # Apply new lockout
         await collection.update_one(

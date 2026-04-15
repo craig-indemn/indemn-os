@@ -11,6 +11,19 @@ import orjson
 
 def compute_hash(record) -> str:
     """SHA-256 hash of the record content for tamper evidence."""
+
+    def _serialize_changes(changes):
+        result = []
+        for c in changes:
+            d = c.model_dump()
+            # Convert non-JSON-serializable values to strings
+            for key in ("old_value", "new_value"):
+                val = d.get(key)
+                if val is not None and not isinstance(val, (str, int, float, bool, list, dict)):
+                    d[key] = str(val)
+            result.append(d)
+        return result
+
     content = orjson.dumps(
         {
             "entity_type": record.entity_type,
@@ -18,10 +31,11 @@ def compute_hash(record) -> str:
             "change_type": record.change_type,
             "actor_id": record.actor_id,
             "timestamp": record.timestamp.isoformat(),
-            "changes": [c.model_dump() for c in record.changes],
+            "changes": _serialize_changes(record.changes),
             "previous_hash": record.previous_hash,
         },
         option=orjson.OPT_SORT_KEYS,
+        default=str,  # Fallback: convert non-serializable types to str
     )
     return hashlib.sha256(content).hexdigest()
 

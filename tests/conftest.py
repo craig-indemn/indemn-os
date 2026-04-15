@@ -64,6 +64,11 @@ async def db():
 
     await init_beanie(database=database, document_models=ALL_MODELS)
 
+    # Set module-level db references so get_database()/get_client() work
+    import kernel.db as db_module
+    db_module._client = client
+    db_module._db = database
+
     yield database
 
     # Cleanup: delete all documents from known collections
