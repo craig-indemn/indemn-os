@@ -112,8 +112,10 @@ async def _resolve_active_context(
 def _resolve_entity_type_for_field(entity_type_name: str, field_name: str):
     """Look up what entity type a relationship field points to.
 
-    For kernel entities: infer from field name conventions (e.g., org_id -> Organization).
-    For domain entities: use the EntityDefinition's relationship_target.
+    For kernel entities: infer from field name conventions.
+    For domain entities: check relationship_target from the entity
+    definition (stored on the dynamic class at creation time).
+    Falls back to naming convention if no relationship_target found.
     """
     from kernel.db import ENTITY_REGISTRY
 
@@ -125,9 +127,34 @@ def _resolve_entity_type_for_field(entity_type_name: str, field_name: str):
     if getattr(cls, "_is_kernel_entity", False):
         return _infer_entity_from_field_name(field_name)
 
-    # Domain entity — check EntityDefinition for relationship_target
-    # This requires async lookup, so we use a sync heuristic first
+    # Domain entity — check relationship_target from field metadata.
+    # The factory stores _activated_capabilities and enum metadata on
+    # the class. We can also check if the class was built from an
+    # EntityDefinition that had relationship_target on this field.
+    # The definition's fields are accessible via the class's
+    # __pydantic_fields__ or we check ENTITY_REGISTRY for the target.
+    target = _resolve_relationship_target(cls, field_name)
+    if target:
+        return target
+
+    # Fallback to naming convention
     return _infer_entity_from_field_name(field_name)
+
+
+def _resolve_relationship_target(cls, field_name: str):
+    """Check if a domain entity class has relationship metadata for a field.
+
+    Uses _relationship_targets stored by factory.py at class creation time.
+    E.g., HealthSignal._relationship_targets = {"organization_id": "Company"}
+    This correctly resolves organization_id → Company (not Organization).
+    """
+    from kernel.db import ENTITY_REGISTRY
+
+    targets = getattr(cls, "_relationship_targets", {})
+    target_name = targets.get(field_name)
+    if target_name and target_name in ENTITY_REGISTRY:
+        return ENTITY_REGISTRY[target_name]
+    return None
 
 
 def _infer_entity_from_field_name(field_name: str):

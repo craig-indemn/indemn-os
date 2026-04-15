@@ -73,14 +73,17 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
     @router.post("/{entity_id}/transition")
     async def transition_entity(
         entity_id: str,
-        to: str,
-        reason: str = None,
+        data: dict = {},
         actor=Depends(get_current_actor),
     ):
         check_permission(actor, entity_name, "write")
         entity = await entity_cls.get_scoped(entity_id)
         if not entity:
             raise HTTPException(404)
+        to = data.get("to")
+        reason = data.get("reason")
+        if not to:
+            raise HTTPException(400, "'to' state is required")
         entity.transition_to(to, reason)
         created_messages = await entity.save_tracked(method="transition")
         _fire_dispatch(created_messages)

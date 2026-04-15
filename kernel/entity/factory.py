@@ -80,6 +80,13 @@ def create_entity_class(definition: EntityDefinition) -> type[DomainBaseEntity]:
     # Store enum metadata for UI and skill generation
     DynamicEntity._enum_fields = enum_fields
 
+    # Store relationship metadata for scope resolution
+    DynamicEntity._relationship_targets = {
+        fname: fdef.relationship_target
+        for fname, fdef in definition.fields.items()
+        if fdef.is_relationship and fdef.relationship_target
+    }
+
     # Identify the state field from is_state_field flag in definition
     state_field_name = None
     for fname, fdef in definition.fields.items():

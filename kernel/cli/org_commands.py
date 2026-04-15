@@ -93,7 +93,16 @@ def export_org(
             with open(cap_dir / f"{name}.yaml", "w") as f:
                 yaml.dump(data, f, default_flow_style=False)
 
-    # Write remaining categories (entities, skills, lookups, etc.)
+    # Write skills as .md files (spec convention: skills are markdown)
+    skills = result.pop("skills", {})
+    if skills:
+        skills_dir = out / "skills"
+        skills_dir.mkdir(exist_ok=True)
+        for name, data in skills.items():
+            with open(skills_dir / f"{name}.md", "w") as f:
+                f.write(data.get("content", ""))
+
+    # Write remaining categories (entities, lookups, roles, etc.)
     for category, items in result.items():
         if not items:
             continue
@@ -139,9 +148,22 @@ def import_org(
             with open(f) as fh:
                 config["capabilities"][f.stem] = yaml.safe_load(fh)
 
+    # Read skills from .md files
+    skills_dir = base / "skills"
+    if skills_dir.exists():
+        config["skills"] = {}
+        for f in skills_dir.glob("*.md"):
+            config["skills"][f.stem] = {
+                "name": f.stem,
+                "type": "associate",
+                "content": f.read_text(),
+                "status": "active",
+            }
+
     # Read remaining flat categories
+    _HANDLED = {"rules", "capabilities", "skills", "org.yaml"}
     for cat_dir in base.iterdir():
-        if cat_dir.name in ("rules", "capabilities", "org.yaml"):
+        if cat_dir.name in _HANDLED:
             continue
         if cat_dir.is_dir():
             config[cat_dir.name] = {}
