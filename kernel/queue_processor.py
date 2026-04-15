@@ -204,6 +204,86 @@ register_sweep(dispatch_associate_workflows)
 register_sweep(check_scheduled_associates)
 
 
+# --- Phase 5 sweep functions ---
+
+
+async def cleanup_expired_attentions():
+    """Find and expire Attentions past their TTL. [G-44]"""
+    from kernel_entities.attention import Attention
+
+    now = datetime.now(timezone.utc)
+    expired = await Attention.find({
+        "status": "active",
+        "expires_at": {"$lt": now},
+    }).to_list()
+
+    for attention in expired:
+        attention.transition_to("expired")
+        await attention.save_tracked(
+            actor_id="system:ttl_cleanup",
+            method="ttl_expiration",
+        )
+        logger.info("Expired attention %s (TTL reached)", attention.id)
+
+
+async def handle_zombie_sessions():
+    """Detect and recover from zombie real-time sessions. [G-45]
+
+    When a Runtime crashes, its Attentions expire via TTL.
+    This sweep finds recently expired real-time sessions and
+    transitions the linked entity to 'abandoned'.
+    """
+    from kernel.db import ENTITY_REGISTRY
+    from kernel_entities.attention import Attention
+
+    now = datetime.now(timezone.utc)
+    recently_expired = await Attention.find({
+        "status": "expired",
+        "purpose": "real_time_session",
+        "expires_at": {"$gte": now - timedelta(minutes=5)},
+    }).to_list()
+
+    for attention in recently_expired:
+        target = attention.target_entity
+        entity_type = target.get("type")
+        entity_id = target.get("id")
+        if not entity_type or not entity_id:
+            continue
+
+        entity_cls = ENTITY_REGISTRY.get(entity_type)
+        if not entity_cls:
+            continue
+
+        entity = await entity_cls.get(entity_id)
+        if not entity:
+            continue
+
+        # Only transition if entity is still in active state
+        current_state = getattr(entity, "status", None) or getattr(entity, "stage", None)
+        if current_state == "active":
+            try:
+                entity.transition_to("abandoned")
+                await entity.save_tracked(
+                    actor_id="system:zombie_recovery",
+                    method="zombie_recovery",
+                    method_metadata={
+                        "attention_id": str(attention.id),
+                        "reason": "Runtime session expired",
+                    },
+                )
+                logger.warning(
+                    "Zombie recovery: %s %s transitioned to abandoned",
+                    entity_type, entity_id,
+                )
+            except Exception as exc:
+                logger.error("Zombie recovery failed for %s %s: %s", entity_type, entity_id, exc)
+
+
+# Register Phase 5 sweeps
+register_sweep(cleanup_expired_attentions)
+register_sweep(handle_zombie_sessions)
+
+
 # --- Sweep loop ---
 
 
