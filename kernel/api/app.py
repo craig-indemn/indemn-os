@@ -8,9 +8,13 @@ goes through it.
 from fastapi import FastAPI
 
 from kernel.api.bootstrap import bootstrap_router
+from kernel.api.bulk import bulk_router
+from kernel.api.direct_invoke import invoke_router
 from kernel.api.errors import register_error_handlers
 from kernel.api.health import health_router
+from kernel.api.human_review import review_router
 from kernel.api.meta import meta_router
+from kernel.api.webhook import webhook_router
 from kernel.auth.middleware import AuthMiddleware
 from kernel.observability.tracing import init_tracing
 
@@ -25,8 +29,8 @@ def create_app() -> FastAPI:
     async def startup():
         init_tracing()
 
-        from kernel.db import init_database, ENTITY_REGISTRY
         from kernel.api.registration import register_entity_routes
+        from kernel.db import ENTITY_REGISTRY, init_database
 
         await init_database()
 
@@ -47,6 +51,10 @@ def create_app() -> FastAPI:
     app.include_router(meta_router)
     app.include_router(health_router)
     app.include_router(bootstrap_router)
+    app.include_router(invoke_router)
+    app.include_router(review_router)
+    app.include_router(bulk_router)
+    app.include_router(webhook_router)
 
     return app
 

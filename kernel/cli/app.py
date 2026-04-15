@@ -16,6 +16,7 @@ def main():
     """Entry point. Registers static commands, then dynamic entity commands from API."""
     # Register static commands (always available)
     from kernel.cli.entity_commands import entity_app
+    from kernel.cli.lookup_commands import lookup_app
     from kernel.cli.org_commands import org_app
     from kernel.cli.platform_commands import platform_app
     from kernel.cli.queue_commands import queue_app
@@ -24,6 +25,7 @@ def main():
     app.add_typer(entity_app, name="entity")
     app.add_typer(org_app, name="org")
     app.add_typer(queue_app, name="queue")
+    app.add_typer(lookup_app, name="lookup")
 
     # Fetch entity metadata and register dynamic commands
     try:
