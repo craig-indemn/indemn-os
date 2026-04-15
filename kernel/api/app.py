@@ -25,6 +25,7 @@ from kernel.api.interaction import interaction_router
 from kernel.api.lookup_routes import lookup_router
 from kernel.api.meta import meta_router
 from kernel.api.queue_routes import queue_router
+from kernel.api.rule_routes import rule_router
 from kernel.api.skill_routes import skill_router
 from kernel.api.webhook import webhook_router
 from kernel.api.websocket import websocket_handler
@@ -44,7 +45,8 @@ def create_app() -> FastAPI:
     async def startup():
         init_tracing()
 
-        # Import adapters so they register via register_adapter()
+        # Import adapters and capabilities so they self-register
+        import kernel.capability  # noqa: F401
         import kernel.integration.adapters  # noqa: F401
         from kernel.api.registration import register_entity_routes
         from kernel.db import ENTITY_REGISTRY, init_database
@@ -91,6 +93,7 @@ def create_app() -> FastAPI:
     app.include_router(lookup_router)
     app.include_router(admin_router)
     app.include_router(skill_router)
+    app.include_router(rule_router)
 
     # Phase 4+5 routers
     app.include_router(auth_router)

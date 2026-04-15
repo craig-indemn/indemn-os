@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
-from kernel.entity.definition import EntityDefinition
+from kernel.entity.definition import CapabilityActivation, EntityDefinition, FieldDefinition
 
 admin_router = APIRouter(tags=["admin"])
 
@@ -32,6 +32,141 @@ async def create_entity_definition(data: dict, actor=Depends(get_current_actor))
     return defn.model_dump(mode="json")
 
 
+@admin_router.put("/api/entitydefinitions/{name}/enable-capability")
+async def enable_capability(name: str, data: dict, actor=Depends(get_current_actor)):
+    """Enable a kernel capability on an entity type.
+
+    Body: {"capability": "stale_check", "config": {...}}
+    """
+    check_permission(actor, "EntityDefinition", "write")
+    org_id = current_org_id.get()
+
+    defn = await EntityDefinition.find_one({"name": name, "org_id": org_id})
+    if not defn:
+        raise HTTPException(404, f"Entity definition '{name}' not found")
+
+    capability = data.get("capability")
+    config = data.get("config", {})
+    if not capability:
+        raise HTTPException(400, "capability is required")
+
+    # Check if already activated
+    for cap in defn.activated_capabilities:
+        if cap.capability == capability:
+            # Update existing config
+            cap.config = config
+            from datetime import datetime, timezone
+
+            defn.updated_at = datetime.now(timezone.utc)
+            defn.version += 1
+            await defn.save()
+            return {"status": "updated", "capability": capability}
+
+    # Add new activation
+    defn.activated_capabilities.append(
+        CapabilityActivation(capability=capability, config=config)
+    )
+    from datetime import datetime, timezone
+
+    defn.updated_at = datetime.now(timezone.utc)
+    defn.version += 1
+    await defn.save()
+    return {"status": "enabled", "capability": capability}
+
+
+@admin_router.put("/api/entitydefinitions/{name}/modify")
+async def modify_entity_definition(
+    name: str, data: dict, actor=Depends(get_current_actor)
+):
+    """Modify an entity definition — add/remove fields.
+
+    Body: {"add_fields": {"field_name": {...}}, "remove_fields": ["field_name"]}
+    """
+    check_permission(actor, "EntityDefinition", "write")
+    org_id = current_org_id.get()
+
+    defn = await EntityDefinition.find_one({"name": name, "org_id": org_id})
+    if not defn:
+        raise HTTPException(404, f"Entity definition '{name}' not found")
+
+    added = []
+    removed = []
+
+    add_fields = data.get("add_fields", {})
+    for field_name, field_spec in add_fields.items():
+        defn.fields[field_name] = FieldDefinition(**field_spec)
+        added.append(field_name)
+
+    remove_fields = data.get("remove_fields", [])
+    for field_name in remove_fields:
+        if field_name in defn.fields:
+            del defn.fields[field_name]
+            removed.append(field_name)
+
+    if added or removed:
+        from datetime import datetime, timezone
+
+        defn.updated_at = datetime.now(timezone.utc)
+        defn.version += 1
+        await defn.save()
+
+    return {"status": "modified", "added": added, "removed": removed}
+
+
+# --- Actor Management ---
+
+
+@admin_router.post("/api/_platform/actor/add-role")
+async def actor_add_role(data: dict, actor=Depends(get_current_actor)):
+    """Add a role to an actor by email. Resolves role name to ID."""
+    from kernel_entities import Actor, Role
+
+    email = data.get("email")
+    role_name = data.get("role_name")
+    if not email or not role_name:
+        raise HTTPException(400, "email and role_name required")
+
+    org_id = current_org_id.get()
+    target = await Actor.find_one({"email": email, "org_id": org_id})
+    if not target:
+        raise HTTPException(404, f"Actor with email '{email}' not found")
+
+    role = await Role.find_one({"name": role_name, "org_id": org_id})
+    if not role:
+        raise HTTPException(404, f"Role '{role_name}' not found")
+
+    if role.id not in target.role_ids:
+        target.role_ids.append(role.id)
+        await target.save_tracked(actor_id=str(actor.id), method="add_role")
+
+    return {"actor_id": str(target.id), "role_added": role_name}
+
+
+@admin_router.post("/api/_platform/actor/add-auth")
+async def actor_add_auth(data: dict, actor=Depends(get_current_actor)):
+    """Add an authentication method to an actor by email."""
+    from kernel_entities import Actor
+
+    email = data.get("email")
+    method = data.get("method")
+    if not email or not method:
+        raise HTTPException(400, "email and method required")
+
+    target = await Actor.find_one({"email": email, "org_id": current_org_id.get()})
+    if not target:
+        raise HTTPException(404, f"Actor with email '{email}' not found")
+
+    # Check not already added
+    for existing in target.authentication_methods:
+        if existing.get("method") == method:
+            return {"actor_id": str(target.id), "status": "already_exists"}
+
+    target.authentication_methods.append({"method": method, "enabled": True})
+    await target.save_tracked(actor_id=str(actor.id), method="add_auth")
+
+    return {"actor_id": str(target.id), "method_added": method}
+
+
 # --- Platform Seed ---
 
 
@@ -51,36 +186,192 @@ async def platform_seed(data: dict = {}):
 @admin_router.post("/api/_platform/org/clone")
 async def org_clone(data: dict, actor=Depends(get_current_actor)):
     """Clone an organization's configuration to a new org."""
-    source_org = data.get("source_org_slug")
+    from kernel.api.org_lifecycle import clone_org
+
+    source_org_slug = data.get("source_org_slug")
     target_name = data.get("target_org_name")
-    if not source_org or not target_name:
+    if not source_org_slug or not target_name:
         raise HTTPException(400, "source_org_slug and target_org_name required")
-    # Phase 4+ implementation
-    return {"status": "not_implemented", "message": "Org clone available in Phase 4"}
+
+    # Resolve slug to org_id
+    source_org_id = await _resolve_org_slug(source_org_slug)
+    result = await clone_org(source_org_id, target_name)
+    return result
 
 
 @admin_router.get("/api/_platform/org/diff")
 async def org_diff(org_a: str = None, org_b: str = None, actor=Depends(get_current_actor)):
-    """Diff entity definitions between two orgs."""
-    return {"status": "not_implemented", "message": "Org diff available in Phase 4"}
+    """Diff configuration between two orgs."""
+    from kernel.api.org_lifecycle import diff_org_configs
+
+    if not org_a or not org_b:
+        raise HTTPException(400, "org_a and org_b slug params required")
+    org_a_id = await _resolve_org_slug(org_a)
+    org_b_id = await _resolve_org_slug(org_b)
+    return await diff_org_configs(org_a_id, org_b_id)
 
 
 @admin_router.get("/api/_platform/org/export")
 async def org_export(org: str = None, actor=Depends(get_current_actor)):
-    """Export an org's entity definitions and configuration."""
-    return {"status": "not_implemented", "message": "Org export available in Phase 4"}
+    """Export an org's configuration."""
+    from kernel.api.org_lifecycle import export_org_config
+
+    if not org:
+        org_id = current_org_id.get()
+    else:
+        org_id = await _resolve_org_slug(org)
+    return await export_org_config(org_id)
 
 
 @admin_router.post("/api/_platform/org/import")
 async def org_import(data: dict, actor=Depends(get_current_actor)):
-    """Import entity definitions into an org."""
-    return {"status": "not_implemented", "message": "Org import available in Phase 4"}
+    """Import configuration into a new org."""
+    from kernel.api.org_lifecycle import import_org_config
+
+    target_name = data.get("target_org_name")
+    config = data.get("config")
+    if not target_name or not config:
+        raise HTTPException(400, "target_org_name and config required")
+    return await import_org_config(target_name, config)
 
 
 @admin_router.post("/api/_platform/org/deploy")
 async def org_deploy(data: dict, actor=Depends(get_current_actor)):
-    """Deploy configuration changes to an org."""
-    return {"status": "not_implemented", "message": "Org deploy available in Phase 4"}
+    """Deploy configuration from source to target org."""
+    from kernel.api.org_lifecycle import deploy_org
+
+    source_slug = data.get("source_org_slug")
+    target_slug = data.get("target_org_slug")
+    dry_run = data.get("dry_run", True)
+    if not source_slug or not target_slug:
+        raise HTTPException(400, "source_org_slug and target_org_slug required")
+    source_id = await _resolve_org_slug(source_slug)
+    target_id = await _resolve_org_slug(target_slug)
+    return await deploy_org(source_id, target_id, dry_run=dry_run)
+
+
+async def _resolve_org_slug(slug: str):
+    """Resolve an org slug to its ObjectId."""
+    from bson import ObjectId as OId
+
+    from kernel.db import get_database
+
+    db = get_database()
+    org_doc = await db["organizations"].find_one({"slug": slug})
+    if not org_doc:
+        # Try as raw ObjectId
+        try:
+            return OId(slug)
+        except Exception:
+            raise HTTPException(404, f"Organization '{slug}' not found")
+    return org_doc["_id"]
+
+
+# --- Report Compare ---
+
+
+@admin_router.post("/api/_platform/report/compare")
+async def report_compare(data: dict, actor=Depends(get_current_actor)):
+    """Compare old system data against OS entities for parallel run validation.
+
+    Body: {
+        "old_data": [{"external_id": "...", "classification": "..."}],
+        "entity_type": "Email",
+        "match_field": "external_id",
+        "compare_fields": ["classification", "submission_id"]
+    }
+    """
+    from kernel.db import ENTITY_REGISTRY
+
+    old_data = data.get("old_data", [])
+    entity_type = data.get("entity_type")
+    match_field = data.get("match_field", "external_id")
+    compare_fields = data.get("compare_fields", [])
+
+    if not entity_type or not old_data:
+        raise HTTPException(400, "entity_type and old_data required")
+
+    entity_cls = ENTITY_REGISTRY.get(entity_type)
+    if not entity_cls:
+        raise HTTPException(404, f"Entity type '{entity_type}' not found")
+
+    # Build lookup from old data
+    old_by_key = {}
+    for record in old_data:
+        key = record.get(match_field)
+        if key:
+            old_by_key[key] = record
+
+    # Load all OS entities with matching field values
+    org_id = current_org_id.get()
+    match_values = list(old_by_key.keys())
+
+    # Query in batches
+    os_by_key = {}
+    batch_size = 500
+    for i in range(0, len(match_values), batch_size):
+        batch = match_values[i:i + batch_size]
+        filter_doc = {"org_id": org_id, match_field: {"$in": batch}}
+        entities = await entity_cls.find_scoped(filter_doc).to_list()
+        for entity in entities:
+            entity_data = entity.model_dump(by_alias=True)
+            key = entity_data.get(match_field)
+            if key:
+                os_by_key[key] = entity_data
+
+    # Compare
+    comparisons = []
+    matched = 0
+    mismatched = 0
+    missing_in_os = 0
+
+    for key, old_record in old_by_key.items():
+        os_record = os_by_key.get(key)
+        if not os_record:
+            comparisons.append({
+                match_field: key,
+                "status": "missing_in_os",
+            })
+            missing_in_os += 1
+            continue
+
+        field_matches = {}
+        all_match = True
+        for field in compare_fields:
+            old_val = old_record.get(field)
+            os_val = os_record.get(field)
+            if old_val is not None and os_val is not None:
+                is_match = str(old_val) == str(os_val)
+            else:
+                is_match = old_val == os_val
+            field_matches[field] = {
+                "old": old_val,
+                "new": os_val,
+                "match": is_match,
+            }
+            if not is_match:
+                all_match = False
+
+        if all_match:
+            matched += 1
+        else:
+            mismatched += 1
+
+        comparisons.append({
+            match_field: key,
+            "status": "match" if all_match else "mismatch",
+            "fields": field_matches,
+        })
+
+    return {
+        "summary": {
+            "total": len(old_by_key),
+            "matched": matched,
+            "mismatched": mismatched,
+            "missing_in_os": missing_in_os,
+        },
+        "comparisons": comparisons,
+    }
 
 
 # --- Pipeline Metrics ---

@@ -1,4 +1,4 @@
-"""Lookup CLI commands — CRUD + CSV import. [G-60]
+"""Lookup CLI commands — CRUD + CSV import.
 
 Lookups are key-value tables used by the rules engine for classification.
 Bulk-importable via CSV, maintained by non-technical users.
@@ -14,26 +14,42 @@ lookup_app = typer.Typer(name="lookup", help="Lookup table management")
 
 
 @lookup_app.command("list")
-def list_lookups():
+def list_lookups(fmt: str = typer.Option("table", "--format")):
     """List all lookups."""
     client = CLIClient()
     result = client.get("/api/lookups/")
-    render(result, "table")
+    render(result, fmt)
 
 
 @lookup_app.command("get")
-def get_lookup(name: str):
+def get_lookup(name: str, fmt: str = typer.Option("json", "--format")):
     """Get a lookup by name."""
     client = CLIClient()
     result = client.get(f"/api/lookups/{name}")
-    render(result, "json")
+    render(result, fmt)
+
+
+@lookup_app.command("create")
+def create_lookup(
+    name: str = typer.Option(..., "--name", help="Lookup name"),
+    data: str = typer.Option(..., "--data", help="JSON key-value data"),
+):
+    """Create a new lookup table from inline JSON."""
+    import orjson
+
+    client = CLIClient()
+    response = client.post(
+        "/api/lookups",
+        json={"name": name, "data": orjson.loads(data)},
+    )
+    render(response, "json")
+    typer.echo(f"Created lookup: {name}")
 
 
 @lookup_app.command("import")
 def import_lookup(
     name: str,
     from_csv: str = typer.Option(..., "--from-csv", help="Path to CSV file"),
-    org: str = typer.Option(None, "--org"),
 ):
     """Import lookup data from CSV. First column is key, second is value."""
     data = {}

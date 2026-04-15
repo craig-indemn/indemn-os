@@ -52,13 +52,23 @@ def modify_entity_def(
     remove_field: str = typer.Option(None, "--remove-field"),
 ):
     """Modify an entity definition (add/remove fields)."""
-    typer.echo(f"Modifying entity definition: {name}")
-    # Implementation routes through the entity definition API
-    # The API validates and updates the definition in MongoDB
+    import orjson
+
+    data = {}
     if add_field:
-        typer.echo(f"  Adding field: {add_field}")
+        data["add_fields"] = orjson.loads(add_field)
     if remove_field:
-        typer.echo(f"  Removing field: {remove_field}")
+        data["remove_fields"] = [remove_field]
+
+    if not data:
+        typer.echo("Nothing to modify. Use --add-field or --remove-field.", err=True)
+        raise typer.Exit(1)
+
+    client = CLIClient()
+    result = client.put(f"/api/entitydefinitions/{name}/modify", json=data)
+    added = result.get("added", [])
+    removed = result.get("removed", [])
+    typer.echo(f"Modified {name}: added={added}, removed={removed}")
     typer.echo("  (requires API restart to pick up changes)")
 
 
@@ -71,9 +81,12 @@ def enable_capability(
     """Enable a kernel capability on an entity type."""
     import orjson
 
-    typer.echo(f"Enabling {capability} on {entity_name}")
-    typer.echo(f"  Config: {orjson.loads(config)}")
-    # Implementation updates the EntityDefinition.activated_capabilities
+    client = CLIClient()
+    result = client.put(
+        f"/api/entitydefinitions/{entity_name}/enable-capability",
+        json={"capability": capability, "config": orjson.loads(config)},
+    )
+    typer.echo(f"{result.get('status', 'done').title()} {capability} on {entity_name}")
 
 
 @entity_app.command("migrate")
@@ -95,4 +108,4 @@ def migrate_entity(
         typer.echo(f"  Add field: {add_field}")
     if remove_field:
         typer.echo(f"  Remove field: {remove_field} {'(+ cleanup)' if cleanup else ''}")
-    # Implementation routes through the migration API
+    # Migration routes through the entity definition API

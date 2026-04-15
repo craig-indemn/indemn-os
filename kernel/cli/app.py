@@ -15,6 +15,7 @@ app = typer.Typer(name="indemn", help="Indemn OS CLI")
 def main():
     """Entry point. Registers static commands, then dynamic entity commands from API."""
     # Register static commands (always available)
+    from kernel.cli.actor_commands import actor_app
     from kernel.cli.audit_commands import audit_app
     from kernel.cli.bulk_monitor import bulk_app
     from kernel.cli.entity_commands import entity_app
@@ -24,6 +25,9 @@ def main():
     from kernel.cli.org_commands import org_app
     from kernel.cli.platform_commands import platform_app
     from kernel.cli.queue_commands import queue_app
+    from kernel.cli.report_commands import report_app
+    from kernel.cli.rule_commands import rule_app
+    from kernel.cli.skill_commands import skill_app
 
     app.add_typer(platform_app, name="platform")
     app.add_typer(entity_app, name="entity")
@@ -34,6 +38,10 @@ def main():
     app.add_typer(integration_app, name="integration")
     app.add_typer(audit_app, name="audit")
     app.add_typer(events_app, name="events")
+    app.add_typer(skill_app, name="skill")
+    app.add_typer(rule_app, name="rule")
+    app.add_typer(actor_app, name="actor")
+    app.add_typer(report_app, name="report")
 
     # Fetch entity metadata and register dynamic commands
     try:
