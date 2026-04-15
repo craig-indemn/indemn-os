@@ -9,6 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
 
@@ -19,6 +20,21 @@ def _fire_dispatch(created_messages):
         from kernel.message.dispatch import optimistic_dispatch
 
         asyncio.create_task(optimistic_dispatch(created_messages))
+
+
+def _coerce_objectid_fields(entity_cls, data: dict) -> dict:
+    """Convert string values to ObjectId for fields typed as objectid.
+
+    JSON payloads carry ObjectId values as strings. The entity model expects
+    bson.ObjectId instances. This coerces them before model construction.
+    """
+    from bson import ObjectId as OId
+
+    targets = getattr(entity_cls, "_relationship_targets", {})
+    for field_name in targets:
+        if field_name in data and isinstance(data[field_name], str):
+            data[field_name] = OId(data[field_name])
+    return data
 
 
 def register_entity_routes(app, entity_name: str, entity_cls: type):
@@ -39,7 +55,7 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         if status:
             filter_doc["status"] = status
         entities = await entity_cls.find_scoped(filter_doc).skip(offset).limit(limit).to_list()
-        return [e.model_dump() for e in entities]
+        return [to_dict(e) for e in entities]
 
     @router.get("/{entity_id}")
     async def get_entity(entity_id: str, actor=Depends(get_current_actor)):
@@ -47,15 +63,16 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         entity = await entity_cls.get_scoped(entity_id)
         if not entity:
             raise HTTPException(404)
-        return entity.model_dump()
+        return to_dict(entity)
 
     @router.post("/")
     async def create_entity(data: dict, actor=Depends(get_current_actor)):
         check_permission(actor, entity_name, "write")
+        data = _coerce_objectid_fields(entity_cls, data)
         entity = entity_cls(org_id=current_org_id.get(), **data)
         created_messages = await entity.save_tracked(method="create")
         _fire_dispatch(created_messages)
-        return entity.model_dump()
+        return to_dict(entity)
 
     @router.put("/{entity_id}")
     async def update_entity(entity_id: str, data: dict, actor=Depends(get_current_actor)):
@@ -63,12 +80,13 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         entity = await entity_cls.get_scoped(entity_id)
         if not entity:
             raise HTTPException(404)
+        data = _coerce_objectid_fields(entity_cls, data)
         for key, value in data.items():
             if key not in ("id", "_id", "org_id", "version"):
                 setattr(entity, key, value)
         created_messages = await entity.save_tracked()
         _fire_dispatch(created_messages)
-        return entity.model_dump()
+        return to_dict(entity)
 
     @router.post("/{entity_id}/transition")
     async def transition_entity(
@@ -87,10 +105,12 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         entity.transition_to(to, reason)
         created_messages = await entity.save_tracked(method="transition")
         _fire_dispatch(created_messages)
-        return entity.model_dump()
+        return to_dict(entity)
 
     # Register @exposed methods as additional routes
     for attr_name in dir(entity_cls):
+        if attr_name.startswith("_"):
+            continue
         attr = getattr(entity_cls, attr_name, None)
         if attr and getattr(attr, "_exposed", False):
             method_name = attr._exposed_name
@@ -170,7 +190,7 @@ def _register_capability_route(router, entity_cls, entity_name, cap_name, activa
             for field, value in data.items():
                 setattr(entity, field, value)
             await entity.save_tracked(method=cap_name)
-            return entity.model_dump()
+            return to_dict(entity)
 
 
 def _register_evaluate_rules_route(router, entity_cls, entity_name: str):

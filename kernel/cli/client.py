@@ -35,29 +35,34 @@ class CLIClient:
             print(f"Error {response.status_code}: {msg}", file=sys.stderr)
             raise SystemExit(1)
 
+    def _client(self, timeout: int = 30) -> httpx.Client:
+        return httpx.Client(
+            base_url=self.base_url,
+            follow_redirects=True,
+            timeout=timeout,
+        )
+
     def get(self, path, params=None):
-        with httpx.Client(base_url=self.base_url) as client:
-            r = client.get(path, params=params, headers=self._headers(), timeout=30)
+        with self._client() as client:
+            r = client.get(path, params=params, headers=self._headers())
             self._handle_error(r)
             return r.json()
 
     def post(self, path, json=None, params=None):
-        with httpx.Client(base_url=self.base_url) as client:
-            r = client.post(
-                path, json=json, params=params, headers=self._headers(), timeout=60
-            )
+        with self._client(timeout=60) as client:
+            r = client.post(path, json=json, params=params, headers=self._headers())
             self._handle_error(r)
             return r.json()
 
     def put(self, path, json=None):
-        with httpx.Client(base_url=self.base_url) as client:
-            r = client.put(path, json=json, headers=self._headers(), timeout=60)
+        with self._client(timeout=60) as client:
+            r = client.put(path, json=json, headers=self._headers())
             self._handle_error(r)
             return r.json()
 
     def delete(self, path):
-        with httpx.Client(base_url=self.base_url) as client:
-            r = client.delete(path, headers=self._headers(), timeout=30)
+        with self._client() as client:
+            r = client.delete(path, headers=self._headers())
             self._handle_error(r)
             return r.json() if r.text else {}
 
@@ -73,16 +78,34 @@ class CLIClient:
         return client.stream(method, path, params=params, headers=self._headers())
 
 
+_INFRASTRUCTURE_FIELDS = {
+    "_id", "id", "org_id", "created_at", "updated_at", "created_by",
+    "version", "revision_id",
+}
+
+
 def render(data, fmt: str = "json"):
     """Render output in the requested format."""
     if fmt == "json":
         print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
     elif fmt == "table":
         if isinstance(data, list) and data:
-            keys = list(data[0].keys())[:6]
-            print(" | ".join(k.ljust(20) for k in keys))
-            print("-" * (22 * len(keys)))
+            # Domain fields first, infrastructure last. Show 5 columns max.
+            all_keys = list(data[0].keys())
+            domain_keys = [k for k in all_keys if k not in _INFRASTRUCTURE_FIELDS]
+            keys = domain_keys[:5] if domain_keys else all_keys[:5]
+
+            # Column widths: first column gets 30, rest get 25
+            widths = [30] + [25] * (len(keys) - 1)
+
+            header = " | ".join(k.ljust(w)[:w] for k, w in zip(keys, widths))
+            print(header)
+            print("-" * len(header))
             for row in data:
-                print(" | ".join(str(row.get(k, ""))[:20].ljust(20) for k in keys))
+                vals = []
+                for k, w in zip(keys, widths):
+                    v = str(row.get(k, ""))
+                    vals.append(v.ljust(w)[:w])
+                print(" | ".join(vals))
         else:
             print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())

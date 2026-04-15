@@ -1,5 +1,6 @@
 import { useNavigate, useParams } from "react-router-dom";
 import { useEntities, useEntityMeta } from "../api/hooks";
+import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntity } from "../hooks/useRealtime";
 import { apiClient } from "../api/client";
 import { EntityTable } from "../components/EntityTable";
@@ -9,9 +10,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 
 export function EntityListView() {
   const { entityType } = useParams<{ entityType: string }>();
-  const entityName = entityType
-    ? entityType.replace(/s$/, "").replace(/^./, (c) => c.toUpperCase())
-    : "";
+  const entityName = useEntityNameFromSlug(entityType) || "";
   const navigate = useNavigate();
   const { data: meta } = useEntityMeta(entityName);
   const { data: entities, isLoading, refetch } = useEntities(entityName);

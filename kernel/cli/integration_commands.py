@@ -75,7 +75,7 @@ def create_integration(
 
 
 @integration_app.command("list")
-def list_integrations(fmt: str = typer.Option("table", "--format")):
+def list_integrations(fmt: str = typer.Option("json", "--format")):
     """List integrations."""
     client = CLIClient()
     result = client.get("/api/integrations")

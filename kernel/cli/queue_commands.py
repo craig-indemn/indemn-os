@@ -8,7 +8,7 @@ queue_app = typer.Typer(name="queue", help="Message queue management")
 
 
 @queue_app.command("stats")
-def queue_stats(role: str = None, fmt: str = typer.Option("table", "--format")):
+def queue_stats(role: str = None, fmt: str = typer.Option("json", "--format")):
     """Show queue statistics (pending, processing, dead-letter counts per role)."""
     client = CLIClient()
     params = {}
@@ -20,7 +20,7 @@ def queue_stats(role: str = None, fmt: str = typer.Option("table", "--format")):
 
 @queue_app.command("dead-letter")
 def dead_letter_list(
-    limit: int = 20, fmt: str = typer.Option("table", "--format")
+    limit: int = 20, fmt: str = typer.Option("json", "--format")
 ):
     """List dead-letter messages."""
     client = CLIClient()

@@ -4,8 +4,9 @@ Provides controlled access to infrastructure entities that are
 excluded from auto-generated CRUD for security.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
 from kernel.entity.definition import CapabilityActivation, EntityDefinition, FieldDefinition
@@ -20,20 +21,28 @@ admin_router = APIRouter(tags=["admin"])
 async def list_entity_definitions(actor=Depends(get_current_actor)):
     """List entity definitions for the current org."""
     defs = await EntityDefinition.find({"org_id": current_org_id.get()}).to_list()
-    return [d.model_dump(mode="json") for d in defs]
+    return [to_dict(d) for d in defs]
 
 
 @admin_router.post("/api/entitydefinitions")
-async def create_entity_definition(data: dict, actor=Depends(get_current_actor)):
-    """Create an entity definition."""
+async def create_entity_definition(request: Request, data: dict, actor=Depends(get_current_actor)):
+    """Create an entity definition and register it immediately."""
     check_permission(actor, "EntityDefinition", "write")
     defn = EntityDefinition(org_id=current_org_id.get(), **data)
     await defn.insert()
-    return defn.model_dump(mode="json")
+
+    # Register the entity class and API routes at runtime — no restart needed
+    from kernel.db import register_domain_entity
+
+    await register_domain_entity(defn, app=request.app)
+
+    return to_dict(defn)
 
 
 @admin_router.put("/api/entitydefinitions/{name}/enable-capability")
-async def enable_capability(name: str, data: dict, actor=Depends(get_current_actor)):
+async def enable_capability(
+    request: Request, name: str, data: dict, actor=Depends(get_current_actor),
+):
     """Enable a kernel capability on an entity type.
 
     Body: {"capability": "stale_check", "config": {...}}
@@ -51,27 +60,30 @@ async def enable_capability(name: str, data: dict, actor=Depends(get_current_act
         raise HTTPException(400, "capability is required")
 
     # Check if already activated
+    updated = False
     for cap in defn.activated_capabilities:
         if cap.capability == capability:
-            # Update existing config
             cap.config = config
-            from datetime import datetime, timezone
+            updated = True
+            break
 
-            defn.updated_at = datetime.now(timezone.utc)
-            defn.version += 1
-            await defn.save()
-            return {"status": "updated", "capability": capability}
+    if not updated:
+        defn.activated_capabilities.append(
+            CapabilityActivation(capability=capability, config=config)
+        )
 
-    # Add new activation
-    defn.activated_capabilities.append(
-        CapabilityActivation(capability=capability, config=config)
-    )
     from datetime import datetime, timezone
 
     defn.updated_at = datetime.now(timezone.utc)
     defn.version += 1
     await defn.save()
-    return {"status": "enabled", "capability": capability}
+
+    # Re-register entity class so capability routes are available immediately
+    from kernel.db import register_domain_entity
+
+    await register_domain_entity(defn, app=request.app)
+
+    return {"status": "updated" if updated else "enabled", "capability": capability}
 
 
 @admin_router.put("/api/entitydefinitions/{name}/modify")
@@ -282,17 +294,16 @@ async def _resolve_org_slug(slug: str):
     """Resolve an org slug to its ObjectId."""
     from bson import ObjectId as OId
 
-    from kernel.db import get_database
+    from kernel_entities.organization import Organization
 
-    db = get_database()
-    org_doc = await db["organizations"].find_one({"slug": slug})
-    if not org_doc:
+    org = await Organization.find_one({"slug": slug})
+    if not org:
         # Try as raw ObjectId
         try:
             return OId(slug)
         except Exception:
             raise HTTPException(404, f"Organization '{slug}' not found")
-    return org_doc["_id"]
+    return org.id
 
 
 # --- Report Compare ---

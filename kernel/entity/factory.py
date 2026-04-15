@@ -5,7 +5,7 @@ subclasses at runtime using Pydantic's create_model. This is the mechanism
 that makes domain entities "data, not code."
 """
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -22,7 +22,7 @@ TYPE_MAP = {
     "decimal": Decimal,
     "bool": bool,
     "datetime": datetime,
-    "date": date,
+    "date": datetime,  # BSON has no date type — store as datetime
     "objectid": ObjectId,
     "list": list,
     "dict": dict,

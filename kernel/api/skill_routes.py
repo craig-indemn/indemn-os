@@ -6,6 +6,7 @@ skills (authored). Full CRUD plus review lifecycle.
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
 from kernel.skill.integrity import compute_content_hash
@@ -27,7 +28,7 @@ async def list_skills(
     if status:
         filter_doc["status"] = status
     skills = await Skill.find(filter_doc).to_list()
-    return [s.model_dump(mode="json") for s in skills]
+    return [to_dict(s) for s in skills]
 
 
 @skill_router.get("/{skill_id}")
@@ -40,7 +41,7 @@ async def get_skill(skill_id: str, actor=Depends(get_current_actor)):
     )
     if not skill:
         raise HTTPException(404, "Skill not found")
-    return skill.model_dump(mode="json")
+    return to_dict(skill)
 
 
 @skill_router.get("/by-name/{name}")
@@ -51,7 +52,7 @@ async def get_skill_by_name(name: str, actor=Depends(get_current_actor)):
     )
     if not skill:
         raise HTTPException(404, f"Skill '{name}' not found")
-    return skill.model_dump(mode="json")
+    return to_dict(skill)
 
 
 @skill_router.post("/")
@@ -86,7 +87,7 @@ async def create_skill(data: dict, actor=Depends(get_current_actor)):
         created_by=str(actor.id),
     )
     await skill.insert()
-    return skill.model_dump(mode="json")
+    return to_dict(skill)
 
 
 @skill_router.put("/{skill_id}")
@@ -116,7 +117,7 @@ async def update_skill(skill_id: str, data: dict, actor=Depends(get_current_acto
 
     skill.updated_at = datetime.now(timezone.utc)
     await skill.save()
-    return skill.model_dump(mode="json")
+    return to_dict(skill)
 
 
 @skill_router.post("/{skill_id}/submit-for-review")

@@ -14,7 +14,7 @@ lookup_app = typer.Typer(name="lookup", help="Lookup table management")
 
 
 @lookup_app.command("list")
-def list_lookups(fmt: str = typer.Option("table", "--format")):
+def list_lookups(fmt: str = typer.Option("json", "--format")):
     """List all lookups."""
     client = CLIClient()
     result = client.get("/api/lookups/")

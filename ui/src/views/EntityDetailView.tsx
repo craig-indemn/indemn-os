@@ -1,5 +1,6 @@
 import { useParams, Link } from "react-router-dom";
 import { useEntity, useEntityMeta, useChanges } from "../api/hooks";
+import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntityDetail } from "../hooks/useRealtime";
 import { apiClient } from "../api/client";
 import { EntityForm } from "../components/EntityForm";
@@ -11,9 +12,7 @@ export function EntityDetailView() {
     entityType: string;
     entityId: string;
   }>();
-  const entityName = entityType
-    ? entityType.replace(/s$/, "").replace(/^./, (c) => c.toUpperCase())
-    : "";
+  const entityName = useEntityNameFromSlug(entityType) || "";
   const { data: meta } = useEntityMeta(entityName);
   const { data: entity, refetch } = useEntity(entityName, entityId || "");
   const { data: changes } = useChanges(entityName, entityId || "");

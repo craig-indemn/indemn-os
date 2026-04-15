@@ -12,7 +12,7 @@ def list_rules(
     entity: str = typer.Option(None, "--entity", help="Filter by entity type"),
     capability: str = typer.Option(None, "--capability"),
     status: str = typer.Option("active", "--status"),
-    fmt: str = typer.Option("table", "--format"),
+    fmt: str = typer.Option("json", "--format"),
 ):
     """List rules for the current org."""
     client = CLIClient()

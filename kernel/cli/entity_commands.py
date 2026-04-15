@@ -38,7 +38,7 @@ def create_entity_def(
 
 
 @entity_app.command("list")
-def list_entity_defs(fmt: str = typer.Option("table", "--format")):
+def list_entity_defs(fmt: str = typer.Option("json", "--format")):
     """List all entity definitions for the current org."""
     client = CLIClient()
     result = client.get("/api/entitydefinitions")

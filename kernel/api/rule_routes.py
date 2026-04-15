@@ -6,6 +6,7 @@ They're in _INFRASTRUCTURE (excluded from auto-generation) so need explicit rout
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
 from kernel.rule.schema import Rule
@@ -29,7 +30,7 @@ async def list_rules(
     if status:
         filter_doc["status"] = status
     rules = await Rule.find(filter_doc).sort("-priority").to_list()
-    return [r.model_dump(mode="json") for r in rules]
+    return [to_dict(r) for r in rules]
 
 
 @rule_router.get("/{rule_id}")
@@ -42,7 +43,7 @@ async def get_rule(rule_id: str, actor=Depends(get_current_actor)):
     )
     if not rule:
         raise HTTPException(404, "Rule not found")
-    return rule.model_dump(mode="json")
+    return to_dict(rule)
 
 
 @rule_router.post("/")
@@ -78,7 +79,7 @@ async def create_rule(data: dict, actor=Depends(get_current_actor)):
         created_by=str(actor.id),
     )
     await rule.insert()
-    return rule.model_dump(mode="json")
+    return to_dict(rule)
 
 
 @rule_router.put("/{rule_id}")
@@ -99,7 +100,7 @@ async def update_rule(rule_id: str, data: dict, actor=Depends(get_current_actor)
             setattr(rule, field, data[field])
 
     await rule.save()
-    return rule.model_dump(mode="json")
+    return to_dict(rule)
 
 
 @rule_router.delete("/{rule_id}")

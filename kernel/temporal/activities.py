@@ -77,8 +77,8 @@ async def load_entity_context(message_id: str) -> dict:
         entity = await entity_cls.get(message.entity_id)
 
     return {
-        "message": message.model_dump(mode="json"),
-        "entity": entity.model_dump(mode="json") if entity else None,
+        "message": message.model_dump(),
+        "entity": entity.model_dump() if entity else None,
     }
 
 
@@ -302,7 +302,7 @@ async def preview_bulk_operation(spec_dict: dict) -> dict:
         sample = await entity_cls.find_scoped(spec.filter_query).limit(5).to_list()
         return {
             "count": count,
-            "sample": [e.model_dump(mode="json") for e in sample],
+            "sample": [e.model_dump() for e in sample],
             "operation": spec.operation,
             "dry_run": True,
         }

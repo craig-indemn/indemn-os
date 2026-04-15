@@ -8,6 +8,7 @@ full CRUD on the Message collection.
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from kernel.api.serialize import to_dict
 from kernel.auth.middleware import get_current_actor
 from kernel.message.mongodb_bus import MongoDBMessageBus
 from kernel.message.schema import Message
@@ -53,7 +54,7 @@ async def list_messages(
     messages = await Message.find(filter_doc).sort(
         [("priority", -1), ("created_at", 1)]
     ).limit(limit).to_list()
-    return [m.model_dump(mode="json") for m in messages]
+    return [to_dict(m) for m in messages]
 
 
 @queue_router.post("/api/message_queues/{message_id}/retry")
@@ -93,7 +94,7 @@ async def claim_message(
     message = await bus.claim(role, actor.org_id, actor.id)
     if not message:
         return {"status": "no_messages"}
-    return {"status": "claimed", "message": message.model_dump(mode="json")}
+    return {"status": "claimed", "message": to_dict(message)}
 
 
 # --- Phase 4 UI routes (aliased for frontend convenience) ---

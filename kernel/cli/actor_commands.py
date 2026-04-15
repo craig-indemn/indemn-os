@@ -87,7 +87,7 @@ def create_actor(
 @actor_app.command("list")
 def list_actors(
     type: str = typer.Option(None, "--type", help="Filter by type"),
-    fmt: str = typer.Option("table", "--format"),
+    fmt: str = typer.Option("json", "--format"),
 ):
     """List actors."""
     client = CLIClient()

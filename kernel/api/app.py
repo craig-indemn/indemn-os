@@ -7,8 +7,13 @@ goes through it.
 
 import asyncio
 import logging
+from datetime import date, datetime
+from decimal import Decimal
 
+import orjson
+from bson import ObjectId
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from kernel.api.admin_routes import admin_router
 from kernel.api.assistant import assistant_router
@@ -35,9 +40,34 @@ from kernel.observability.tracing import init_tracing
 logger = logging.getLogger(__name__)
 
 
+class _ORJSONResponse(JSONResponse):
+    """JSON response that handles bson.ObjectId, datetime, Decimal."""
+
+    media_type = "application/json"
+
+    def render(self, content) -> bytes:
+        return orjson.dumps(content, default=self._default)
+
+    @staticmethod
+    def _default(obj):
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, date):
+            return obj.isoformat()
+        if isinstance(obj, Decimal):
+            return float(obj)
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+
 def create_app() -> FastAPI:
     """Create the FastAPI application."""
-    app = FastAPI(title="Indemn OS API", version="0.2.0")
+    app = FastAPI(
+        title="Indemn OS API",
+        version="0.2.0",
+        default_response_class=_ORJSONResponse,
+    )
 
     register_error_handlers(app)
 
@@ -79,6 +109,18 @@ def create_app() -> FastAPI:
             client.close()
 
     app.add_middleware(AuthMiddleware)
+
+    # CORS must be outermost (added last) so preflight OPTIONS requests
+    # are handled before AuthMiddleware rejects them for missing tokens.
+    from starlette.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Dev only — restrict in production
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["X-Refreshed-Token"],
+    )
 
     # Phase 1-3 routers
     app.include_router(meta_router)

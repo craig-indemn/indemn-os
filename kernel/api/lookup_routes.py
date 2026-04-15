@@ -5,6 +5,7 @@ Provides controlled access to lookup tables used by the rules engine.
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
 from kernel.rule.lookup import Lookup
@@ -16,7 +17,7 @@ lookup_router = APIRouter(prefix="/api/lookups", tags=["lookups"])
 async def list_lookups(actor=Depends(get_current_actor)):
     """List all lookups for the current org."""
     lookups = await Lookup.find({"org_id": current_org_id.get()}).to_list()
-    return [lk.model_dump(mode="json") for lk in lookups]
+    return [to_dict(lk) for lk in lookups]
 
 
 @lookup_router.get("/{name}")
@@ -25,7 +26,7 @@ async def get_lookup(name: str, actor=Depends(get_current_actor)):
     lookup = await Lookup.find_one({"name": name, "org_id": current_org_id.get()})
     if not lookup:
         raise HTTPException(404, f"Lookup '{name}' not found")
-    return lookup.model_dump(mode="json")
+    return to_dict(lookup)
 
 
 @lookup_router.post("/")

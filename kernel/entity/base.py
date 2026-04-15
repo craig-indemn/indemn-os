@@ -62,7 +62,6 @@ class KernelBaseEntity(_EntityMixin, Document):
 
     class Settings:
         use_state_management = True
-        is_root = True
 
     async def after_find(self):
         """Beanie hook: capture state on load for change tracking."""

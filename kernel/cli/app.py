@@ -57,10 +57,17 @@ def main():
         from kernel.cli.org_commands import deploy_org
         deploy_org(from_org=from_org, to_org=to_org, dry_run=dry_run, apply=apply)
 
-    # Entities with dedicated static CLI apps — skip dynamic registration
-    _STATIC_CLI_ENTITIES = {"Role", "Actor", "Integration"}
+    # Entities with dedicated static CLI apps — skip dynamic registration.
+    # Infrastructure entities (Rule, Skill, Lookup, etc.) are also excluded
+    # because they have custom routes, not auto-generated CRUD.
+    _STATIC_CLI_ENTITIES = {
+        "Role", "Actor", "Integration",
+        "Rule", "RuleGroup", "Skill", "Lookup",
+        "EntityDefinition", "Message", "MessageLog", "ChangeRecord",
+    }
 
-    # Fetch entity metadata and register dynamic commands
+    # Fetch entity metadata and register dynamic commands.
+    # SystemExit must be caught because CLIClient._handle_error raises it on HTTP errors.
     try:
         client = CLIClient()
         meta = client.get("/api/_meta/entities")
@@ -68,7 +75,7 @@ def main():
             if entity_meta["name"] in _STATIC_CLI_ENTITIES:
                 continue  # Static CLI app handles these
             _register_entity_commands(app, entity_meta, client)
-    except Exception:
+    except (Exception, SystemExit):
         pass  # API unavailable — static commands still work
 
     app()
@@ -85,7 +92,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         limit: int = 20,
         offset: int = 0,
         status: str = None,
-        fmt: str = typer.Option("table", "--format"),
+        fmt: str = typer.Option("json", "--format"),
     ):
         """List entities with filters."""
         params = {"limit": limit, "offset": offset}

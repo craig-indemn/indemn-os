@@ -162,6 +162,12 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
         # Update loaded state for next change tracking
         entity._loaded_state = _serialize_entity(entity)
 
+        # Invalidate watch cache when Role entities change
+        if type(entity).__name__ == "Role":
+            from kernel.watch.cache import invalidate_watch_cache
+
+            await invalidate_watch_cache()
+
         # Return created messages for optimistic dispatch (Phase 2)
         return created_messages
 

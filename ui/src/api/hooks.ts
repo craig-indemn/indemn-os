@@ -7,10 +7,13 @@ import type { AuthEvent, ChangeRecord, EntityMeta, QueueMessage } from "./types"
 export function useEntities(entityName: string, params?: Record<string, string>) {
   return useQuery({
     queryKey: ["entities", entityName, params],
-    queryFn: () =>
-      apiClient<Record<string, unknown>[]>(
-        `/api/${entityName.toLowerCase()}s?${new URLSearchParams(params || {})}`
-      ),
+    queryFn: () => {
+      const qs = new URLSearchParams(params || {});
+      const query = qs.toString() ? `?${qs}` : "";
+      return apiClient<Record<string, unknown>[]>(
+        `/api/${entityName.toLowerCase()}s/${query}`
+      );
+    },
   });
 }
 

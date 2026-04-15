@@ -13,7 +13,7 @@ skill_app = typer.Typer(name="skill", help="Skill management")
 def list_skills(
     type: str = typer.Option(None, "--type", help="Filter: entity or associate"),
     status: str = typer.Option("active", "--status"),
-    fmt: str = typer.Option("table", "--format"),
+    fmt: str = typer.Option("json", "--format"),
 ):
     """List skills for the current org."""
     client = CLIClient()

@@ -44,7 +44,7 @@ def list_roles(
     show_watches: bool = typer.Option(
         False, "--show-watches", help="Include watch definitions",
     ),
-    fmt: str = typer.Option("table", "--format"),
+    fmt: str = typer.Option("json", "--format"),
 ):
     """List roles. Use --show-watches for full wiring view."""
     client = CLIClient()

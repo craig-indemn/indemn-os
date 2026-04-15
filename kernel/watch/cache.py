@@ -40,9 +40,15 @@ async def load_watch_cache():
 def get_cached_watches(org_id: str, entity_type: str) -> list[dict]:
     """Get watches for an org + entity type. Auto-refresh on TTL expiry."""
     if time.time() - _cache_loaded_at > _CACHE_TTL:
-        # TTL expired — in production, schedule async reload via background task.
-        # For now, return stale cache (immediate invalidation handles the critical path).
-        pass
+        # TTL expired — schedule async reload. The next call after reload completes
+        # will return fresh data. This call returns stale cache (acceptable).
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(load_watch_cache())
+        except RuntimeError:
+            pass  # No running loop — skip (CLI context)
 
     key = (org_id, entity_type)
     return _cache.get(key, [])

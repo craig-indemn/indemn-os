@@ -83,6 +83,10 @@ async def init_database():
         MessageLog,
         ChangeRecord,
     ]
+    # Initialize Beanie with KERNEL models first — EntityDefinition is a Beanie
+    # Document, so init_beanie must run before we can construct EntityDefinition objects.
+    await init_beanie(database=_db, document_models=kernel_models)
+
     for cls in kernel_models:
         if hasattr(cls, "__name__"):
             ENTITY_REGISTRY[cls.__name__] = cls
@@ -130,10 +134,6 @@ async def init_database():
         except Exception as e:
             logger.error("Failed to create entity class for %s: %s", defn.name, e)
 
-    # Initialize Beanie with KERNEL models only (not domain entities).
-    # Domain entities use Pydantic + Motor directly — no Beanie lazy model.
-    await init_beanie(database=_db, document_models=kernel_models)
-
     # Ensure indexes exist for domain entity collections
     for defn in seen_names.values():
         if defn.name in RESERVED_NAMES:
@@ -166,3 +166,52 @@ async def init_database():
     )
 
     return _db
+
+
+async def register_domain_entity(defn, app=None):
+    """Register a domain entity at runtime — no restart required.
+
+    Creates the dynamic class, sets up indexes, adds to ENTITY_REGISTRY,
+    and optionally registers API routes on the FastAPI app.
+
+    Called by:
+    - POST /api/entitydefinitions (inline registration)
+    - PUT /api/entitydefinitions/{name}/enable-capability (re-registration)
+    """
+    from kernel.entity.factory import create_entity_class
+
+    # Check reserved names
+    reserved = {name for name, cls in ENTITY_REGISTRY.items()
+                if getattr(cls, "_is_kernel_entity", False)}
+    if defn.name in reserved:
+        raise ValueError(f"'{defn.name}' collides with kernel entity name")
+
+    # Create dynamic class
+    dynamic_cls = create_entity_class(defn)
+    dynamic_cls._db_ref = _db
+    ENTITY_REGISTRY[defn.name] = dynamic_cls
+
+    # Ensure indexes
+    coll = _db[defn.collection_name]
+    await coll.create_index([("org_id", 1)])
+    for idx in defn.indexes:
+        await coll.create_index([("org_id", 1)] + list(idx.fields), unique=idx.unique)
+    for fname, fdef in defn.fields.items():
+        if fdef.unique:
+            await coll.create_index([("org_id", 1), (fname, 1)], unique=True)
+        elif fdef.indexed:
+            await coll.create_index([("org_id", 1), (fname, 1)])
+
+    # Register API routes if app provided
+    if app is not None:
+        from kernel.api.registration import register_entity_routes
+
+        _INFRASTRUCTURE = {
+            "EntityDefinition", "Skill", "Rule", "RuleGroup", "Lookup",
+            "Message", "MessageLog", "ChangeRecord",
+        }
+        if defn.name not in _INFRASTRUCTURE:
+            register_entity_routes(app, defn.name, dynamic_cls)
+
+    logger.info("Registered domain entity '%s' at runtime", defn.name)
+    return dynamic_cls

@@ -37,7 +37,9 @@ async def get_entity_metadata(actor=Depends(get_current_actor)):
             "exposed_methods": [
                 {"name": attr._exposed_name}
                 for attr_name in dir(cls)
-                if (attr := getattr(cls, attr_name, None)) and getattr(attr, "_exposed", False)
+                if not attr_name.startswith("_")
+                and (attr := getattr(cls, attr_name, None))
+                and getattr(attr, "_exposed", False)
             ],
             "permissions": {
                 "read": _check_permission(actor, name, "read"),
@@ -191,6 +193,8 @@ async def get_entity_detail_metadata(entity_name: str, actor=Depends(get_current
     # @exposed methods (kernel entities only)
     exposed_methods = []
     for attr_name in dir(cls):
+        if attr_name.startswith("_"):
+            continue
         attr = getattr(cls, attr_name, None)
         if attr and getattr(attr, "_exposed", False):
             exposed_methods.append({
