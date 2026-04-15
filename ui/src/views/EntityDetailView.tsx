@@ -76,6 +76,41 @@ export function EntityDetailView() {
               />
             </div>
           )}
+          {/* Capability buttons */}
+          {meta.capabilities?.map((cap) => (
+            <button
+              key={cap.name}
+              onClick={async () => {
+                await apiClient(
+                  `/api/${entityType}/${entityId}/${cap.name.replace(/_/g, "-")}?auto=true`,
+                  { method: "POST", body: "{}" }
+                );
+                refetch();
+              }}
+              className="w-full px-3 py-2 text-sm border rounded hover:bg-blue-50 text-blue-600 text-left"
+            >
+              {cap.name.replace(/_/g, " ")}
+            </button>
+          ))}
+
+          {/* @exposed method buttons */}
+          {meta.exposed_methods?.map((method) => (
+            <button
+              key={method.name}
+              onClick={async () => {
+                await apiClient(
+                  `/api/${entityType}/${entityId}/${method.name.replace(/_/g, "-")}`,
+                  { method: "POST", body: "{}" }
+                );
+                refetch();
+              }}
+              className="w-full px-3 py-2 text-sm border rounded hover:bg-green-50 text-green-600 text-left"
+            >
+              {method.name.replace(/_/g, " ")}
+            </button>
+          ))}
+
+          {/* Related entities */}
           {meta.fields
             .filter((f) => f.is_relationship && entity[f.name])
             .map((f) => (
@@ -89,6 +124,8 @@ export function EntityDetailView() {
                 </Link>
               </div>
             ))}
+
+          {/* Recent changes */}
           <ChangeTimeline changes={changes || []} />
         </div>
       </div>

@@ -94,3 +94,39 @@ async def claim_message(
     if not message:
         return {"status": "no_messages"}
     return {"status": "claimed", "message": message.model_dump(mode="json")}
+
+
+# --- Phase 4 UI routes (aliased for frontend convenience) ---
+
+
+@queue_router.get("/api/queue/messages")
+async def list_queue_messages(
+    status: str = Query(None),
+    role: str = Query(None),
+    limit: int = Query(20, le=100),
+    actor=Depends(get_current_actor),
+):
+    """List queue messages — UI-friendly alias for /api/message_queues."""
+    return await list_messages(status=status, role=role, limit=limit, actor=actor)
+
+
+@queue_router.post("/api/queue/messages/{message_id}/claim")
+async def claim_message_by_id(
+    message_id: str,
+    actor=Depends(get_current_actor),
+):
+    """Claim a specific message by ID. Used by Queue UI."""
+    message = await Message.get(ObjectId(message_id))
+    if not message:
+        raise HTTPException(404, "Message not found")
+    if message.status != "pending":
+        raise HTTPException(400, f"Message is {message.status}, not pending")
+
+    await Message.get_motor_collection().update_one(
+        {"_id": message.id, "status": "pending"},
+        {"$set": {
+            "status": "processing",
+            "claimed_by": str(actor.id),
+        }},
+    )
+    return {"status": "claimed", "message_id": message_id}

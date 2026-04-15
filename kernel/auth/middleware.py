@@ -75,11 +75,57 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         request.state.actor = actor
 
-        # Claims refresh check [G-39]
+        # Claims refresh: auto-refresh if session has stale claims [G-39]
+        await _check_claims_freshness(actor, payload, request)
+
         response = await call_next(request)
         if hasattr(request.state, "refreshed_token"):
             response.headers["X-Refreshed-Token"] = request.state.refreshed_token
         return response
+
+
+async def _check_claims_freshness(actor, jwt_payload: dict, request: Request):
+    """If the session has stale claims, auto-refresh the access token. [G-39]"""
+    from kernel_entities.session import Session
+
+    jti = jwt_payload.get("jti")
+    if not jti:
+        return
+
+    session = await Session.find_one({"access_token_jti": jti, "status": "active"})
+    if not session or not session.claims_stale:
+        return
+
+    # Re-load actor's current roles and issue new token
+    from kernel.auth.jwt import create_access_token
+
+    roles = await Role.find({"_id": {"$in": actor.role_ids}}).to_list()
+    role_names = [r.name for r in roles]
+
+    new_token, new_jti = create_access_token(
+        str(actor.id), str(actor.org_id), role_names
+    )
+
+    session.claims_stale = False
+    session.access_token_jti = new_jti
+    await session.save()
+
+    # Set on request state so response middleware adds the header
+    request.state.refreshed_token = new_token
+    request.state.actor_roles = role_names
+
+
+async def mark_claims_stale(actor_id) -> None:
+    """Mark all active sessions for an actor as claims_stale. [G-39]
+
+    Call this when roles are granted or revoked.
+    """
+    from kernel_entities.session import Session
+
+    await Session.get_motor_collection().update_many(
+        {"actor_id": actor_id, "status": "active"},
+        {"$set": {"claims_stale": True}},
+    )
 
 
 async def get_current_actor(request: Request) -> Actor:

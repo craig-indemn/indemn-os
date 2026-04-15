@@ -61,19 +61,36 @@ def _has_any_permission(actor, entity_name: str) -> bool:
 
 
 def _get_field_metadata(cls, entity_name: str) -> list[dict]:
-    """Derive field metadata from Pydantic model_fields."""
+    """Derive field metadata from Pydantic model_fields.
+
+    Includes relationship detection for ObjectId fields with _id suffix.
+    """
     fields = []
     for fname, finfo in cls.model_fields.items():
         if fname.startswith("_") or fname in ("id", "revision_id"):
             continue
+        field_type = _pydantic_type_to_string(finfo.annotation)
+
+        # Detect relationships for objectid fields with _id suffix
+        is_relationship = field_type == "objectid" and fname.endswith("_id")
+        relationship_target = None
+        if is_relationship:
+            base = fname[:-3]  # Strip _id
+            relationship_target = "".join(p.capitalize() for p in base.split("_"))
+
         fields.append(
             {
                 "name": fname,
-                "type": _pydantic_type_to_string(finfo.annotation),
+                "type": field_type,
                 "required": finfo.is_required(),
                 "default": finfo.default if finfo.default is not None else None,
                 "enum_values": _extract_enum_values(finfo.annotation),
                 "description": finfo.description,
+                "is_state_field": fname in ("status", "stage"),
+                "is_relationship": is_relationship,
+                "relationship_target": relationship_target,
+                "indexed": False,
+                "unique": False,
             }
         )
     return fields

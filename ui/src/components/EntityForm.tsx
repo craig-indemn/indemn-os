@@ -8,13 +8,23 @@ interface Props {
   onSave: (data: Record<string, unknown>) => Promise<void>;
 }
 
+const SYSTEM_FIELDS = new Set([
+  "org_id",
+  "version",
+  "created_at",
+  "updated_at",
+  "created_by",
+]);
+
 export function EntityForm({ meta, entity, onSave }: Props) {
-  const { register, handleSubmit, formState: { isDirty, isSubmitting } } = useForm({
-    defaultValues: entity as Record<string, unknown>,
-  });
+  const {
+    control,
+    handleSubmit,
+    formState: { isDirty, isSubmitting },
+  } = useForm({ defaultValues: entity as Record<string, unknown> });
 
   const editableFields = meta.fields.filter(
-    (f) => !f.name.startsWith("_") && !["org_id", "version", "created_at", "updated_at", "created_by"].includes(f.name)
+    (f) => !f.name.startsWith("_") && !SYSTEM_FIELDS.has(f.name)
   );
 
   return (
@@ -25,7 +35,7 @@ export function EntityForm({ meta, entity, onSave }: Props) {
             {field.description || field.name.replace(/_/g, " ")}
             {field.required && <span className="text-red-500 ml-0.5">*</span>}
           </label>
-          <FormField field={field} register={register} />
+          <FormField field={field} control={control} />
         </div>
       ))}
       {meta.permissions.write && (

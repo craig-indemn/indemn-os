@@ -82,6 +82,15 @@ class WebSocketManager {
     }
   }
 
+  /** Update an existing subscription's filter. [G-34] */
+  updateSubscription(id: string, newFilter: Subscription["filter"]) {
+    const sub = this.subscriptions.get(id);
+    if (sub) {
+      sub.filter = newFilter;
+      this.sendSubscription(id, newFilter);
+    }
+  }
+
   disconnect() {
     if (this.pingInterval) clearInterval(this.pingInterval);
     this.ws?.close();

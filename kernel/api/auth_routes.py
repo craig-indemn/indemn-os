@@ -416,6 +416,9 @@ async def create_platform_admin_session(
         },
     )
 
+    # Notify target org (if configured) [G-37]
+    await _notify_platform_admin_access(target_org, actor, data.work_type)
+
     token, new_jti = create_access_token(
         str(actor.id), data.target_org_id, ["platform_admin"]
     )
@@ -545,7 +548,7 @@ async def tier3_signup(data: SignupRequest):
         name=data.email.split("@")[0],
         email=data.email,
         type="tier3_developer",
-        status="active",
+        status="provisioned",
         authentication_methods=[{
             "type": "password",
             "password_hash": hash_password(data.password),
@@ -638,6 +641,23 @@ async def _is_platform_admin(actor) -> bool:
 
     roles = getattr(actor, "_cached_roles", [])
     return any(r.name == "platform_admin" for r in roles)
+
+
+async def _notify_platform_admin_access(target_org, actor, work_type: str):
+    """Notify target org of platform admin access (if notification configured). [G-37]"""
+    # Per auth design: notification config is per-customer.
+    # If the org has a notification Integration configured, send via that.
+    # For MVP: log-based notification only.
+    import logging
+
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "Platform admin access: %s (%s) accessing org %s for %s",
+        actor.name,
+        actor.email,
+        target_org.name,
+        work_type,
+    )
 
 
 def _slugify(name: str) -> str:

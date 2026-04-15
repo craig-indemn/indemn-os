@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./auth/useAuth";
+import { useRealtimeConnection } from "./hooks/useRealtime";
 import { LoginPage } from "./auth/LoginPage";
 import { MfaChallenge } from "./auth/MfaChallenge";
 import { PasswordReset } from "./auth/PasswordReset";
@@ -12,6 +13,9 @@ import { AuthEventsView } from "./views/AuthEventsView";
 
 export default function App() {
   const { isAuthenticated } = useAuth();
+
+  // Initialize WebSocket connection when authenticated [G-34]
+  useRealtimeConnection();
 
   if (!isAuthenticated) {
     return (

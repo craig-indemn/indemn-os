@@ -26,7 +26,7 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${getToken()}`,
         },
-        body: JSON.stringify({ content, context: {} }),
+        body: JSON.stringify({ content, context: _buildContext() }),
       });
 
       const reader = response.body?.getReader();
@@ -64,6 +64,12 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
       setIsStreaming(false);
     }
   }, []);
+
+  // Build context from current UI state [G-59]
+  const _buildContext = () => ({
+    view_type: window.location.pathname.split("/")[1] || "queue",
+    current_path: window.location.pathname,
+  });
 
   return (
     <AssistantContext.Provider
