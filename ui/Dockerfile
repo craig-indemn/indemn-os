@@ -7,8 +7,12 @@ WORKDIR /app
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
 
-# Copy source and build
+# Copy source and build — Vite embeds env vars at build time
 COPY ui/ ./
+ARG VITE_API_URL=https://indemn-api-production.up.railway.app
+ARG VITE_CHAT_HARNESS_WS_URL=wss://indemn-runtime-chat-production.up.railway.app/ws/chat
+ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_CHAT_HARNESS_WS_URL=$VITE_CHAT_HARNESS_WS_URL
 RUN npm run build
 
 # Production image — serve with lightweight static server
