@@ -16,7 +16,10 @@ class CLIError(RuntimeError):
 
 
 def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
-    """Run `indemn <args> --json` as subprocess, parse JSON result."""
+    """Run `indemn <args>` as subprocess, parse JSON result.
+
+    The CLI outputs JSON by default — no --json flag needed.
+    """
     env = {
         "INDEMN_API_URL": os.environ["INDEMN_API_URL"],
         "INDEMN_SERVICE_TOKEN": os.environ["INDEMN_SERVICE_TOKEN"],
@@ -29,8 +32,6 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
             env[k] = os.environ[k]
 
     cmd = ["indemn", *args]
-    if parse_json and "--json" not in cmd:
-        cmd.append("--json")
 
     result = subprocess.run(
         cmd, env=env, capture_output=True, timeout=timeout, check=False,
