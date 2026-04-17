@@ -8,6 +8,7 @@ kernel workflows (BulkExecute) with OTEL tracing.
 
 import asyncio
 import logging
+from datetime import timedelta
 
 from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.worker import Worker
@@ -70,7 +71,7 @@ async def main():
         # [G-23] Production configuration
         max_concurrent_activities=20,
         max_concurrent_workflow_tasks=10,
-        graceful_shutdown_timeout=30,
+        graceful_shutdown_timeout=timedelta(seconds=30),
     )
 
     logger.info("Temporal worker started on task queue 'indemn-kernel'")

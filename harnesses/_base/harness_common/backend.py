@@ -51,7 +51,7 @@ def _build_localshell_backend():
         env={
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "INDEMN_API_URL": os.environ["INDEMN_API_URL"],
-            "INDEMN_AUTH_TOKEN": os.environ["INDEMN_SERVICE_TOKEN"],
+            "INDEMN_SERVICE_TOKEN": os.environ["INDEMN_SERVICE_TOKEN"],
         },
     )
 

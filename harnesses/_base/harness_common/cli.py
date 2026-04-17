@@ -19,7 +19,7 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
     """Run `indemn <args> --json` as subprocess, parse JSON result."""
     env = {
         "INDEMN_API_URL": os.environ["INDEMN_API_URL"],
-        "INDEMN_AUTH_TOKEN": os.environ["INDEMN_SERVICE_TOKEN"],
+        "INDEMN_SERVICE_TOKEN": os.environ["INDEMN_SERVICE_TOKEN"],
         "PATH": os.environ["PATH"],
         "PYTHONUNBUFFERED": "1",
     }
