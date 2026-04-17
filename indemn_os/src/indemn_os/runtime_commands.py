@@ -14,6 +14,7 @@ runtime_app = typer.Typer(name="runtime", help="Runtime management")
 @runtime_app.command("register-instance")
 def register_instance(
     runtime_id: str = typer.Option(..., "--runtime-id"),
+    json_output: bool = typer.Option(False, "--json"),
 ):
     """Register a harness instance for a Runtime. Called at harness startup."""
     client = CLIClient()
@@ -27,6 +28,7 @@ def register_instance(
 @runtime_app.command("heartbeat")
 def heartbeat(
     runtime_id: str = typer.Option(..., "--runtime-id"),
+    json_output: bool = typer.Option(False, "--json"),
 ):
     """Send heartbeat for a Runtime instance. Called periodically by harness."""
     client = CLIClient()
@@ -38,7 +40,10 @@ def heartbeat(
 
 
 @runtime_app.command("get")
-def get_runtime(runtime_id: str):
+def get_runtime(
+    runtime_id: str,
+    json_output: bool = typer.Option(False, "--json"),
+):
     """Get a Runtime by ID."""
     client = CLIClient()
     result = client.get(f"/api/runtimes/{runtime_id}")
@@ -49,6 +54,7 @@ def get_runtime(runtime_id: str):
 def list_runtimes(
     status: str = typer.Option(None, "--status"),
     kind: str = typer.Option(None, "--kind"),
+    json_output: bool = typer.Option(False, "--json"),
 ):
     """List Runtimes."""
     client = CLIClient()
