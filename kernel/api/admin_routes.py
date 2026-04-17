@@ -158,18 +158,24 @@ async def role_add_watch(data: dict, actor=Depends(get_current_actor)):
 
 @admin_router.post("/api/_platform/actor/add-role")
 async def actor_add_role(data: dict, actor=Depends(get_current_actor)):
-    """Add a role to an actor by email. Resolves role name to ID."""
+    """Add a role to an actor by email or actor_id. Resolves role name to ID."""
+    from bson import ObjectId as OID
+
     from kernel_entities import Actor, Role
 
     email = data.get("email")
+    actor_id = data.get("actor_id")
     role_name = data.get("role_name")
-    if not email or not role_name:
-        raise HTTPException(400, "email and role_name required")
+    if not role_name or (not email and not actor_id):
+        raise HTTPException(400, "role_name and either email or actor_id required")
 
     org_id = current_org_id.get()
-    target = await Actor.find_one({"email": email, "org_id": org_id})
+    if actor_id:
+        target = await Actor.get(OID(actor_id))
+    else:
+        target = await Actor.find_one({"email": email, "org_id": org_id})
     if not target:
-        raise HTTPException(404, f"Actor with email '{email}' not found")
+        raise HTTPException(404, "Actor not found")
 
     role = await Role.find_one({"name": role_name, "org_id": org_id})
     if not role:
