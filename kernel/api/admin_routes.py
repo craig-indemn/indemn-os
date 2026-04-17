@@ -207,6 +207,71 @@ async def actor_add_auth(data: dict, actor=Depends(get_current_actor)):
     return {"actor_id": str(target.id), "method_added": method}
 
 
+# --- Service Tokens ---
+
+
+@admin_router.post("/api/_platform/service-token")
+async def create_service_token(data: dict, actor=Depends(get_current_actor)):
+    """Create a service token for a Runtime's harness.
+
+    Per G1.2: generates a long-lived opaque token, creates an associate Actor
+    as the Runtime's service identity, stores the hashed token on the Actor,
+    creates a Session (type=associate_service). Returns the raw token ONCE.
+    """
+    from bson import ObjectId
+
+    from kernel.auth.session_manager import create_session
+    from kernel.auth.token import generate_service_token, hash_token
+    from kernel_entities.actor import Actor
+    from kernel_entities.runtime import Runtime
+
+    runtime_id = data.get("runtime_id")
+    if not runtime_id:
+        raise HTTPException(400, "runtime_id is required")
+
+    runtime = await Runtime.get(ObjectId(runtime_id))
+    if not runtime:
+        raise HTTPException(404, f"Runtime {runtime_id} not found")
+
+    # Create an associate Actor as the Runtime's service identity
+    service_actor = Actor(
+        org_id=runtime.org_id,
+        name=f"runtime-service:{runtime.name}",
+        type="associate",
+        status="active",
+        runtime_id=runtime.id,
+        authentication_methods=[],
+    )
+    await service_actor.insert()
+
+    # Generate service token, store hash on actor
+    raw_token = generate_service_token()
+    service_actor.authentication_methods.append({
+        "type": "token",
+        "token_hash": hash_token(raw_token),
+        "usage": "associate_service",
+    })
+    await service_actor.save_tracked(
+        actor_id=str(actor.id), method="create_service_token"
+    )
+
+    # Create a long-lived session (associate_service — no refresh, no expiry rotation)
+    session, _jwt = await create_session(
+        service_actor,
+        auth_method="token",
+        session_type="associate_service",
+        expire_minutes=525960,  # ~1 year for dev; production uses token auth directly
+    )
+
+    return {
+        "service_token": raw_token,
+        "actor_id": str(service_actor.id),
+        "runtime_id": runtime_id,
+        "session_id": str(session.id),
+        "note": "Store this token securely. It will not be shown again.",
+    }
+
+
 # --- Platform Seed ---
 
 

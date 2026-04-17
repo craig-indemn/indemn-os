@@ -44,18 +44,30 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         token = auth.split(" ", 1)[1]
-        try:
-            payload = verify_access_token(token)
-        except Exception:
-            return JSONResponse(
-                status_code=401, content={"error": "Invalid token"}
-            )
 
-        actor = await Actor.get(payload["actor_id"])
-        if not actor or actor.status != "active":
-            return JSONResponse(
-                status_code=401, content={"error": "Actor not found or inactive"}
-            )
+        # Service tokens (opaque, long-lived) vs JWTs (short-lived, stateless)
+        if token.startswith("indemn_"):
+            from kernel.auth.token import authenticate_by_token
+
+            actor = await authenticate_by_token(token)
+            if not actor:
+                return JSONResponse(
+                    status_code=401, content={"error": "Invalid service token"}
+                )
+            payload = {"actor_id": str(actor.id), "org_id": str(actor.org_id)}
+        else:
+            try:
+                payload = verify_access_token(token)
+            except Exception:
+                return JSONResponse(
+                    status_code=401, content={"error": "Invalid token"}
+                )
+
+            actor = await Actor.get(payload["actor_id"])
+            if not actor or actor.status != "active":
+                return JSONResponse(
+                    status_code=401, content={"error": "Actor not found or inactive"}
+                )
 
         # Set context variables
         current_org_id.set(actor.org_id)
