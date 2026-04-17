@@ -111,10 +111,23 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         raise  # Re-raise so Temporal marks the activity failed
 
 
+def _setup_gcp_credentials():
+    """Write GCP service account JSON to file if provided via env var.
+    Vertex AI requires GOOGLE_APPLICATION_CREDENTIALS file path."""
+    sa_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
+    if sa_json:
+        sa_path = "/tmp/gcp-sa.json"
+        with open(sa_path, "w") as f:
+            f.write(sa_json)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_path
+        log.info("GCP credentials written to %s", sa_path)
+
+
 async def main():
     log.info("Starting async-deepagents harness, runtime=%s", RUNTIME_ID)
     log.info("Sandbox type: %s", os.environ.get("INDEMN_SANDBOX_TYPE", "localshell"))
 
+    _setup_gcp_credentials()
     await register_instance()
 
     connect_kwargs = {

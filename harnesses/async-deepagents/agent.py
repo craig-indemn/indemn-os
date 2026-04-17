@@ -16,7 +16,15 @@ def build_agent(associate: dict, skills: list[str], llm_config: dict):
     llm_config is the three-layer merge result:
     {**runtime.llm_config, **associate.llm_config, **deployment.llm_override}
     """
+    import os
+
     model_id = llm_config.pop("model", "anthropic:claude-sonnet-4-6")
+
+    # Vertex AI needs project + location
+    if "vertexai" in model_id:
+        llm_config.setdefault("project", os.environ.get("GCP_PROJECT_ID", ""))
+        llm_config.setdefault("location", os.environ.get("GCP_LOCATION", "us-central1"))
+
     system_prompt = associate.get("prompt", "") + "\n\n---\n\n" + "\n\n".join(skills)
 
     return create_deep_agent(
