@@ -109,19 +109,20 @@ routes = [
     WebSocketRoute("/ws/chat", websocket_handler),
 ]
 
-app = Starlette(routes=routes)
+from contextlib import asynccontextmanager
 
 
-async def startup():
+@asynccontextmanager
+async def lifespan(app):
     log.info("Starting chat-deepagents harness, runtime=%s", RUNTIME_ID)
     log.info("Sandbox type: %s", os.environ.get("INDEMN_SANDBOX_TYPE", "localshell"))
     _setup_gcp_credentials()
     await register_instance()
-    # Start Runtime heartbeat in background
     asyncio.create_task(heartbeat_loop(interval_s=30.0))
+    yield
 
 
-app.add_event_handler("startup", startup)
+app = Starlette(routes=routes, lifespan=lifespan)
 
 
 if __name__ == "__main__":
