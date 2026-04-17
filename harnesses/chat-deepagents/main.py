@@ -33,9 +33,26 @@ log = logging.getLogger(__name__)
 
 
 def _setup_gcp_credentials():
-    """Write GCP service account JSON to file if provided via env var."""
+    """Write GCP service account JSON to file if provided via env var.
+
+    Fixes escaped newlines in PEM keys — Railway env vars store \\n as
+    literal backslash-n, but PEM needs actual newlines.
+    """
     sa_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
     if sa_json:
+        import json as json_mod
+        try:
+            data = json_mod.loads(sa_json)
+            if "private_key" in data:
+                data["private_key"] = data["private_key"].replace("\\n", "\n")
+            data.setdefault("type", "service_account")
+            data.setdefault("auth_uri", "https://accounts.google.com/o/oauth2/auth")
+            data.setdefault("token_uri", "https://oauth2.googleapis.com/token")
+            data.setdefault("universe_domain", "googleapis.com")
+            sa_json = json_mod.dumps(data)
+        except Exception as e:
+            log.warning("Failed to parse GCP SA JSON: %s", e)
+
         sa_path = "/tmp/gcp-sa.json"
         with open(sa_path, "w") as f:
             f.write(sa_json)
