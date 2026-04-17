@@ -26,14 +26,32 @@ def _coerce_objectid_fields(entity_cls, data: dict) -> dict:
     """Convert string values to ObjectId for fields typed as objectid.
 
     JSON payloads carry ObjectId values as strings. The entity model expects
-    bson.ObjectId instances. This coerces them before model construction.
+    bson.ObjectId instances. Inspects Pydantic field annotations to find
+    ObjectId-typed fields (including Optional[ObjectId] and list[ObjectId]).
     """
+    import typing
     from bson import ObjectId as OId
 
-    targets = getattr(entity_cls, "_relationship_targets", {})
-    for field_name in targets:
-        if field_name in data and isinstance(data[field_name], str):
-            data[field_name] = OId(data[field_name])
+    for field_name, field_info in entity_cls.model_fields.items():
+        if field_name not in data:
+            continue
+        annotation = field_info.annotation
+        # Unwrap Optional
+        origin = getattr(annotation, "__origin__", None)
+        args = getattr(annotation, "__args__", ())
+        if origin is typing.Union and type(None) in args:
+            annotation = next(a for a in args if a is not type(None))
+            origin = getattr(annotation, "__origin__", None)
+            args = getattr(annotation, "__args__", ())
+
+        if annotation is OId:
+            if isinstance(data[field_name], str):
+                data[field_name] = OId(data[field_name])
+        elif origin is list and args and args[0] is OId:
+            data[field_name] = [
+                OId(v) if isinstance(v, str) else v
+                for v in data[field_name]
+            ]
     return data
 
 
