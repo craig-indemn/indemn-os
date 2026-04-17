@@ -110,9 +110,19 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         render(result, fmt)
 
     @entity_app.command("get")
-    def get_cmd(entity_id: str, fmt: str = typer.Option("json", "--format")):
-        """Get entity by ID."""
-        result = client.get(f"/api/{slug}s/{entity_id}")
+    def get_cmd(
+        entity_id: str,
+        depth: int = typer.Option(1, "--depth", help="Resolve related entities (1-5)"),
+        include_related: bool = typer.Option(False, "--include-related"),
+        fmt: str = typer.Option("json", "--format"),
+    ):
+        """Get entity by ID with optional related entity resolution."""
+        params = {}
+        if depth > 1:
+            params["depth"] = depth
+        if include_related:
+            params["include_related"] = "true"
+        result = client.get(f"/api/{slug}s/{entity_id}", params=params)
         render(result, fmt)
 
     @entity_app.command("create")

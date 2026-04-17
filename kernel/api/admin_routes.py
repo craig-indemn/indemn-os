@@ -36,6 +36,28 @@ async def create_entity_definition(request: Request, data: dict, actor=Depends(g
 
     await register_domain_entity(defn, app=request.app)
 
+    # Auto-generate entity skill — the self-evidence property [G-11]
+    from kernel.skill.generator import generate_entity_skill
+    from kernel.skill.integrity import compute_content_hash
+    from kernel.skill.schema import Skill
+
+    skill_content = generate_entity_skill(defn.name, defn)
+    existing_skill = await Skill.find_one({"name": defn.name, "org_id": defn.org_id})
+    if existing_skill:
+        existing_skill.content = skill_content
+        existing_skill.content_hash = compute_content_hash(skill_content)
+        await existing_skill.save()
+    else:
+        skill = Skill(
+            org_id=defn.org_id,
+            name=defn.name,
+            type="entity",
+            content=skill_content,
+            content_hash=compute_content_hash(skill_content),
+            status="active",
+        )
+        await skill.insert()
+
     return to_dict(defn)
 
 

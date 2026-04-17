@@ -35,7 +35,9 @@ class Attention(BaseEntity):
 
     opened_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_heartbeat: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    expires_at: datetime
+    expires_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=2)
+    )
 
     metadata: dict = Field(default_factory=dict)
     status: Literal["active", "expired", "closed"] = "active"

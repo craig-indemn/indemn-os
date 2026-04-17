@@ -59,7 +59,13 @@ async def evaluate_watches_and_emit(
             # Build context at configured depth
             context = await _build_context(entity, watch.context_depth, session)
 
-            # Create message
+            # Create message [OTEL span per vision § 14]
+            with create_span("message.create",
+                             entity_type=entity_type_name,
+                             target_role=role_name,
+                             event_type=event_type):
+                pass  # span wraps message creation for tracing
+
             message = Message(
                 org_id=entity.org_id,
                 entity_type=entity_type_name,

@@ -112,3 +112,49 @@ async def observe_interaction(
     )
     await attention.save_tracked(actor_id=str(actor.id), method="observe")
     return {"attention_id": str(attention.id), "status": "observing"}
+
+
+@interaction_router.post("/api/interactions/{interaction_id}/respond")
+async def respond_to_interaction(
+    interaction_id: str,
+    data: dict = {},
+    actor=Depends(get_current_actor),
+):
+    """Submit a response to an Interaction (used by human handlers during handoff).
+
+    Creates a message in the queue targeted at the Interaction's current
+    handling actor, carrying the human's response content.
+    """
+    from kernel.message.schema import Message
+
+    content = data.get("content", "")
+    if not content:
+        raise HTTPException(400, "content is required")
+
+    interaction_cls = ENTITY_REGISTRY.get("Interaction")
+    if not interaction_cls:
+        raise HTTPException(404, "Interaction entity type not defined")
+
+    interaction = await interaction_cls.get_scoped(interaction_id)
+    if not interaction:
+        raise HTTPException(404, "Interaction not found")
+
+    # Create a message carrying the human's response
+    msg = Message(
+        org_id=actor.org_id,
+        entity_type="Interaction",
+        entity_id=ObjectId(interaction_id),
+        event_type="response",
+        event_metadata={"content": content, "responder_id": str(actor.id)},
+        target_actor_id=getattr(interaction, "handling_actor_id", None),
+        target_role=getattr(interaction, "handling_role_id", None),
+        correlation_id=data.get("correlation_id"),
+        status="pending",
+    )
+    await msg.insert()
+
+    return {
+        "status": "sent",
+        "message_id": str(msg.id),
+        "interaction_id": interaction_id,
+    }

@@ -76,12 +76,26 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         return [to_dict(e) for e in entities]
 
     @router.get("/{entity_id}")
-    async def get_entity(entity_id: str, actor=Depends(get_current_actor)):
+    async def get_entity(
+        entity_id: str,
+        depth: int = Query(1, ge=1, le=5),
+        include_related: bool = Query(False),
+        actor=Depends(get_current_actor),
+    ):
         check_permission(actor, entity_name, "read")
         entity = await entity_cls.get_scoped(entity_id)
         if not entity:
             raise HTTPException(404)
-        return to_dict(entity)
+        result = to_dict(entity)
+
+        # Resolve related entities per depth parameter
+        if include_related and depth >= 2:
+            from kernel.message.emit import _build_context
+
+            context = await _build_context(entity, depth=depth)
+            result["_related"] = context.get("related_entities", [])
+
+        return result
 
     @router.post("/")
     async def create_entity(data: dict, actor=Depends(get_current_actor)):

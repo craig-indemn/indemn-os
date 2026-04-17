@@ -56,9 +56,10 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
     try:
         # Load associate config + context (harness orchestration, not agent tools)
         associate = indemn("actor", "get", input.associate_id)
-        # Dynamic entity instances accessed via CLI: `indemn {type_lower} get {id}`
+        # Dynamic entity instances with related entities per design (depth 2)
         entity_slug = input.entity_type.lower()
-        context = indemn(entity_slug, "get", input.entity_id)
+        context = indemn(entity_slug, "get", input.entity_id,
+                         "--depth", "2", "--include-related")
 
         # Load Runtime for three-layer config merge
         runtime_id = associate.get("runtime_id", RUNTIME_ID)
