@@ -17,7 +17,8 @@ export function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch("/auth/login", {
+      const baseUrl = (import.meta as any).env?.VITE_API_URL || "";
+      const res = await fetch(`${baseUrl}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, org_slug: orgSlug }),
