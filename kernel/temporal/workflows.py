@@ -18,26 +18,30 @@ with workflow.unsafe.imports_passed_through():
         claim_message,
         complete_message,
         fail_message,
+        load_actor,
         load_entity_context,
         preview_bulk_operation,
         process_bulk_batch,
         process_human_decision,
-        process_with_associate,
     )
+    from indemn_os.types import AgentExecutionInput
 
 
 @workflow.defn
 class ProcessMessageWorkflow:
-    """Generic claim → process → complete.
+    """Generic claim → dispatch to harness.
 
-    Used by all associates regardless of role or skill.
-    The skill is the source of truth — this workflow is a durability wrapper.
+    Claims the message, loads the associate's actor to find the Runtime,
+    then dispatches the work to the Runtime's task queue where the harness
+    worker picks it up. Harness owns completion and failure reporting
+    via `indemn queue complete` / `indemn queue fail`.
     """
 
     @workflow.run
     async def run(self, message_id: str, associate_id: str) -> dict:
         # Version gate for backward-compatible changes [G-77]
         workflow.patched("v2-enhanced-error-handling")
+        workflow.patched("v3-harness-dispatch")
 
         # Activity 1: Claim the message from the queue
         claimed = await workflow.execute_activity(
@@ -52,52 +56,47 @@ class ProcessMessageWorkflow:
         if not claimed:
             return {"status": "already_claimed"}
 
-        # Activity 2: Load entity context (fresh from MongoDB)
-        context = await workflow.execute_activity(
-            load_entity_context,
-            args=[message_id],
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(
-                maximum_attempts=3,
-                initial_interval=timedelta(seconds=2),
-            ),
+        # Activity 2: Load actor to get runtime_id for dispatch routing
+        actor = await workflow.execute_activity(
+            load_actor,
+            args=[associate_id],
+            start_to_close_timeout=timedelta(seconds=10),
         )
-
-        # Activity 3: Process (the associate does its work)
-        try:
-            result = await workflow.execute_activity(
-                process_with_associate,
-                args=[message_id, associate_id, context],
-                start_to_close_timeout=timedelta(minutes=10),
-                heartbeat_timeout=timedelta(minutes=2),
-                retry_policy=RetryPolicy(
-                    maximum_attempts=3,
-                    initial_interval=timedelta(seconds=5),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=60),
-                    non_retryable_error_types=[
-                        "PermanentProcessingError",
-                        "SkillTamperError",
-                        "PermissionError",
-                    ],
-                ),
-            )
-        except Exception as e:
-            # Activity 4a: Fail the message
+        runtime_id = actor.get("runtime_id")
+        if not runtime_id:
             await workflow.execute_activity(
                 fail_message,
-                args=[message_id, str(e)],
+                args=[message_id, "no_runtime_configured"],
                 start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=RetryPolicy(maximum_attempts=3),
             )
-            raise
+            return {"status": "failed", "reason": "no_runtime"}
 
-        # Activity 4b: Complete the message
-        await workflow.execute_activity(
-            complete_message,
-            args=[message_id, result],
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(maximum_attempts=3),
+        # Activity 3: Dispatch to harness worker on runtime-specific queue
+        # Activity name is a string — the definition lives in the harness, not kernel.
+        # Harness owns completion (`indemn queue complete`) and failure (`indemn queue fail`).
+        agent_input = AgentExecutionInput(
+            message_id=message_id,
+            associate_id=associate_id,
+            entity_type=claimed.get("entity_type", ""),
+            entity_id=claimed.get("entity_id", ""),
+            correlation_id=claimed.get("correlation_id", ""),
+            depth=claimed.get("depth", 0),
+        )
+        result = await workflow.execute_activity(
+            "process_with_associate",
+            agent_input,
+            task_queue=f"runtime-{runtime_id}",
+            start_to_close_timeout=timedelta(minutes=10),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=RetryPolicy(
+                maximum_attempts=2,
+                initial_interval=timedelta(seconds=5),
+                non_retryable_error_types=[
+                    "PermanentProcessingError",
+                    "SkillTamperError",
+                    "PermissionError",
+                ],
+            ),
         )
 
         return result

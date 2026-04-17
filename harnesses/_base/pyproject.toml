@@ -1,0 +1,9 @@
+[project]
+name = "harness-common"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "opentelemetry-api>=1.25",
+    "opentelemetry-sdk>=1.25",
+    "opentelemetry-exporter-otlp>=1.25",
+]

@@ -57,11 +57,36 @@ class BulkAbortError(Exception):
 
 
 @activity.defn
-async def claim_message(message_id: str, actor_id: str) -> bool:
-    """Atomic claim via findOneAndUpdate. Returns False if already claimed."""
+async def claim_message(message_id: str, actor_id: str) -> dict | None:
+    """Atomic claim via findOneAndUpdate. Returns message data or None if already claimed."""
     bus = MongoDBMessageBus()
     msg = await bus.claim_by_id(message_id, ObjectId(actor_id))
-    return msg is not None
+    if not msg:
+        return None
+    return {
+        "id": str(msg.id),
+        "entity_type": msg.entity_type,
+        "entity_id": str(msg.entity_id),
+        "correlation_id": msg.correlation_id or "",
+        "depth": getattr(msg, "depth", 0),
+        "target_role": msg.target_role,
+    }
+
+
+@activity.defn
+async def load_actor(actor_id: str) -> dict:
+    """Load minimal actor config for workflow dispatch routing."""
+    from kernel_entities.actor import Actor
+
+    actor = await Actor.get(ObjectId(actor_id))
+    if not actor:
+        raise ValueError(f"Actor {actor_id} not found")
+    return {
+        "id": str(actor.id),
+        "type": actor.type,
+        "runtime_id": str(actor.runtime_id) if actor.runtime_id else None,
+        "status": actor.status,
+    }
 
 
 @activity.defn

@@ -19,11 +19,11 @@ from kernel.temporal.activities import (
     claim_message,
     complete_message,
     fail_message,
+    load_actor,
     load_entity_context,
     preview_bulk_operation,
     process_bulk_batch,
     process_human_decision,
-    process_with_associate,
 )
 from kernel.temporal.client import get_temporal_client
 from kernel.temporal.workflows import (
@@ -58,8 +58,8 @@ async def main():
         ],
         activities=[
             claim_message,
+            load_actor,
             load_entity_context,
-            process_with_associate,
             process_human_decision,
             complete_message,
             fail_message,
