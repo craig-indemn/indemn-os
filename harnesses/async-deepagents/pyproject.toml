@@ -9,4 +9,6 @@ dependencies = [
     "langchain-google-genai>=2.0",
     "langchain-google-vertexai>=2.0",
     "langchain>=0.3",
+    "opentelemetry-distro>=0.48b0",
+    "opentelemetry-exporter-otlp-proto-http>=1.25",
 ]

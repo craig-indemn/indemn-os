@@ -25,5 +25,5 @@ COPY harnesses/async-deepagents/ /app/harness/
 # Agent working directory
 RUN mkdir -p /workspace
 
-# Entry point
-CMD ["python", "-m", "harness.main"]
+# Entry point — opentelemetry-instrument auto-reads OTEL_* env vars
+CMD ["opentelemetry-instrument", "python", "-m", "harness.main"]
