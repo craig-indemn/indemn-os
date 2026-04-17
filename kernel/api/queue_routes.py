@@ -131,3 +131,44 @@ async def claim_message_by_id(
         }},
     )
     return {"status": "claimed", "message_id": message_id}
+
+
+# --- Message lifecycle (standard queue verbs per Q1 session decision) ---
+
+
+@queue_router.post("/api/message_queues/{message_id}/complete")
+async def complete_message(
+    message_id: str,
+    data: dict = {},
+    actor=Depends(get_current_actor),
+):
+    """Mark a message as completed. Standard queue verb used by any claimer
+    (humans via UI, harnesses via CLI). Idempotent — no-op if already terminal."""
+    message = await Message.get(ObjectId(message_id))
+    if not message:
+        raise HTTPException(404, "Message not found")
+    if message.status in ("completed", "dead_letter"):
+        return {"status": message.status, "message_id": message_id, "idempotent": True}
+
+    bus = MongoDBMessageBus()
+    await bus.complete(ObjectId(message_id), data.get("result", {}))
+    return {"status": "completed", "message_id": message_id}
+
+
+@queue_router.post("/api/message_queues/{message_id}/fail")
+async def fail_message(
+    message_id: str,
+    data: dict = {},
+    actor=Depends(get_current_actor),
+):
+    """Mark a message as failed. Standard queue verb used by any claimer.
+    Idempotent — no-op if already terminal."""
+    message = await Message.get(ObjectId(message_id))
+    if not message:
+        raise HTTPException(404, "Message not found")
+    if message.status in ("completed", "dead_letter"):
+        return {"status": message.status, "message_id": message_id, "idempotent": True}
+
+    bus = MongoDBMessageBus()
+    await bus.fail(ObjectId(message_id), data.get("reason", "unknown"))
+    return {"status": "failed", "message_id": message_id}
