@@ -19,5 +19,5 @@ RUN npm install -g serve
 
 COPY --from=build /app/dist ./dist
 
-# Railway sets PORT automatically
-CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:${PORT:-3000}"]
+# Railway sets PORT env var — use shell form for variable expansion
+CMD ["sh", "-c", "serve -s dist -l tcp://0.0.0.0:${PORT:-3000}"]
