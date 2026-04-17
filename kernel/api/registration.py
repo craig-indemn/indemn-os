@@ -92,7 +92,7 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         if include_related and depth >= 2:
             from kernel.message.emit import _build_context
 
-            context = await _build_context(entity, depth=depth)
+            context = await _build_context(entity, depth=depth, session=None)
             result["_related"] = context.get("related_entities", [])
 
         return result

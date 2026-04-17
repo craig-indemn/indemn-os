@@ -140,15 +140,20 @@ async def respond_to_interaction(
         raise HTTPException(404, "Interaction not found")
 
     # Create a message carrying the human's response
+    from uuid import uuid4
+
+    handling_actor = getattr(interaction, "handling_actor_id", None)
+    handling_role = getattr(interaction, "handling_role_id", None)
+
     msg = Message(
         org_id=actor.org_id,
         entity_type="Interaction",
         entity_id=ObjectId(interaction_id),
         event_type="response",
         event_metadata={"content": content, "responder_id": str(actor.id)},
-        target_actor_id=getattr(interaction, "handling_actor_id", None),
-        target_role=getattr(interaction, "handling_role_id", None),
-        correlation_id=data.get("correlation_id"),
+        target_actor_id=ObjectId(str(handling_actor)) if handling_actor else None,
+        target_role=str(handling_role) if handling_role else "",
+        correlation_id=data.get("correlation_id") or str(uuid4()),
         status="pending",
     )
     await msg.insert()
