@@ -143,7 +143,16 @@ async def websocket_handler(websocket: WebSocket):
             _sessions.pop(id(websocket), None)
 
 
+async def health(request):
+    """Health check for Railway."""
+    from starlette.responses import JSONResponse
+    return JSONResponse({"status": "healthy", "service": "indemn-runtime-chat"})
+
+
+from starlette.routing import Route
+
 routes = [
+    Route("/health", health),
     WebSocketRoute("/ws/chat", websocket_handler),
 ]
 
