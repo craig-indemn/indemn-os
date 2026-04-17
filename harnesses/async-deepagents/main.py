@@ -15,6 +15,7 @@ Session decisions folded in:
 import asyncio
 import logging
 import os
+from datetime import timedelta
 
 from temporalio import activity
 from temporalio.client import Client
@@ -142,7 +143,7 @@ async def main():
         activities=[process_with_associate],
         max_concurrent_activities=max_concurrent,
         interceptors=[TracingInterceptor()],
-        graceful_shutdown_timeout=30,
+        graceful_shutdown_timeout=timedelta(seconds=30),
     )
 
     log.info("Worker listening on queue: %s (max_concurrent=%d)", TASK_QUEUE, max_concurrent)
