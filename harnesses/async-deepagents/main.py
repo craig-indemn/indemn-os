@@ -93,13 +93,34 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             }],
         })
 
+        # Log what the agent did — every message, every tool call
+        messages = result.get("messages", [])
+        tools_used = []
+        for msg in messages:
+            msg_type = getattr(msg, "type", type(msg).__name__)
+            if msg_type == "tool":
+                tool_name = getattr(msg, "name", "unknown")
+                tools_used.append(tool_name)
+                log.info("Agent tool result [%s]: %s", tool_name, str(getattr(msg, "content", ""))[:500])
+            elif msg_type == "ai":
+                # Log tool calls the AI made
+                tool_calls = getattr(msg, "tool_calls", [])
+                for tc in tool_calls:
+                    tc_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
+                    tc_args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                    log.info("Agent called tool [%s]: %s", tc_name, str(tc_args)[:500])
+                if not tool_calls:
+                    log.info("Agent response: %s", str(getattr(msg, "content", ""))[:300])
+
+        log.info("Agent completed: %d messages, tools=%s", len(messages), tools_used)
+
         # Mark the message complete — harness owns completion [Q1]
         indemn("queue", "complete", input.message_id)
 
         return AgentExecutionResult(
             status="complete",
-            iterations=len(result.get("messages", [])),
-            tools_used=[],
+            iterations=len(messages),
+            tools_used=tools_used,
         )
 
     except Exception as e:
