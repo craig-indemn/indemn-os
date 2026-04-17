@@ -27,7 +27,9 @@ export async function apiClient<T = unknown>(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const response = await fetch(path, { ...options, headers });
+  const baseUrl = (import.meta as any).env?.VITE_API_URL || "";
+  const url = path.startsWith("http") ? path : `${baseUrl}${path}`;
+  const response = await fetch(url, { ...options, headers });
 
   // Check for refreshed token header [G-39]
   const refreshedToken = response.headers.get("X-Refreshed-Token");
