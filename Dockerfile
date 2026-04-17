@@ -17,5 +17,6 @@ COPY kernel/ kernel/
 COPY kernel_entities/ kernel_entities/
 COPY seed/ seed/
 
-# Default entry point (overridden per Railway service via start command)
-CMD ["uv", "run", "python", "-m", "kernel.api.app"]
+# Entrypoint dispatches based on SERVICE_TYPE env var
+COPY entrypoint.sh /app/entrypoint.sh
+ENTRYPOINT ["/app/entrypoint.sh"]
