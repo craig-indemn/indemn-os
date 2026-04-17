@@ -32,6 +32,7 @@ from kernel.api.meta import meta_router
 from kernel.api.queue_routes import queue_router
 from kernel.api.rule_routes import rule_router
 from kernel.api.skill_routes import skill_router
+from kernel.api.trace_routes import trace_router
 from kernel.api.webhook import webhook_router
 from kernel.api.websocket import websocket_handler
 from kernel.auth.middleware import AuthMiddleware
@@ -141,6 +142,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(events_router)
     app.include_router(interaction_router)
+    app.include_router(trace_router)
     # assistant_router DELETED (G2.3) — replaced by chat-harness instance
 
     # WebSocket endpoint [G-34]

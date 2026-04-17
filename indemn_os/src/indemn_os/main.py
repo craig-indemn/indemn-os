@@ -16,10 +16,12 @@ def main():
     """Entry point. Registers static commands, then dynamic entity commands from API."""
     # Register static commands (always available)
     from indemn_os.actor_commands import actor_app
+    from indemn_os.attention_commands import attention_app
     from indemn_os.audit_commands import audit_app
     from indemn_os.bulk_monitor import bulk_app
     from indemn_os.entity_commands import entity_app
     from indemn_os.events_commands import events_app
+    from indemn_os.interaction_commands import interaction_app
     from indemn_os.integration_commands import integration_app
     from indemn_os.lookup_commands import lookup_app
     from indemn_os.org_commands import org_app
@@ -30,6 +32,7 @@ def main():
     from indemn_os.rule_commands import rule_app
     from indemn_os.runtime_commands import runtime_app
     from indemn_os.skill_commands import skill_app
+    from indemn_os.trace_commands import trace_app
 
     app.add_typer(platform_app, name="platform")
     app.add_typer(entity_app, name="entity")
@@ -46,6 +49,9 @@ def main():
     app.add_typer(report_app, name="report")
     app.add_typer(role_mgmt_app, name="role")
     app.add_typer(runtime_app, name="runtime")
+    app.add_typer(trace_app, name="trace")
+    app.add_typer(interaction_app, name="interaction")
+    app.add_typer(attention_app, name="attention")
 
     # Top-level deploy alias (spec: `indemn deploy --from-org --to-org`)
     @app.command("deploy")
@@ -63,7 +69,7 @@ def main():
     # Infrastructure entities (Rule, Skill, Lookup, etc.) are also excluded
     # because they have custom routes, not auto-generated CRUD.
     _STATIC_CLI_ENTITIES = {
-        "Role", "Actor", "Integration", "Runtime",
+        "Role", "Actor", "Integration", "Runtime", "Interaction", "Attention",
         "Rule", "RuleGroup", "Skill", "Lookup",
         "EntityDefinition", "Message", "MessageLog", "ChangeRecord",
     }
