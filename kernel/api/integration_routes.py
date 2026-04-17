@@ -7,6 +7,7 @@ endpoints that are beyond auto-generated CRUD.
 from fastapi import APIRouter, Depends, HTTPException
 
 from kernel.auth.middleware import check_permission, get_current_actor
+from kernel.db import ENTITY_REGISTRY
 from kernel.integration.credentials import fetch_credentials, store_credentials
 from kernel.integration.registry import get_adapter_class
 from kernel_entities.integration import Integration
@@ -113,3 +114,77 @@ async def upgrade_integration(
     integration.provider_version = to_version
     await integration.save_tracked(method="upgrade", method_metadata={"to_version": to_version})
     return {"status": "upgraded", "version": to_version}
+
+
+@integration_mgmt_router.post("/api/_platform/integration/health-check")
+async def integration_health_check(
+    data: dict = {},
+    actor=Depends(get_current_actor),
+):
+    """Check integration connectivity. Tests each adapter and updates last_checked_at."""
+    from datetime import datetime, timezone
+
+    from kernel.context import current_org_id
+    from kernel.integration.dispatch import get_adapter
+
+    Integration = ENTITY_REGISTRY.get("Integration")
+    if not Integration:
+        return {"error": "Integration entity not registered"}
+
+    filter_doc = {"org_id": current_org_id.get()}
+    if data.get("system_type"):
+        filter_doc["system_type"] = data["system_type"]
+    if data.get("status"):
+        filter_doc["status"] = data["status"]
+
+    integrations = await Integration.find(filter_doc).to_list(length=100)
+    results = []
+
+    for integ in integrations:
+        try:
+            adapter = await get_adapter(integ)
+            if hasattr(adapter, "test"):
+                test_result = await adapter.test()
+                integ.last_checked_at = datetime.now(timezone.utc)
+                integ.last_error = None
+                await integ.save_tracked(
+                    actor_id=str(actor.id), method="health_check"
+                )
+                results.append({
+                    "id": str(integ.id),
+                    "name": integ.name,
+                    "system_type": integ.system_type,
+                    "provider": integ.provider,
+                    "status": "healthy",
+                    "detail": test_result,
+                })
+            else:
+                results.append({
+                    "id": str(integ.id),
+                    "name": integ.name,
+                    "system_type": integ.system_type,
+                    "status": "no_test_method",
+                })
+        except Exception as e:
+            integ.last_checked_at = datetime.now(timezone.utc)
+            integ.last_error = str(e)[:500]
+            try:
+                await integ.save_tracked(
+                    actor_id=str(actor.id), method="health_check"
+                )
+            except Exception:
+                pass
+            results.append({
+                "id": str(integ.id),
+                "name": integ.name,
+                "system_type": integ.system_type,
+                "status": "error",
+                "error": str(e)[:500],
+            })
+
+    return {
+        "checked": len(results),
+        "healthy": sum(1 for r in results if r["status"] == "healthy"),
+        "errors": sum(1 for r in results if r["status"] == "error"),
+        "results": results,
+    }

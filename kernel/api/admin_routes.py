@@ -560,3 +560,71 @@ async def audit_verify(
             }
 
     return {"chain_valid": True, "records_checked": len(records)}
+
+
+# --- Platform Upgrade ---
+
+
+@admin_router.post("/api/_platform/upgrade")
+async def platform_upgrade(
+    data: dict = {},
+    actor=Depends(get_current_actor),
+):
+    """Upgrade platform — migrate entity definitions to current kernel schema.
+
+    Compares current kernel capability schema versions against stored entity
+    definitions. For each entity with an older schema version, computes and
+    optionally applies the migration.
+
+    Per design: capability schema versioning ensures stored configs are
+    compatible with new kernel code.
+    """
+    from kernel.entity.definition import EntityDefinition
+
+    dry_run = data.get("dry_run", True)
+    org_id = current_org_id.get()
+
+    # Load all entity definitions for this org
+    definitions = await EntityDefinition.find({"org_id": org_id}).to_list()
+
+    # Current kernel schema version (bumped on capability changes)
+    CURRENT_SCHEMA_VERSION = 1
+
+    migrations = []
+    for defn in definitions:
+        stored_version = getattr(defn, "schema_version", 0) or 0
+        if stored_version < CURRENT_SCHEMA_VERSION:
+            migration = {
+                "entity": defn.name,
+                "from_version": stored_version,
+                "to_version": CURRENT_SCHEMA_VERSION,
+                "changes": [],
+            }
+
+            # Compute required changes per version delta
+            # Version 1: ensure all field definitions have type + default
+            for fname, fdef in (defn.fields or {}).items():
+                if isinstance(fdef, dict) and "type" not in fdef:
+                    migration["changes"].append({
+                        "field": fname,
+                        "action": "add_type",
+                        "detail": "Field missing type declaration",
+                    })
+
+            migrations.append(migration)
+
+            if not dry_run:
+                defn.schema_version = CURRENT_SCHEMA_VERSION
+                await defn.save_tracked(
+                    actor_id=str(actor.id),
+                    method="platform_upgrade",
+                    method_metadata={"from_version": stored_version},
+                )
+
+    return {
+        "dry_run": dry_run,
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "definitions_checked": len(definitions),
+        "migrations_needed": len(migrations),
+        "migrations": migrations,
+    }

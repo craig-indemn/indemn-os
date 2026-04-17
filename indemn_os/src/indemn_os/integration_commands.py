@@ -147,3 +147,23 @@ def upgrade_integration(
         json={"to_version": to_version, "dry_run": dry_run},
     )
     render(result, "json")
+
+
+@integration_app.command("health")
+def integration_health(
+    system_type: str = typer.Option(None, "--system-type"),
+    status: str = typer.Option(None, "--status"),
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """Check integration connectivity. Tests each integration's adapter.
+
+    Updates last_checked_at and reports results.
+    """
+    client = CLIClient()
+    params = {}
+    if system_type:
+        params["system_type"] = system_type
+    if status:
+        params["status"] = status
+    result = client.post("/api/_platform/integration/health-check", json=params)
+    render(result)

@@ -37,3 +37,12 @@ def bulk_cancel(workflow_id: str):
     result = client.post(f"/api/bulk/{workflow_id}/cancel")
     render(result, "json")
     typer.echo(f"Cancel requested for {workflow_id}")
+
+
+@bulk_app.command("retry")
+def bulk_retry(workflow_id: str):
+    """Retry a failed or partially-failed bulk operation."""
+    client = CLIClient()
+    result = client.post(f"/api/bulk/{workflow_id}/retry")
+    render(result, "json")
+    typer.echo(f"Retry started for {workflow_id}")

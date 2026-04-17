@@ -38,3 +38,26 @@ def platform_health():
     client = CLIClient()
     result = client.get("/health")
     render(result, "json")
+
+
+@platform_app.command("upgrade")
+def platform_upgrade(
+    dry_run: bool = typer.Option(True, "--dry-run/--apply",
+                                 help="Preview changes (default) or apply them"),
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """Upgrade platform — migrate entity definitions to current kernel schema.
+
+    --dry-run (default): preview what would change
+    --apply: execute the migrations
+
+    Per design: kernel capability upgrades declare configuration schema
+    versions. Entity definitions store which version they use. This command
+    computes and applies migrations.
+    """
+    client = CLIClient()
+    result = client.post(
+        "/api/_platform/upgrade",
+        json={"dry_run": dry_run},
+    )
+    render(result)

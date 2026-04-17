@@ -89,6 +89,21 @@ def heartbeat(
     render(result)
 
 
+@runtime_app.command("transition")
+def transition_runtime(
+    runtime_id: str,
+    to: str = typer.Option(..., "--to", help="Target state: deploying, active, draining, stopped"),
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """Transition a Runtime through its lifecycle."""
+    client = CLIClient()
+    result = client.post(
+        f"/api/runtimes/{runtime_id}/transition",
+        json={"to": to},
+    )
+    render(result)
+
+
 @runtime_app.command("get")
 def get_runtime(
     runtime_id: str,
