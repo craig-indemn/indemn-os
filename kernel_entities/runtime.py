@@ -62,11 +62,8 @@ class Runtime(BaseEntity):
             "registered_at": datetime.now(timezone.utc).isoformat(),
             "last_heartbeat": datetime.now(timezone.utc).isoformat(),
         })
-        # Auto-transition through lifecycle on first instance
-        if self.status == "configured":
-            self.transition_to("deploying")
-            self.transition_to("active")
-        elif self.status == "deploying":
+        # Transition deploying → active when first instance registers
+        if self.status == "deploying":
             self.transition_to("active")
         await self.save_tracked(
             actor_id=f"system:runtime:{self.id}",
