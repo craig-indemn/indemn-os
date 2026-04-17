@@ -60,6 +60,27 @@ def _setup_gcp_credentials():
         log.info("GCP credentials written to %s", sa_path)
 
 
+# Conversation persistence — LangGraph MongoDB checkpointer
+_checkpointer = None
+
+
+def _get_checkpointer():
+    """Lazy-init MongoDB checkpointer for conversation persistence."""
+    global _checkpointer
+    if _checkpointer is None:
+        mongodb_uri = os.environ.get("MONGODB_URI", "")
+        if mongodb_uri:
+            from pymongo import MongoClient
+            from langgraph.checkpoint.mongodb import MongoDBSaver
+
+            client = MongoClient(mongodb_uri)
+            _checkpointer = MongoDBSaver(client, db_name="indemn_os_checkpoints")
+            log.info("MongoDB checkpointer initialized")
+        else:
+            log.warning("No MONGODB_URI — conversation persistence disabled")
+    return _checkpointer
+
+
 # Active sessions by WebSocket connection
 _sessions: dict[int, ChatSession] = {}
 
@@ -85,12 +106,12 @@ async def websocket_handler(websocket: WebSocket):
             await websocket.close()
             return
 
-        # Create session
+        # Create session with conversation persistence
         session = ChatSession(
             websocket=websocket,
             associate_id=associate_id,
             auth_token=auth_token,
-            checkpointer=None,  # TODO: LangGraph MongoDB checkpointer
+            checkpointer=_get_checkpointer(),
         )
         _sessions[id(websocket)] = session
 
