@@ -108,6 +108,7 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
 
         # Start MongoDB transaction
         client = entity.get_motor_collection().database.client
+        created_messages = []
         try:
             async with await client.start_session() as session:
                 async with session.start_transaction():
@@ -130,30 +131,29 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                                 f"{type(entity).__name__} {entity.id} was modified concurrently"
                             )
 
-                # Write changes record
-                await write_change_record(
-                    entity=entity,
-                    change_type="create" if is_new else "update",
-                    actor_id=actor_id,
-                    changes=changes,
-                    method=method,
-                    method_metadata=method_metadata,
-                    correlation_id=correlation_id,
-                    session=session,
-                )
-
-                # Evaluate watches and emit messages
-                created_messages = []
-                if should_emit:
-                    created_messages = await evaluate_watches_and_emit(
+                    # Write changes record (INSIDE transaction for atomicity)
+                    await write_change_record(
                         entity=entity,
-                        event_type=event_type,
-                        event_metadata=event_meta,
+                        change_type="create" if is_new else "update",
+                        actor_id=actor_id,
+                        changes=changes,
+                        method=method,
+                        method_metadata=method_metadata,
                         correlation_id=correlation_id,
-                        depth=depth,
-                        parent_entity_type=type(entity).__name__,
                         session=session,
                     )
+
+                    # Evaluate watches and emit messages (INSIDE transaction)
+                    if should_emit:
+                        created_messages = await evaluate_watches_and_emit(
+                            entity=entity,
+                            event_type=event_type,
+                            event_metadata=event_meta,
+                            correlation_id=correlation_id,
+                            depth=depth,
+                            parent_entity_type=type(entity).__name__,
+                            session=session,
+                        )
         except Exception:
             # Restore entity version on failure so retries use correct expected_version
             entity.version = expected_version

@@ -82,3 +82,47 @@ def test_hash_includes_previous_hash():
     r2.entity_id = r1.entity_id
     r2.timestamp = r1.timestamp
     assert compute_hash(r1) != compute_hash(r2)
+
+
+def test_hash_survives_datetime_timezone_roundtrip():
+    """MongoDB returns naive datetimes; Python creates aware ones.
+    Hash must be identical regardless of timezone awareness."""
+    aware_ts = datetime(2026, 4, 17, 12, 30, 45, 123000, tzinfo=timezone.utc)
+    naive_ts = datetime(2026, 4, 17, 12, 30, 45, 123000)  # Same time, no tzinfo
+
+    r_aware = FakeRecord(timestamp=aware_ts)
+    r_naive = FakeRecord(timestamp=naive_ts)
+    r_naive.entity_id = r_aware.entity_id
+    assert compute_hash(r_aware) == compute_hash(r_naive)
+
+
+def test_hash_survives_datetime_in_changes():
+    """FieldChange old_value/new_value with datetimes must hash consistently
+    regardless of timezone awareness (write-time aware, read-time naive)."""
+    aware_dt = datetime(2026, 1, 15, 8, 0, 0, 500000, tzinfo=timezone.utc)
+    naive_dt = datetime(2026, 1, 15, 8, 0, 0, 500000)
+    shared_ts = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+    shared_eid = ObjectId()
+
+    r_write = FakeRecord(
+        changes=[FieldChange(field="due_at", old_value=aware_dt, new_value=aware_dt)],
+        timestamp=shared_ts,
+        entity_id=shared_eid,
+    )
+    r_read = FakeRecord(
+        changes=[FieldChange(field="due_at", old_value=naive_dt, new_value=naive_dt)],
+        timestamp=shared_ts,
+        entity_id=shared_eid,
+    )
+    assert compute_hash(r_write) == compute_hash(r_read)
+
+
+def test_hash_truncates_microseconds():
+    """MongoDB stores milliseconds. Sub-millisecond digits must not affect hash."""
+    ts_micro = datetime(2026, 4, 17, 12, 0, 0, 123456, tzinfo=timezone.utc)
+    ts_milli = datetime(2026, 4, 17, 12, 0, 0, 123000, tzinfo=timezone.utc)
+
+    r1 = FakeRecord(timestamp=ts_micro)
+    r2 = FakeRecord(timestamp=ts_milli)
+    r2.entity_id = r1.entity_id
+    assert compute_hash(r1) == compute_hash(r2)

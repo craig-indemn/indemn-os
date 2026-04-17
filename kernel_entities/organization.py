@@ -3,6 +3,7 @@
 from typing import Literal, Optional
 
 from pydantic import Field
+from pymongo import IndexModel
 
 from kernel.entity.base import BaseEntity
 
@@ -17,6 +18,7 @@ class Organization(BaseEntity):
     template_source: Optional[str] = None
     default_mfa_required: bool = False
 
+    _state_field_name = "status"
     _state_machine = {
         "onboarding": ["active"],
         "active": ["suspended"],
@@ -26,4 +28,4 @@ class Organization(BaseEntity):
 
     class Settings:
         name = "organizations"
-        indexes = [[("slug", 1)]]
+        indexes = [IndexModel([("slug", 1)], unique=True)]

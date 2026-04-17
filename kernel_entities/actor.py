@@ -30,6 +30,7 @@ class Actor(BaseEntity):
     authentication_methods: list[dict] = Field(default_factory=list)
     mfa_exempt: bool = False
 
+    _state_field_name = "status"
     _state_machine = {
         "provisioned": ["active"],
         "active": ["suspended", "deprovisioned"],

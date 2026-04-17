@@ -32,6 +32,7 @@ class Session(BaseEntity):
     claims_stale: bool = False
     platform_admin_context: Optional[dict] = None
 
+    _state_field_name = "status"
     _state_machine = {"active": ["expired", "revoked"]}
     _is_kernel_entity = True
 

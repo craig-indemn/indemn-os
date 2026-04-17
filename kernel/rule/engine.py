@@ -7,7 +7,7 @@ Rule evaluation traces are stored as method_metadata in the changes collection.
 
 from kernel.observability.tracing import create_span
 from kernel.rule.lookup import resolve_lookup_references
-from kernel.rule.schema import Rule
+from kernel.rule.schema import Rule, RuleGroup
 from kernel.watch.evaluator import evaluate_condition
 
 
@@ -15,7 +15,12 @@ async def evaluate_rules(
     org_id, entity_type: str, capability: str, entity_data: dict
 ) -> dict:
     """Evaluate all active rules for this org + entity type + capability.
-    Returns the evaluation result with full context for debugging."""
+    Returns the evaluation result with full context for debugging.
+
+    Only evaluates rules that are individually active AND belong to an active
+    group (or no group). Rules in draft/archived groups are excluded even if
+    the rule's own status is active.
+    """
 
     with create_span("rule.evaluate", entity_type=entity_type, capability=capability):
         # Load active rules, ordered by priority (highest first)
@@ -37,6 +42,27 @@ async def evaluate_rules(
                 "matched": False,
                 "vetoed": False,
                 "reason": "no_rules_configured",
+                "attempted_rules": [],
+            }
+
+        # Filter out rules whose group is not active [D-07]
+        group_ids = {r.group_id for r in rules if r.group_id}
+        if group_ids:
+            active_groups = await RuleGroup.find(
+                {"_id": {"$in": list(group_ids)}, "status": "active"}
+            ).to_list()
+            active_group_ids = {g.id for g in active_groups}
+            # Keep rules that are ungrouped OR in an active group
+            rules = [
+                r for r in rules
+                if r.group_id is None or r.group_id in active_group_ids
+            ]
+
+        if not rules:
+            return {
+                "matched": False,
+                "vetoed": False,
+                "reason": "no_active_group_rules",
                 "attempted_rules": [],
             }
 

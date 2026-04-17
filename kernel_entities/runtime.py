@@ -34,6 +34,7 @@ class Runtime(BaseEntity):
     ] = "configured"
     instances: list[dict] = Field(default_factory=list)
 
+    _state_field_name = "status"
     _state_machine = {
         "configured": ["deploying"],
         "deploying": ["active", "error"],

@@ -61,17 +61,18 @@ def validate_and_apply_transition(
 def _find_state_field(entity: "BaseEntity") -> str:
     """Find the field controlled by the state machine.
 
-    For domain entities: uses _state_field_name set by factory.py from is_state_field.
-    For kernel entities: falls back to convention ('status' or 'stage').
+    For domain entities: uses _state_field_name set by factory.py from is_state_field
+    flag on the EntityDefinition.
+    For kernel entities: uses _state_field_name class variable set on the entity class.
+
+    No convention-based fallback — the field must be explicitly declared.
     """
-    # Dynamic entities have _state_field_name set by create_entity_class
     state_field = getattr(type(entity), "_state_field_name", None)
     if state_field:
         return state_field
-    # Fallback: convention for kernel entities
-    for field_name in ("status", "stage"):
-        if hasattr(entity, field_name):
-            return field_name
     raise StateMachineError(
-        f"{type(entity).__name__} has a state machine but no status/stage field"
+        f"{type(entity).__name__} has a state machine but no _state_field_name configured. "
+        f"Kernel entities must set _state_field_name as a class variable. "
+        f"Domain entities must have is_state_field=True on their state field "
+        f"in the EntityDefinition."
     )

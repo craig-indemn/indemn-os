@@ -40,6 +40,7 @@ class Attention(BaseEntity):
     metadata: dict = Field(default_factory=dict)
     status: Literal["active", "expired", "closed"] = "active"
 
+    _state_field_name = "status"
     _state_machine = {"active": ["expired", "closed"]}
     _is_kernel_entity = True
 

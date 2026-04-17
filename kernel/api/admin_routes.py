@@ -212,12 +212,15 @@ async def actor_add_auth(data: dict, actor=Depends(get_current_actor)):
 
 @admin_router.post("/api/_platform/seed")
 async def platform_seed(data: dict = {}):
-    """Load seed data from the configured seed directory."""
+    """Load seed data from the configured seed directory into a target org."""
     from kernel.seed import load_seed_data
 
+    org_id = data.get("org_id")
+    if not org_id:
+        raise HTTPException(400, "org_id is required")
     seed_dir = data.get("seed_dir", "seed")
-    await load_seed_data(seed_dir)
-    return {"status": "seeded", "seed_dir": seed_dir}
+    await load_seed_data(org_id=org_id, seed_dir=seed_dir)
+    return {"status": "seeded", "seed_dir": seed_dir, "org_id": org_id}
 
 
 # --- Org Management ---
@@ -464,7 +467,7 @@ async def audit_verify(
 
     records = (
         await ChangeRecord.find(filter_doc)
-        .sort([("_id", 1)])
+        .sort([("timestamp", 1), ("_id", 1)])
         .limit(limit)
         .to_list()
     )

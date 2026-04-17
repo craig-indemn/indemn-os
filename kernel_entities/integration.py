@@ -26,6 +26,7 @@ class Integration(BaseEntity):
     last_error: Optional[str] = None
     content_visibility: Literal["full_shared", "metadata_shared", "owner_only"] = "full_shared"
 
+    _state_field_name = "status"
     _state_machine = {
         "configured": ["connected"],
         "connected": ["active", "error"],

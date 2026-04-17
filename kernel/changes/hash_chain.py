@@ -5,6 +5,7 @@ Tampering with any record breaks the chain. Verification is a CLI command.
 """
 
 import hashlib
+from datetime import datetime
 
 import orjson
 
@@ -16,10 +17,19 @@ def compute_hash(record) -> str:
         result = []
         for c in changes:
             d = c.model_dump()
-            # Convert non-JSON-serializable values to strings
             for key in ("old_value", "new_value"):
                 val = d.get(key)
-                if val is not None and not isinstance(val, (str, int, float, bool, list, dict)):
+                if val is None:
+                    continue
+                if isinstance(val, datetime):
+                    # Normalize: strip timezone (Motor returns naive UTC),
+                    # truncate to milliseconds (MongoDB precision).
+                    val = val.replace(
+                        tzinfo=None,
+                        microsecond=(val.microsecond // 1000) * 1000,
+                    )
+                    d[key] = val.strftime("%Y-%m-%dT%H:%M:%S.%f")
+                elif not isinstance(val, (str, int, float, bool, list, dict)):
                     d[key] = str(val)
             result.append(d)
         return result
