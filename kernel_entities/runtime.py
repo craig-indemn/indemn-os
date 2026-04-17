@@ -1,10 +1,12 @@
 """Runtime — execution environment. Where associates actually run."""
 
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from pydantic import Field
 
 from kernel.entity.base import BaseEntity
+from kernel.entity.exposed import exposed
 
 
 class Runtime(BaseEntity):
@@ -44,6 +46,45 @@ class Runtime(BaseEntity):
         "error": ["configured", "stopped"],
     }
     _is_kernel_entity = True
+
+    @exposed
+    async def register_instance(self):
+        """Register a harness instance. Called at harness startup.
+
+        Adds instance to the tracking list, transitions to active if
+        this is the first instance (configured/deploying → active).
+        """
+        import uuid
+
+        instance_id = str(uuid.uuid4())[:8]
+        self.instances.append({
+            "instance_id": instance_id,
+            "registered_at": datetime.now(timezone.utc).isoformat(),
+            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+        })
+        # Auto-transition to active on first instance
+        if self.status in ("configured", "deploying"):
+            self.transition_to("active")
+        await self.save_tracked(
+            actor_id=f"system:runtime:{self.id}",
+            method="register_instance",
+        )
+        return {"instance_id": instance_id, "runtime_id": str(self.id), "status": self.status}
+
+    @exposed
+    async def heartbeat(self):
+        """Update heartbeat for the most recent instance.
+
+        Heartbeat updates bypass audit logging (same pattern as Attention.heartbeat)
+        to avoid noise in the changes collection.
+        """
+        if self.instances:
+            self.instances[-1]["last_heartbeat"] = datetime.now(timezone.utc).isoformat()
+        await self.save_tracked(
+            actor_id=f"system:heartbeat:{self.id}",
+            method="heartbeat",
+        )
+        return {"status": "ok", "runtime_id": str(self.id)}
 
     class Settings:
         name = "runtimes"

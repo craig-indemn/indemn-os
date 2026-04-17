@@ -28,6 +28,7 @@ def main():
     from indemn_os.report_commands import report_app
     from indemn_os.role_commands import role_app as role_mgmt_app
     from indemn_os.rule_commands import rule_app
+    from indemn_os.runtime_commands import runtime_app
     from indemn_os.skill_commands import skill_app
 
     app.add_typer(platform_app, name="platform")
@@ -44,6 +45,7 @@ def main():
     app.add_typer(actor_app, name="actor")
     app.add_typer(report_app, name="report")
     app.add_typer(role_mgmt_app, name="role")
+    app.add_typer(runtime_app, name="runtime")
 
     # Top-level deploy alias (spec: `indemn deploy --from-org --to-org`)
     @app.command("deploy")
@@ -61,7 +63,7 @@ def main():
     # Infrastructure entities (Rule, Skill, Lookup, etc.) are also excluded
     # because they have custom routes, not auto-generated CRUD.
     _STATIC_CLI_ENTITIES = {
-        "Role", "Actor", "Integration",
+        "Role", "Actor", "Integration", "Runtime",
         "Rule", "RuleGroup", "Skill", "Lookup",
         "EntityDefinition", "Message", "MessageLog", "ChangeRecord",
     }
