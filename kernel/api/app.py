@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from kernel.api.admin_routes import admin_router
-from kernel.api.assistant import assistant_router
+# assistant_router DELETED (G2.3) — assistant is a chat-harness instance, not kernel endpoint
 from kernel.api.auth_routes import auth_router
 from kernel.api.bootstrap import bootstrap_router
 from kernel.api.bulk import bulk_router
@@ -141,7 +141,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(events_router)
     app.include_router(interaction_router)
-    app.include_router(assistant_router)
+    # assistant_router DELETED (G2.3) — replaced by chat-harness instance
 
     # WebSocket endpoint [G-34]
     app.add_api_websocket_route("/ws", websocket_handler)
