@@ -10,7 +10,6 @@ dependencies = [
     "langchain>=0.3",
     "langgraph-checkpoint>=2.0",
     "langgraph-checkpoint-mongodb>=2.0",
-    "pymongo>=4.6",
     "starlette>=0.40",
     "uvicorn>=0.30",
     "websockets>=13.0",
