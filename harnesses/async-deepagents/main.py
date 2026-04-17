@@ -117,10 +117,15 @@ async def main():
 
     await register_instance()
 
-    client = await Client.connect(
-        os.environ["TEMPORAL_ADDRESS"],
-        namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
-    )
+    connect_kwargs = {
+        "target_host": os.environ["TEMPORAL_ADDRESS"],
+        "namespace": os.environ.get("TEMPORAL_NAMESPACE", "default"),
+    }
+    api_key = os.environ.get("TEMPORAL_API_KEY", "")
+    if api_key:
+        connect_kwargs["api_key"] = api_key
+        connect_kwargs["tls"] = True  # Temporal Cloud requires TLS
+    client = await Client.connect(**connect_kwargs)
 
     # Read capacity from Runtime config (not hardcoded)
     try:
