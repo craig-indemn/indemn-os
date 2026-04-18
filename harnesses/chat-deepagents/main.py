@@ -65,7 +65,11 @@ _checkpointer = None
 
 
 def _init_checkpointer_sync():
-    """Synchronous checkpointer init — runs in thread to avoid blocking event loop."""
+    """Synchronous checkpointer init — runs in thread to avoid blocking event loop.
+
+    Uses 30s timeout at startup (generous for Atlas cold connect + TLS handshake
+    to 3 shards). The connection pool stays warm after init.
+    """
     mongodb_uri = os.environ.get("MONGODB_URI", "")
     if not mongodb_uri:
         return None
@@ -74,30 +78,33 @@ def _init_checkpointer_sync():
 
     client = MongoClient(
         mongodb_uri,
-        serverSelectionTimeoutMS=5000,
-        connectTimeoutMS=5000,
-        socketTimeoutMS=5000,
+        serverSelectionTimeoutMS=30000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=10000,
     )
     client.admin.command("ping")
     return MongoDBSaver(client, db_name="indemn_os_checkpoints")
 
 
-async def _get_checkpointer_async():
-    """Async wrapper — init checkpointer in thread pool to avoid blocking event loop."""
+async def _init_checkpointer_at_startup():
+    """Initialize checkpointer during app startup (lifespan). Runs in thread pool."""
     global _checkpointer
-    if _checkpointer is None:
-        try:
-            _checkpointer = await asyncio.get_event_loop().run_in_executor(
-                None, _init_checkpointer_sync
-            )
-            if _checkpointer:
-                log.info("MongoDB checkpointer initialized")
-            else:
-                log.warning("No MONGODB_URI — conversation persistence disabled")
-                _checkpointer = False
-        except Exception as e:
-            log.warning("MongoDB checkpointer unavailable — persistence disabled: %s", e)
+    try:
+        _checkpointer = await asyncio.get_event_loop().run_in_executor(
+            None, _init_checkpointer_sync
+        )
+        if _checkpointer:
+            log.info("MongoDB checkpointer initialized — conversation persistence enabled")
+        else:
+            log.warning("No MONGODB_URI — conversation persistence disabled")
             _checkpointer = False
+    except Exception as e:
+        log.warning("MongoDB checkpointer unavailable — persistence disabled: %s", e)
+        _checkpointer = False
+
+
+def get_checkpointer():
+    """Return the checkpointer (initialized at startup). None if unavailable."""
     return _checkpointer if _checkpointer is not False else None
 
 
@@ -126,13 +133,12 @@ async def websocket_handler(websocket: WebSocket):
             await websocket.close()
             return
 
-        # Create session with conversation persistence
-        checkpointer = await _get_checkpointer_async()
+        # Create session with conversation persistence (initialized at startup)
         session = ChatSession(
             websocket=websocket,
             associate_id=associate_id,
             auth_token=auth_token,
-            checkpointer=checkpointer,
+            checkpointer=get_checkpointer(),
         )
         _sessions[id(websocket)] = session
 
@@ -187,6 +193,8 @@ async def lifespan(app):
     _setup_gcp_credentials()
     await register_instance()
     asyncio.create_task(heartbeat_loop(interval_s=30.0))
+    # Initialize MongoDB checkpointer at startup (warm connection pool before sessions)
+    await _init_checkpointer_at_startup()
     yield
 
 
