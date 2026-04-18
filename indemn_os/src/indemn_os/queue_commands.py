@@ -25,7 +25,7 @@ def dead_letter_list(
     """List dead-letter messages."""
     client = CLIClient()
     result = client.get(
-        "/api/message_queues", params={"status": "dead_letter", "limit": limit}
+        "/api/message_queues/", params={"status": "dead_letter", "limit": limit}
     )
     render(result, fmt)
 

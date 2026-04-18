@@ -45,7 +45,7 @@ def create_integration(
         # The server extracts org_id from the JWT on every authenticated
         # request, so any scoped list endpoint reflects the current org.
         try:
-            actors_resp = client.get("/api/actors", params={"limit": 1})
+            actors_resp = client.get("/api/actors/", params={"limit": 1})
             if actors_resp and isinstance(actors_resp, list) and actors_resp[0].get("org_id"):
                 data["owner_id"] = actors_resp[0]["org_id"]
             else:
@@ -66,7 +66,7 @@ def create_integration(
         # Resolve email to actor ID
         try:
             actors_resp = client.get(
-                "/api/actors", params={"limit": 100},
+                "/api/actors/", params={"limit": 100},
             )
             for a in actors_resp:
                 if a.get("email") == actor_email:
@@ -87,7 +87,7 @@ def create_integration(
         roles = [r.strip() for r in access_roles.split(",")]
         data["access"] = {"roles": roles}
 
-    result = client.post("/api/integrations", json=data)
+    result = client.post("/api/integrations/", json=data)
     typer.echo(f"Created integration: {name} ({provider})")
     render(result, "json")
 
@@ -96,7 +96,7 @@ def create_integration(
 def list_integrations(fmt: str = typer.Option("json", "--format")):
     """List integrations."""
     client = CLIClient()
-    result = client.get("/api/integrations")
+    result = client.get("/api/integrations/")
     render(result, fmt)
 
 

@@ -48,7 +48,7 @@ def create_actor(
     # Resolve --role name to role_id
     if role:
         try:
-            roles_resp = client.get("/api/roles", params={"limit": 100})
+            roles_resp = client.get("/api/roles/", params={"limit": 100})
             for r in roles_resp:
                 if r.get("name") == role:
                     role_id = r.get("_id") or r.get("id")
@@ -63,7 +63,7 @@ def create_actor(
     if owner_actor:
         try:
             actors_resp = client.get(
-                "/api/actors", params={"limit": 100},
+                "/api/actors/", params={"limit": 100},
             )
             for a in actors_resp:
                 if a.get("email") == owner_actor:
@@ -79,7 +79,7 @@ def create_actor(
                 f"Warning: could not resolve owner '{owner_actor}'", err=True,
             )
 
-    result = client.post("/api/actors", json=data)
+    result = client.post("/api/actors/", json=data)
     typer.echo(f"Created actor: {name} ({type})")
     render(result, "json")
 
@@ -94,7 +94,7 @@ def list_actors(
     params = {"limit": 100}
     if type:
         params["status"] = type  # uses generic filter
-    result = client.get("/api/actors", params=params)
+    result = client.get("/api/actors/", params=params)
     render(result, fmt)
 
 

@@ -110,7 +110,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         params = {"limit": limit, "offset": offset}
         if status:
             params["status"] = status
-        result = client.get(f"/api/{slug}s", params=params)
+        result = client.get(f"/api/{slug}s/", params=params)
         render(result, fmt)
 
     @entity_app.command("get")
@@ -134,7 +134,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         """Create entity. Data as JSON string."""
         import orjson
 
-        result = client.post(f"/api/{slug}s", json=orjson.loads(data))
+        result = client.post(f"/api/{slug}s/", json=orjson.loads(data))
         render(result, "json")
 
     @entity_app.command("update")
@@ -184,7 +184,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
                 render(result, "json")
             else:
                 # Batch: run on all entities of this type
-                entities = client.get(f"/api/{_slug}s", params={"limit": 1000})
+                entities = client.get(f"/api/{_slug}s/", params={"limit": 1000})
                 processed = 0
                 for entity in entities:
                     eid = entity.get("_id") or entity.get("id")

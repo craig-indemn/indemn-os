@@ -34,7 +34,7 @@ def create_role(
         "permissions": orjson.loads(permissions),
         "watches": orjson.loads(watches),
     }
-    result = client.post("/api/roles", json=data)
+    result = client.post("/api/roles/", json=data)
     typer.echo(f"Created role: {name}")
     render(result, "json")
 
@@ -48,7 +48,7 @@ def list_roles(
 ):
     """List roles. Use --show-watches for full wiring view."""
     client = CLIClient()
-    result = client.get("/api/roles")
+    result = client.get("/api/roles/")
     if show_watches:
         fmt = "json"
     render(result, fmt)
