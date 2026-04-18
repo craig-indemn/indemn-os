@@ -137,6 +137,38 @@ ALL entity saves go through `save_tracked()`. One MongoDB transaction:
 
 **Selective emission**: only creation + state transitions + @exposed methods generate messages. NOT every field change.
 
+## Authentication
+
+```bash
+# CLI login (stores token in ~/.indemn/credentials)
+indemn auth login --org _platform --email craig@indemn.ai --password <password>
+indemn auth token                                 # Show current token info
+indemn auth logout                                # Revoke session + delete token
+
+# Human actor onboarding (magic link flow)
+indemn actor create --type human --name "Jane" --email jane@acme.com --role underwriter
+# Response includes setup_token — use it:
+curl -X POST $API/auth/setup-password -d '{"token":"<setup_token>","new_password":"..."}'
+```
+
+**Auth methods**: password, totp, sso, token, magic_link
+**MFA policy**: actor.mfa_exempt → role.mfa_required → org.default_mfa_required
+**Refresh tokens**: POST /auth/refresh with opaque token → rotated with 30s overlap
+
+## Deployment (Railway)
+
+| Service | URL |
+|---------|-----|
+| indemn-api | https://indemn-api-production.up.railway.app |
+| indemn-runtime-chat | wss://indemn-runtime-chat-production.up.railway.app/ws/chat |
+| indemn-ui | https://indemn-ui-production.up.railway.app |
+| indemn-queue-processor | (internal) |
+| indemn-temporal-worker | (internal) |
+| indemn-runtime-async | Temporal queue |
+
+**External**: MongoDB Atlas (`dev-indemn.mifra5.mongodb.net`), Temporal Cloud (`indemn-dev.hxc6t`), Grafana Cloud, GCP Vertex AI.
+**Credentials**: All in AWS Secrets Manager under `indemn/dev/shared/`.
+
 ## Debugging
 
 ```bash
@@ -147,6 +179,7 @@ indemn integration health                         # Test adapter connectivity
 indemn audit verify                               # Hash chain integrity
 indemn actor list --type associate --status active # Running associates
 indemn runtime list                               # Deployed runtimes
+indemn platform health                            # API + MongoDB + Temporal status
 ```
 
 ## The 8-Step Domain Modeling Process
