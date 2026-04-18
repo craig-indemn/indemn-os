@@ -79,12 +79,14 @@ async def _init_checkpointer_at_startup():
 
     try:
         from motor.motor_asyncio import AsyncIOMotorClient
-        from langgraph.checkpoint.mongodb.aio import AsyncMongoDBSaver
+        from langgraph.checkpoint.mongodb import MongoDBSaver
 
-        client = AsyncIOMotorClient(mongodb_uri)
-        # Verify connectivity
-        await client.admin.command("ping")
-        _checkpointer = AsyncMongoDBSaver(client, db_name="indemn_os_checkpoints")
+        # Use motor for connectivity (works on Railway), then pass its
+        # underlying pymongo client to MongoDBSaver (which needs sync client)
+        motor_client = AsyncIOMotorClient(mongodb_uri)
+        await motor_client.admin.command("ping")
+        # motor wraps pymongo — .delegate is the underlying sync MongoClient
+        _checkpointer = MongoDBSaver(motor_client.delegate, db_name="indemn_os_checkpoints")
         log.info("MongoDB checkpointer initialized — conversation persistence enabled")
     except Exception as e:
         log.warning("MongoDB checkpointer unavailable — persistence disabled: %s", e)
