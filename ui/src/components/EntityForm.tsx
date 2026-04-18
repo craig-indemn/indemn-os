@@ -6,6 +6,7 @@ interface Props {
   meta: EntityMeta;
   entity: Record<string, unknown>;
   onSave: (data: Record<string, unknown>) => Promise<void>;
+  isCreate?: boolean;
 }
 
 const SYSTEM_FIELDS = new Set([
@@ -16,7 +17,7 @@ const SYSTEM_FIELDS = new Set([
   "created_by",
 ]);
 
-export function EntityForm({ meta, entity, onSave }: Props) {
+export function EntityForm({ meta, entity, onSave, isCreate }: Props) {
   const {
     control,
     handleSubmit,
@@ -41,7 +42,7 @@ export function EntityForm({ meta, entity, onSave }: Props) {
       {meta.permissions.write && (
         <button
           type="submit"
-          disabled={!isDirty || isSubmitting}
+          disabled={(!isDirty && !isCreate) || isSubmitting}
           className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
         >
           {isSubmitting ? "Saving..." : "Save"}

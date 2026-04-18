@@ -41,6 +41,7 @@ export function EntityCreateView() {
         <EntityForm
           meta={meta}
           entity={emptyEntity}
+          isCreate
           onSave={async (data) => {
             const created = await apiClient<Record<string, unknown>>(
               `/api/${entityType}/`,
