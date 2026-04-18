@@ -24,12 +24,20 @@ def register_bulk_commands(entity_name: str, entity_app: typer.Typer):
         dry_run: bool = False,
     ):
         """Create entities in bulk. Emits creation events."""
+        import csv
+
         client = CLIClient()
+        source_data = None
+        if from_csv:
+            with open(from_csv, newline="") as f:
+                source_data = list(csv.DictReader(f))
+            typer.echo(f"Read {len(source_data)} rows from {from_csv}")
+
         result = client.post(
             f"/api/{slug}s/bulk",
             json={
                 "operation": "create",
-                "source_csv": from_csv,
+                "source_data": source_data,
                 "batch_size": batch_size,
                 "dry_run": dry_run,
             },
