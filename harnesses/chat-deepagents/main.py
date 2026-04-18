@@ -64,21 +64,41 @@ def _setup_gcp_credentials():
 _checkpointer = None
 
 
-def _get_checkpointer():
-    """Lazy-init MongoDB checkpointer for conversation persistence."""
+def _init_checkpointer_sync():
+    """Synchronous checkpointer init — runs in thread to avoid blocking event loop."""
+    mongodb_uri = os.environ.get("MONGODB_URI", "")
+    if not mongodb_uri:
+        return None
+    from pymongo import MongoClient
+    from langgraph.checkpoint.mongodb import MongoDBSaver
+
+    client = MongoClient(
+        mongodb_uri,
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=5000,
+        socketTimeoutMS=5000,
+    )
+    client.admin.command("ping")
+    return MongoDBSaver(client, db_name="indemn_os_checkpoints")
+
+
+async def _get_checkpointer_async():
+    """Async wrapper — init checkpointer in thread pool to avoid blocking event loop."""
     global _checkpointer
     if _checkpointer is None:
-        mongodb_uri = os.environ.get("MONGODB_URI", "")
-        if mongodb_uri:
-            from pymongo import MongoClient
-            from langgraph.checkpoint.mongodb import MongoDBSaver
-
-            client = MongoClient(mongodb_uri)
-            _checkpointer = MongoDBSaver(client, db_name="indemn_os_checkpoints")
-            log.info("MongoDB checkpointer initialized")
-        else:
-            log.warning("No MONGODB_URI — conversation persistence disabled")
-    return _checkpointer
+        try:
+            _checkpointer = await asyncio.get_event_loop().run_in_executor(
+                None, _init_checkpointer_sync
+            )
+            if _checkpointer:
+                log.info("MongoDB checkpointer initialized")
+            else:
+                log.warning("No MONGODB_URI — conversation persistence disabled")
+                _checkpointer = False
+        except Exception as e:
+            log.warning("MongoDB checkpointer unavailable — persistence disabled: %s", e)
+            _checkpointer = False
+    return _checkpointer if _checkpointer is not False else None
 
 
 # Active sessions by WebSocket connection
@@ -107,11 +127,12 @@ async def websocket_handler(websocket: WebSocket):
             return
 
         # Create session with conversation persistence
+        checkpointer = await _get_checkpointer_async()
         session = ChatSession(
             websocket=websocket,
             associate_id=associate_id,
             auth_token=auth_token,
-            checkpointer=_get_checkpointer(),
+            checkpointer=checkpointer,
         )
         _sessions[id(websocket)] = session
 
