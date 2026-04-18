@@ -175,7 +175,30 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
 
 def _serialize_entity(entity) -> dict:
     """Serialize entity to dict. Works for kernel (Beanie) and domain (Pydantic)."""
-    return entity.model_dump(by_alias=True)
+    from decimal import Decimal
+
+    data = entity.model_dump(by_alias=True)
+    # pymongo cannot encode Decimal — convert to float before writing.
+    _convert_decimals(data)
+    return data
+
+
+def _convert_decimals(obj):
+    """Recursively convert Decimal values to float for BSON serialization."""
+    from decimal import Decimal
+
+    if isinstance(obj, dict):
+        for key in obj:
+            if isinstance(obj[key], Decimal):
+                obj[key] = float(obj[key])
+            elif isinstance(obj[key], (dict, list)):
+                _convert_decimals(obj[key])
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, Decimal):
+                obj[i] = float(item)
+            elif isinstance(item, (dict, list)):
+                _convert_decimals(item)
 
 
 def _compute_changes(entity) -> list[dict]:
