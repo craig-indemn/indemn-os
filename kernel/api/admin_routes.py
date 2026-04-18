@@ -201,7 +201,7 @@ async def migrate_entity(name: str, request: Request, actor=Depends(get_current_
             "dry_run": True,
             "entity": plan.entity_name,
             "affected_count": plan.affected_count,
-            "operations": plan.operations,
+            "operations": [str(op) if not isinstance(op, (dict, str)) else op for op in plan.operations],
             "preview_sample": plan.preview_sample,
         }
 
