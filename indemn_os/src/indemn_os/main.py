@@ -33,8 +33,10 @@ def main():
     from indemn_os.rule_commands import rule_app
     from indemn_os.runtime_commands import runtime_app
     from indemn_os.skill_commands import skill_app
+    from indemn_os.init_commands import init_app
     from indemn_os.trace_commands import trace_app
 
+    app.add_typer(init_app, name="init")
     app.add_typer(auth_app, name="auth")
     app.add_typer(platform_app, name="platform")
     app.add_typer(entity_app, name="entity")

@@ -182,13 +182,37 @@ indemn runtime list                               # Deployed runtimes
 indemn platform health                            # API + MongoDB + Temporal status
 ```
 
+## Entity Design — What to Model vs What the Kernel Handles
+
+| Don't model this | The kernel provides |
+|------------------|---------------------|
+| Activity log | **Changes collection** — every mutation recorded with field-level detail |
+| Notifications | **Watches on roles** — entity changes produce messages automatically |
+| Team member identity | **Actor** — kernel entity for all participants |
+| Account ownership | **Role** assignments with watches |
+| Audit trail | **Changes collection** — tamper-evident, append-only |
+| Version history | **Changes collection** — every mutation recorded |
+| Communication | **Watches + Messages** — the wiring IS the communication system |
+
+Your domain model covers BUSINESS DATA. The kernel covers CONNECTIVE TISSUE.
+
+## Entity Criteria (7 tests)
+
+1. **Identity** — Does it have a unique identity that matters? Would you refer to it by name or ID?
+2. **Lifecycle** — Does it have meaningful states that change over time?
+3. **Independence** — Can it exist on its own, not purely as a property of another entity?
+4. **Not kernel mechanism** — Is this business data, not something the kernel already provides?
+5. **CLI test** — Would someone want to `indemn <thing> list/create/get`?
+6. **Watchable** — Would changes need to flow to people via watches?
+7. **Multiplicity** — Can there be many per parent?
+
+If it passes all 7: make it an entity. Entities are cheap — the OS auto-generates everything.
+
 ## The 8-Step Domain Modeling Process
 
-How to build anything on the OS:
-
 1. **Understand the business** — narrative, workflows, people, systems, pain
-2. **Identify entities** — nouns, fields, lifecycle (state machine), relationships
-3. **Identify roles and actors** — who participates, permissions, watches
+2. **Identify entities** — apply the 7 criteria above. Design for AI extraction, not manual entry. Enums over free text.
+3. **Identify roles and actors** — who participates, permissions, watches. Start with one role (full access), differentiate later.
 4. **Define rules and configuration** — per-org business logic, lookups, capability activation
 5. **Write skills** — associate behavioral instructions in markdown
 6. **Set up integrations** — external system connections, adapters, credentials
@@ -196,6 +220,18 @@ How to build anything on the OS:
 8. **Deploy and tune** — production, monitor, add rules for patterns LLM keeps handling
 
 **The universal pattern**: Entry point → creates entity → watches fire → associates process → entity state changes → more watches → eventually reaches human checkpoint or final state.
+
+## Developer Setup
+
+```bash
+# Initialize a project for OS development (creates .claude/ with context + skills)
+indemn init
+
+# Authenticate
+indemn auth login --org <org_slug> --email <email>
+
+# Start building — Claude Code loads the OS context automatically
+```
 
 ## OrgScopedCollection
 
