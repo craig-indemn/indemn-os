@@ -116,7 +116,7 @@ async def upgrade_integration(
     return {"status": "upgraded", "version": to_version}
 
 
-@integration_mgmt_router.post("/api/_platform/integration/health-check")
+@integration_mgmt_router.post("/health-check")
 async def integration_health_check(
     data: dict = {},
     actor=Depends(get_current_actor),
@@ -142,7 +142,11 @@ async def integration_health_check(
 
     for integ in integrations:
         try:
-            adapter = await get_adapter(integ)
+            adapter = await get_adapter(
+                integ.system_type,
+                actor_id=str(integ.owner_id) if integ.owner_type == "actor" else None,
+                org_id=str(integ.org_id),
+            )
             if hasattr(adapter, "test"):
                 test_result = await adapter.test()
                 integ.last_checked_at = datetime.now(timezone.utc)

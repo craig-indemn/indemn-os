@@ -15,3 +15,6 @@ current_correlation_id: ContextVar[Optional[str]] = ContextVar(
     "current_correlation_id", default=None
 )
 current_depth: ContextVar[int] = ContextVar("current_depth", default=0)
+current_causation_message_id: ContextVar[Optional[str]] = ContextVar(
+    "current_causation_message_id", default=None
+)

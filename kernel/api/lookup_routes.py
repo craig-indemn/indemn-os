@@ -41,10 +41,8 @@ async def create_or_update_lookup(data: dict, actor=Depends(get_current_actor)):
     existing = await Lookup.find_one({"name": name, "org_id": org_id})
 
     if existing:
-        await Lookup.get_motor_collection().update_one(
-            {"_id": existing.id},
-            {"$set": {"data": data.get("data", {})}},
-        )
+        existing.data = data.get("data", {})
+        await existing.save()
         return {"status": "updated", "name": name}
     else:
         lookup = Lookup(

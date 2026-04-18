@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from kernel.auth.jwt import verify_access_token
-from kernel.context import current_actor_id, current_correlation_id, current_depth, current_org_id
+from kernel.context import current_actor_id, current_causation_message_id, current_correlation_id, current_depth, current_org_id
+from kernel.observability.tracing import create_span
 from kernel_entities.actor import Actor
 from kernel_entities.role import Role
 
@@ -29,6 +30,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/auth/sso/",
         "/auth/mfa/",
         "/auth/reset-password/",
+        "/auth/refresh",
+        "/auth/setup-password",
     )
 
     async def dispatch(self, request: Request, call_next):
@@ -80,6 +83,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         depth_header = request.headers.get("X-Cascade-Depth")
         if depth_header:
             current_depth.set(int(depth_header))
+        causation_msg = request.headers.get("X-Causation-Message-ID")
+        if causation_msg:
+            current_causation_message_id.set(causation_msg)
 
         # Load roles once per request for permission checks
         roles = await Role.find({"_id": {"$in": actor.role_ids}}).to_list()
@@ -90,10 +96,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Claims refresh: auto-refresh if session has stale claims [G-39]
         await _check_claims_freshness(actor, payload, request)
 
-        response = await call_next(request)
-        if hasattr(request.state, "refreshed_token"):
-            response.headers["X-Refreshed-Token"] = request.state.refreshed_token
-        return response
+        with create_span("http.request", method=request.method, path=request.url.path):
+            response = await call_next(request)
+            if hasattr(request.state, "refreshed_token"):
+                response.headers["X-Refreshed-Token"] = request.state.refreshed_token
+            return response
 
 
 async def _check_claims_freshness(actor, jwt_payload: dict, request: Request):

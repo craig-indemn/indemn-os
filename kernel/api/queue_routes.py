@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from kernel.api.serialize import to_dict
 from kernel.auth.middleware import get_current_actor
+from kernel.context import current_org_id
 from kernel.message.mongodb_bus import MongoDBMessageBus
 from kernel.message.schema import Message
 
@@ -51,6 +52,7 @@ async def list_messages(
         filter_doc["status"] = status
     if role:
         filter_doc["target_role"] = role
+    filter_doc["org_id"] = current_org_id.get()
     messages = await Message.find(filter_doc).sort(
         [("priority", -1), ("created_at", 1)]
     ).limit(limit).to_list()

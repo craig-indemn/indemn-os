@@ -187,6 +187,8 @@ async def import_org_config(target_org_name: str, config: dict) -> dict:
     from kernel.db import get_database
 
     db = get_database()
+    # Direct insert with explicit org_id — intentional bypass of OrgScopedCollection
+    # because we're creating entities in a new org during import (org_id is the target, not current context)
     role_id_map = {}  # old role name → new ObjectId
     for name, role_data in config.get("roles", {}).items():
         role_id = ObjectId()
@@ -202,7 +204,8 @@ async def import_org_config(target_org_name: str, config: dict) -> dict:
         role_id_map[name] = role_id
         items_imported += 1
 
-    # Associate actors
+    # Direct insert with explicit org_id — intentional bypass of OrgScopedCollection
+    # because we're creating entities in a new org during import (org_id is the target, not current context)
     for name, actor_data in config.get("actors", {}).items():
         actor_id = ObjectId()
         actor_data["_id"] = actor_id
@@ -227,7 +230,8 @@ async def import_org_config(target_org_name: str, config: dict) -> dict:
         await db["actors"].insert_one(actor_data)
         items_imported += 1
 
-    # Integration configs (no secrets)
+    # Direct insert with explicit org_id — intentional bypass of OrgScopedCollection
+    # because we're creating entities in a new org during import (org_id is the target, not current context)
     for name, integ_data in config.get("integrations", {}).items():
         integ_id = ObjectId()
         integ_data["_id"] = integ_id

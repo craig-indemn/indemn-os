@@ -21,7 +21,8 @@ async def evaluate_watches_and_emit(
     correlation_id: str,
     depth: int,
     parent_entity_type: str,
-    session,
+    causation_message_id: str = None,
+    session=None,
 ) -> list[Message]:
     """Evaluate watches for this entity type and create messages for matches.
     Returns list of created Message objects (for optimistic dispatch in Phase 2)."""
@@ -74,6 +75,7 @@ async def evaluate_watches_and_emit(
                 target_role=role_name,
                 target_actor_id=target_actor_id,
                 correlation_id=correlation_id,
+                causation_id=causation_message_id,
                 depth=depth + 1,
                 event_metadata=event_metadata or {},
                 context=context,

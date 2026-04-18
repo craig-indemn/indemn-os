@@ -10,6 +10,7 @@ from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
 from kernel.rule.schema import Rule
+from kernel.rule.validation import validate_rule
 
 rule_router = APIRouter(prefix="/api/rules", tags=["rules"])
 
@@ -78,6 +79,13 @@ async def create_rule(data: dict, actor=Depends(get_current_actor)):
         status=data.get("status", "active"),
         created_by=str(actor.id),
     )
+
+    # Validate rule before persisting
+    errors = await validate_rule(rule)
+    hard_errors = [e for e in errors if not e.startswith("WARNING:")]
+    if hard_errors:
+        raise HTTPException(422, detail=hard_errors)
+
     await rule.insert()
     return to_dict(rule)
 

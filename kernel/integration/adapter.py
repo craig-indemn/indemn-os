@@ -84,6 +84,21 @@ class Adapter(ABC):
         """Refresh OAuth tokens. Returns new credentials to store."""
         raise NotImplementedError
 
+    async def test(self) -> dict:
+        """Test connectivity with a minimal read-only operation.
+
+        Tries fetch(limit=1) by default. Subclasses that don't implement
+        fetch() (e.g. payment adapters) should override this method with
+        a provider-specific connectivity check.
+        """
+        try:
+            result = await self.fetch(limit=1)
+            return {"status": "ok", "sample_count": len(result)}
+        except NotImplementedError:
+            return {"status": "ok", "message": "adapter reachable (no fetch method)"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     def needs_token_refresh(self) -> bool:
         """Check if the token is expired or about to expire."""
         return False

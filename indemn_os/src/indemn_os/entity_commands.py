@@ -96,16 +96,46 @@ def migrate_entity(
     add_field: str = typer.Option(None, "--add-field", help="JSON field definition"),
     remove_field: str = typer.Option(None, "--remove-field"),
     cleanup: bool = False,
-    batch_size: int = 100,
-    dry_run: bool = False,
+    batch_size: int = typer.Option(100, "--batch-size"),
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run"),
 ):
     """Run a schema migration on an entity type."""
-    typer.echo(f"{'DRY RUN: ' if dry_run else ''}Migrating {name}")
+    import orjson
+
+    operations = []
     if rename:
         parts = rename.split()
-        typer.echo(f"  Rename: {parts[0]} → {parts[1]}")
+        if len(parts) != 2:
+            typer.echo("--rename requires exactly two values: old_field new_field", err=True)
+            raise typer.Exit(1)
+        operations.append({"type": "rename_field", "from": parts[0], "to": parts[1]})
     if add_field:
-        typer.echo(f"  Add field: {add_field}")
+        parsed = orjson.loads(add_field)
+        for field_name, field_def in parsed.items():
+            operations.append({"type": "add_field", "name": field_name, "field_def": field_def})
     if remove_field:
-        typer.echo(f"  Remove field: {remove_field} {'(+ cleanup)' if cleanup else ''}")
-    # Migration routes through the entity definition API
+        operations.append({"type": "remove_field", "name": remove_field, "cleanup": cleanup})
+
+    if not operations:
+        typer.echo("Nothing to migrate. Use --rename, --add-field, or --remove-field.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"{'DRY RUN: ' if dry_run else ''}Migrating {name}")
+    for op in operations:
+        if op["type"] == "rename_field":
+            typer.echo(f"  Rename: {op['from']} -> {op['to']}")
+        elif op["type"] == "add_field":
+            typer.echo(f"  Add field: {op['name']}")
+        elif op["type"] == "remove_field":
+            typer.echo(f"  Remove field: {op['name']}{' (+ cleanup)' if op.get('cleanup') else ''}")
+
+    client = CLIClient()
+    result = client.post(
+        f"/api/entitydefinitions/{name}/migrate",
+        json={
+            "operations": operations,
+            "dry_run": dry_run,
+            "batch_size": batch_size,
+        },
+    )
+    render(result, "json")

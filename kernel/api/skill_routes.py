@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
-from kernel.skill.integrity import compute_content_hash
+from kernel.skill.integrity import compute_content_hash, verify_content_hash
 from kernel.skill.schema import Skill
 
 skill_router = APIRouter(prefix="/api/skills", tags=["skills"])
@@ -41,6 +41,8 @@ async def get_skill(skill_id: str, actor=Depends(get_current_actor)):
     )
     if not skill:
         raise HTTPException(404, "Skill not found")
+    if not verify_content_hash(skill.content, skill.content_hash):
+        raise HTTPException(status_code=409, detail=f"Skill '{skill.name}' content hash mismatch — possible tampering")
     return to_dict(skill)
 
 
@@ -52,6 +54,8 @@ async def get_skill_by_name(name: str, actor=Depends(get_current_actor)):
     )
     if not skill:
         raise HTTPException(404, f"Skill '{name}' not found")
+    if not verify_content_hash(skill.content, skill.content_hash):
+        raise HTTPException(status_code=409, detail=f"Skill '{skill.name}' content hash mismatch — possible tampering")
     return to_dict(skill)
 
 

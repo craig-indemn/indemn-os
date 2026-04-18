@@ -2,9 +2,11 @@
 
 Creates, validates, and revokes Session entities.
 Phase 1: basic session creation for password and token auth.
-Phase 4 adds: SSO, MFA, platform admin sessions, revocation cache.
+Phase 4 adds: SSO, MFA, platform admin sessions, revocation cache, refresh tokens.
 """
 
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
@@ -20,9 +22,9 @@ async def create_session(
     ip_address: str = None,
     user_agent: str = None,
     expire_minutes: int = None,
-) -> tuple[Session, str]:
-    """Create a new Session entity and issue an access token.
-    Returns (session, access_token)."""
+) -> tuple[Session, str, str]:
+    """Create a new Session entity and issue an access token + refresh token.
+    Returns (session, access_token, refresh_token)."""
     from kernel.config import settings
 
     expire_mins = expire_minutes or settings.jwt_access_token_expire_minutes
@@ -32,6 +34,10 @@ async def create_session(
     role_names = [r.name for r in roles]
 
     token, jti = create_access_token(str(actor.id), str(actor.org_id), role_names)
+
+    # Generate refresh token and store hash reference
+    refresh_token = secrets.token_urlsafe(32)
+    refresh_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
 
     session = Session(
         org_id=actor.org_id,
@@ -43,10 +49,11 @@ async def create_session(
         status="active",
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=expire_mins),
         access_token_jti=jti,
+        refresh_token_ref=refresh_hash,
     )
     await session.insert()
 
-    return session, token
+    return session, token, refresh_token
 
 
 async def revoke_session(session_id: ObjectId):

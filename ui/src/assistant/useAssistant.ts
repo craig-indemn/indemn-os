@@ -12,6 +12,7 @@ export interface AssistantContextType {
   isStreaming: boolean;
   togglePanel: () => void;
   sendMessage: (content: string) => void;
+  clearMessages: () => void;
 }
 
 export const AssistantContext = createContext<AssistantContextType>({
@@ -20,6 +21,7 @@ export const AssistantContext = createContext<AssistantContextType>({
   isStreaming: false,
   togglePanel: () => {},
   sendMessage: () => {},
+  clearMessages: () => {},
 });
 
 export function useAssistant() {

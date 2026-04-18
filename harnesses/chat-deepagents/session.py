@@ -49,6 +49,7 @@ class ChatSession:
         self._heartbeat_task = None
         self._events_task = None
         self._events_process = None
+        self._event_queue: list[dict] = []
 
     async def start(self):
         """Initialize the session — load config, create Interaction + Attention, build agent."""
@@ -126,10 +127,25 @@ class ChatSession:
             context_str = json.dumps(context, default=str)
             user_content = f"[UI Context: {context_str}]\n\n{content}"
 
+        # Drain queued events into a system message for mid-conversation awareness
+        messages = []
+        if self._event_queue:
+            events = self._event_queue.copy()
+            self._event_queue.clear()
+            event_summaries = []
+            for ev in events:
+                entity_type = ev.get("entity_type", "unknown")
+                entity_id = ev.get("entity_id", "unknown")
+                event_type = ev.get("event_type", "change")
+                event_summaries.append(f"{entity_type}/{entity_id}: {event_type}")
+            system_event_msg = "[System events since last turn: " + "; ".join(event_summaries) + "]"
+            messages.append({"role": "system", "content": system_event_msg})
+        messages.append({"role": "user", "content": user_content})
+
         # Run agent — collect the response
         try:
             result = await self.agent.ainvoke(
-                {"messages": [{"role": "user", "content": user_content}]},
+                {"messages": messages},
                 config={"configurable": {"thread_id": self.interaction_id}},
             )
 
@@ -194,8 +210,7 @@ class ChatSession:
             self._events_process = subprocess.Popen(
                 ["indemn", "events", "stream",
                  "--actor", self.associate_id,
-                 "--interaction", self.interaction_id,
-                 "--format", "json-lines"],
+                 "--interaction", self.interaction_id],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
@@ -209,7 +224,7 @@ class ChatSession:
                 try:
                     event = json.loads(line.decode())
                     await self._send({"type": "event", "data": event})
-                    # TODO: feed event to running agent for mid-conversation awareness
+                    self._event_queue.append(event)
                 except json.JSONDecodeError:
                     pass
 

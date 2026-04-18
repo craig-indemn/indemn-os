@@ -6,10 +6,13 @@ import { MfaChallenge } from "./auth/MfaChallenge";
 import { PasswordReset } from "./auth/PasswordReset";
 import { Shell } from "./layout/Shell";
 import { EntityListView } from "./views/EntityListView";
+import { EntityCreateView } from "./views/EntityCreateView";
 import { EntityDetailView } from "./views/EntityDetailView";
 import { QueueView } from "./views/QueueView";
 import { RoleOverview } from "./views/RoleOverview";
 import { AuthEventsView } from "./views/AuthEventsView";
+import { ObservabilityView } from "./views/ObservabilityView";
+import { CascadeViewerRoute } from "./views/CascadeViewerRoute";
 
 export default function App() {
   const { isAuthenticated } = useAuth();
@@ -35,7 +38,10 @@ export default function App() {
         <Route path="/queue" element={<QueueView />} />
         <Route path="/roles" element={<RoleOverview />} />
         <Route path="/auth-events" element={<AuthEventsView />} />
+        <Route path="/observability" element={<ObservabilityView />} />
+        <Route path="/trace/:correlationId" element={<CascadeViewerRoute />} />
         <Route path="/:entityType" element={<EntityListView />} />
+        <Route path="/:entityType/new" element={<EntityCreateView />} />
         <Route path="/:entityType/:entityId" element={<EntityDetailView />} />
         <Route path="*" element={<Navigate to="/queue" replace />} />
       </Routes>

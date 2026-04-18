@@ -30,6 +30,9 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
     for k in ("TRACEPARENT", "TRACESTATE", "OTEL_EXPORTER_OTLP_ENDPOINT"):
         if k in os.environ:
             env[k] = os.environ[k]
+    # Causation message ID propagation
+    if "INDEMN_CAUSATION_MESSAGE_ID" in os.environ:
+        env["INDEMN_CAUSATION_MESSAGE_ID"] = os.environ["INDEMN_CAUSATION_MESSAGE_ID"]
 
     cmd = ["indemn", *args]
 

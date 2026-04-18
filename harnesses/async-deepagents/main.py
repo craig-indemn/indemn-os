@@ -54,6 +54,9 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
     Agent's own tool execution uses deepagents' built-in execute via backend.
     """
     try:
+        # Set causation message ID so downstream CLI calls propagate it
+        os.environ["INDEMN_CAUSATION_MESSAGE_ID"] = str(input.message_id)
+
         # Load associate config + context (harness orchestration, not agent tools)
         associate = indemn("actor", "get", input.associate_id)
         # Dynamic entity instances with related entities per design (depth 2)
@@ -118,6 +121,9 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # Mark the message complete — harness owns completion [Q1]
         indemn("queue", "complete", input.message_id)
 
+        # Clean up causation env var
+        os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
+
         return AgentExecutionResult(
             status="complete",
             iterations=len(messages),
@@ -125,6 +131,8 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         )
 
     except Exception as e:
+        # Clean up causation env var
+        os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
         # Mark the message failed — harness owns failure reporting [Q1]
         try:
             indemn("queue", "fail", input.message_id, "--reason", str(e)[:500])

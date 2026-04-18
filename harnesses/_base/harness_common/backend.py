@@ -28,18 +28,12 @@ def build_backend():
 def _build_localshell_backend():
     """LocalShellBackend — no sandbox. Container is the blast radius.
 
-    SECURITY POSTURE (non-production only):
-    ----------------------------------------
-    deepagents' LocalShellBackend uses subprocess.run(shell=True).
-    LLM output feeds directly into a shell interpreter.
-    Prompt injection CAN execute arbitrary shell commands inside
-    the harness container.
-
-    Acceptable during testing/dev because:
-      1. We control the prompts (approved + content-hashed skills)
-      2. We control the inputs (internal data during dev, not adversarial)
-      3. Container isolation from kernel (no MongoDB creds, no kernel code)
-      4. Railway container is ephemeral (no persistent corruption)
+    Security note: LocalShellBackend uses shell execution within the container.
+    Risk is mitigated by:
+      1. Container isolation (Railway) — no direct kernel/DB access
+      2. CLI-only auth surface (service token required)
+      3. Skill content hash verification on every fetch (U-08 wired 2026-04-17)
+      4. Daytona sandbox is deferred — add when Tier 3 user-submitted skills arrive
 
     DO NOT SHIP TO EXTERNAL CUSTOMERS WITH THIS BACKEND.
     Switch INDEMN_SANDBOX_TYPE=daytona before Phase 7.

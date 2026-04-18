@@ -1,4 +1,14 @@
-import { useReactTable, getCoreRowModel, flexRender, type ColumnDef } from "@tanstack/react-table";
+import { useState } from "react";
+import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  getFilteredRowModel,
+  flexRender,
+  type ColumnDef,
+  type SortingState,
+  type ColumnFiltersState,
+} from "@tanstack/react-table";
 
 interface Props {
   columns: ColumnDef<Record<string, unknown>>[];
@@ -7,10 +17,18 @@ interface Props {
 }
 
 export function EntityTable({ columns, data, onRowClick }: Props) {
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+
   const table = useReactTable({
     data,
     columns,
+    state: { sorting, columnFilters },
+    onSortingChange: setSorting,
+    onColumnFiltersChange: setColumnFilters,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
   });
 
   return (
@@ -22,9 +40,18 @@ export function EntityTable({ columns, data, onRowClick }: Props) {
               {headerGroup.headers.map((header) => (
                 <th
                   key={header.id}
-                  className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                  className={`px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider${
+                    header.column.getCanSort() ? " cursor-pointer select-none" : ""
+                  }`}
+                  onClick={header.column.getToggleSortingHandler()}
                 >
-                  {flexRender(header.column.columnDef.header, header.getContext())}
+                  <span className="flex items-center gap-1">
+                    {flexRender(header.column.columnDef.header, header.getContext())}
+                    {{
+                      asc: <span aria-label="sorted ascending">{"\u25B2"}</span>,
+                      desc: <span aria-label="sorted descending">{"\u25BC"}</span>,
+                    }[header.column.getIsSorted() as string] ?? null}
+                  </span>
                 </th>
               ))}
             </tr>

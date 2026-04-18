@@ -18,7 +18,7 @@ from uuid import uuid4
 from bson import ObjectId
 
 from kernel.changes.collection import write_change_record
-from kernel.context import current_correlation_id, current_depth
+from kernel.context import current_causation_message_id, current_correlation_id, current_depth
 from kernel.entity.computed import evaluate_computed_fields
 from kernel.entity.flexible import validate_flexible_data
 from kernel.message.emit import evaluate_watches_and_emit
@@ -152,6 +152,7 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                             correlation_id=correlation_id,
                             depth=depth,
                             parent_entity_type=type(entity).__name__,
+                            causation_message_id=current_causation_message_id.get(),
                             session=session,
                         )
         except Exception:

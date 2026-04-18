@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AssistantContext, type AssistantMessage } from "./useAssistant";
 import { AssistantPanel } from "./AssistantPanel";
 import { getToken } from "../api/client";
@@ -16,14 +17,34 @@ const CHAT_HARNESS_URL =
 // Default associate — per-user CRM assistant. Set via env or API.
 const DEFAULT_ASSOCIATE_ID = import.meta.env.VITE_DEFAULT_ASSOCIATE_ID || "";
 
+const STORAGE_KEY = "indemn_assistant_messages";
+
 export function AssistantProvider({ children }: { children: ReactNode }) {
-  const [messages, setMessages] = useState<AssistantMessage[]>([]);
+  const queryClient = useQueryClient();
+  const [messages, setMessages] = useState<AssistantMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isOpen, setIsOpen] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const connectedRef = useRef(false);
 
   const togglePanel = useCallback(() => setIsOpen((o) => !o), []);
+
+  // Persist messages to localStorage [P-12]
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+  }, [messages]);
+
+  const clearMessages = useCallback(() => {
+    localStorage.removeItem(STORAGE_KEY);
+    setMessages([]);
+  }, []);
 
   // Connect to chat harness WebSocket
   const ensureConnected = useCallback(() => {
@@ -198,12 +219,30 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
   const buildContext = () => {
     const path = window.location.pathname;
     const parts = path.split("/").filter(Boolean);
-    return {
+    const context: Record<string, unknown> = {
       view_type: parts[0] || "queue",
       current_path: path,
       entity_type: parts.length >= 2 ? parts[0] : undefined,
       entity_id: parts.length >= 2 ? parts[1] : undefined,
     };
+
+    // Inject full entity data from TanStack Query cache when on a detail view [P-09]
+    // Query keys use resolved entity names (e.g. "Lead") while URLs use slugs (e.g. "leads"),
+    // so we search cache entries matching ["entity", *, entityId].
+    if (context.entity_type && context.entity_id) {
+      const entityId = context.entity_id as string;
+      const cached = queryClient.getQueriesData<Record<string, unknown>>({
+        queryKey: ["entity"],
+      });
+      const match = cached.find(
+        ([key]) => Array.isArray(key) && key[2] === entityId
+      );
+      if (match?.[1]) {
+        context.entity_data = match[1];
+      }
+    }
+
+    return context;
   };
 
   // Cleanup on unmount
@@ -215,7 +254,7 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
 
   return (
     <AssistantContext.Provider
-      value={{ messages, isOpen, isStreaming, togglePanel, sendMessage }}
+      value={{ messages, isOpen, isStreaming, togglePanel, sendMessage, clearMessages }}
     >
       {children}
       <AssistantPanel />

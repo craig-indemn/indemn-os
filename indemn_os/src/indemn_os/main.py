@@ -17,6 +17,7 @@ def main():
     # Register static commands (always available)
     from indemn_os.actor_commands import actor_app
     from indemn_os.attention_commands import attention_app
+    from indemn_os.auth_commands import auth_app
     from indemn_os.audit_commands import audit_app
     from indemn_os.bulk_monitor import bulk_app
     from indemn_os.entity_commands import entity_app
@@ -34,6 +35,7 @@ def main():
     from indemn_os.skill_commands import skill_app
     from indemn_os.trace_commands import trace_app
 
+    app.add_typer(auth_app, name="auth")
     app.add_typer(platform_app, name="platform")
     app.add_typer(entity_app, name="entity")
     app.add_typer(org_app, name="org")

@@ -23,6 +23,14 @@ class StripeAdapter(Adapter):
         super().__init__(config, credentials)
         stripe.api_key = credentials["secret_key"]
 
+    async def test(self) -> dict:
+        """Test Stripe connectivity by retrieving the account."""
+        try:
+            account = await asyncio.to_thread(stripe.Account.retrieve)
+            return {"status": "ok", "account_id": account.id}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     async def charge(self, amount: Decimal, currency: str = "usd", **params) -> dict:
         """Create a Stripe PaymentIntent."""
         intent = await asyncio.to_thread(

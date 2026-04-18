@@ -56,6 +56,15 @@ class PlatformAdminSessionRequest(BaseModel):
     reason: str = ""
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class SetupPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
 class SignupRequest(BaseModel):
     email: str
     password: str
@@ -140,17 +149,17 @@ async def login(data: LoginRequest, request: Request):
         await write_auth_event(actor, "auth.login_failure", {"ip": ip_address})
         raise HTTPException(401, "Invalid credentials")
 
-    # Check MFA requirement
-    mfa_required = _actor_has_mfa(actor)
+    # Check MFA requirement (policy: actor exempt > role required > org default)
+    mfa_required = await _requires_mfa(actor, org)
 
-    session, token = await create_session(
+    session, token, refresh_token = await create_session(
         actor,
         auth_method="password",
         ip_address=ip_address,
         user_agent=request.headers.get("user-agent"),
     )
 
-    if mfa_required and not actor.mfa_exempt:
+    if mfa_required:
         from kernel.auth.jwt import create_partial_token
 
         partial_token = create_partial_token(actor, session)
@@ -166,6 +175,7 @@ async def login(data: LoginRequest, request: Request):
     )
     return {
         "access_token": token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_at": session.expires_at.isoformat(),
     }
@@ -200,6 +210,7 @@ async def sso_callback(integration_id: str, code: str, state: str = None):
     from kernel.integration.dispatch import get_adapter_for_integration
     from kernel_entities.actor import Actor
     from kernel_entities.integration import Integration
+    from kernel_entities.organization import Organization
 
     integration = await Integration.get(integration_id)
     if not integration:
@@ -216,13 +227,14 @@ async def sso_callback(integration_id: str, code: str, state: str = None):
     if not actor:
         raise HTTPException(403, "No active actor found for this email")
 
-    mfa_required = _actor_has_mfa(actor)
+    org = await Organization.get(integration.org_id)
+    mfa_required = await _requires_mfa(actor, org)
 
-    session, token = await create_session(
+    session, token, refresh_token = await create_session(
         actor, auth_method=f"sso:{integration.provider}"
     )
 
-    if mfa_required and not actor.mfa_exempt:
+    if mfa_required:
         partial_token = create_partial_token(actor, session)
         return {"requires_mfa": True, "mfa_type": "totp", "partial_token": partial_token}
 
@@ -231,6 +243,7 @@ async def sso_callback(integration_id: str, code: str, state: str = None):
     )
     return {
         "access_token": token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_at": session.expires_at.isoformat(),
     }
@@ -446,11 +459,10 @@ async def initiate_password_reset(data: PasswordResetInitiateRequest):
     if not actor:
         return {"status": "ok"}  # Don't reveal whether email exists
 
-    generate_magic_link_token(actor, purpose="password_reset", expires_hours=4)
+    token = generate_magic_link_token(actor, purpose="password_reset", expires_hours=4)
     # In production, send the token via the org's email Integration.
-    # For MVP, the token is generated but email delivery depends on
-    # having an email Integration configured.
-    return {"status": "ok"}
+    # For MVP, return the token so callers can use it directly.
+    return {"status": "ok", "reset_token": token}
 
 
 @auth_router.post("/auth/reset-password/complete")
@@ -488,6 +500,35 @@ async def complete_password_reset(data: PasswordResetCompleteRequest):
     return {"status": "password_reset"}
 
 
+# --- Logout ---
+
+
+@auth_router.post("/auth/logout")
+async def logout(actor=Depends(get_current_actor), request: Request = None):
+    """Revoke the current session."""
+    from kernel.auth.audit import write_auth_event
+    from kernel.auth.session_manager import revoke_session
+    from kernel_entities.session import Session
+
+    # Find active session for this actor's current token
+    auth = request.headers.get("authorization", "") if request else ""
+    if auth.startswith("Bearer "):
+        token = auth.split(" ", 1)[1]
+        from kernel.auth.jwt import verify_access_token
+        try:
+            payload = verify_access_token(token)
+            jti = payload.get("jti")
+            if jti:
+                session = await Session.find_one({"access_token_jti": jti, "status": "active"})
+                if session:
+                    await revoke_session(session.id)
+        except Exception:
+            pass  # Token may already be expired — still complete logout
+
+    await write_auth_event(actor, "auth.logout", {})
+    return {"status": "logged_out"}
+
+
 # --- Claims Refresh [G-39] ---
 
 
@@ -518,6 +559,89 @@ async def refresh_claims(actor=Depends(get_current_actor), request: Request = No
         "token_type": "bearer",
         "expires_at": session.expires_at.isoformat(),
     }
+
+
+# --- Token Refresh [U-03] ---
+
+
+@auth_router.post("/auth/refresh")
+async def refresh_token(data: RefreshRequest):
+    """Rotate refresh token and issue new access token."""
+    import asyncio
+    import hashlib
+
+    from kernel.auth.session_manager import create_session, revoke_session
+    from kernel_entities.actor import Actor
+    from kernel_entities.session import Session
+
+    refresh_hash = hashlib.sha256(data.refresh_token.encode()).hexdigest()
+    session = await Session.find_one({
+        "refresh_token_ref": refresh_hash,
+        "status": "active",
+    })
+    if not session:
+        raise HTTPException(401, "Invalid refresh token")
+
+    actor = await Actor.get(session.actor_id)
+    if not actor:
+        raise HTTPException(401, "Actor not found")
+
+    new_session, new_access, new_refresh = await create_session(
+        actor, auth_method=session.auth_method_used,
+    )
+
+    # Revoke old session (30s overlap — old token still valid for 30s)
+    old_session_id = session.id
+
+    async def _revoke_after_overlap():
+        try:
+            await asyncio.sleep(30)
+            await revoke_session(old_session_id)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to revoke old session %s after refresh overlap", old_session_id
+            )
+
+    asyncio.create_task(_revoke_after_overlap())
+
+    return {
+        "access_token": new_access,
+        "refresh_token": new_refresh,
+        "token_type": "bearer",
+    }
+
+
+# --- Password Setup [U-01] ---
+
+
+@auth_router.post("/auth/setup-password")
+async def setup_password(data: SetupPasswordRequest):
+    """Set password using a magic link token (for new human actors)."""
+    from kernel.auth.audit import write_auth_event
+    from kernel.auth.jwt import verify_magic_link_token
+    from kernel.auth.password import hash_password
+    from kernel_entities.actor import Actor
+
+    payload = verify_magic_link_token(data.token, purpose="setup")
+    actor = await Actor.get(payload["actor_id"])
+    if not actor:
+        raise HTTPException(404, "Actor not found")
+
+    # Set password
+    actor.authentication_methods.append({
+        "type": "password",
+        "password_hash": hash_password(data.new_password),
+    })
+
+    # Activate if provisioned
+    if actor.status == "provisioned":
+        actor.status = "active"
+
+    await actor.save()
+    await write_auth_event(actor, "auth.password_set", {"method": "magic_link_setup"})
+
+    return {"status": "activated", "actor_id": str(actor.id)}
 
 
 # --- Tier 3 Self-Service Signup [G-58] ---
@@ -575,15 +699,18 @@ async def tier3_signup(data: SignupRequest):
 
     # Send verification email (if email Integration exists on _platform org)
     # If not, verification is deferred [G-58]
-    await _send_verification_email_if_possible(admin)
+    verification_token = await _send_verification_email_if_possible(admin)
 
-    return {
+    result = {
         "org_id": str(org_id),
         "actor_id": str(admin.id),
         "api_key": api_key,
         "status": "created",
         "note": "Verify your email to activate the org",
     }
+    if verification_token:
+        result["verification_token"] = verification_token
+    return result
 
 
 # --- Auth Events View [G-41] ---
@@ -630,9 +757,16 @@ async def list_auth_events(
 # --- Helpers ---
 
 
-def _actor_has_mfa(actor) -> bool:
-    """Check if an actor has MFA configured."""
-    return any(m.get("type") == "totp" for m in actor.authentication_methods)
+async def _requires_mfa(actor, org) -> bool:
+    """Check if MFA is required per policy: actor exempt > role required > org default."""
+    if actor.mfa_exempt:
+        return False
+    from kernel_entities.role import Role
+
+    roles = await Role.find({"_id": {"$in": actor.role_ids}}).to_list()
+    if any(getattr(r, "mfa_required", False) for r in roles):
+        return True
+    return getattr(org, "default_mfa_required", False)
 
 
 async def _is_platform_admin(actor) -> bool:
@@ -664,11 +798,12 @@ async def _notify_platform_admin_access(target_org, actor, work_type: str):
     )
 
 
-async def _send_verification_email_if_possible(actor):
+async def _send_verification_email_if_possible(actor) -> str | None:
     """Send verification email via _platform org's email Integration. [G-58]
 
     If the _platform org has an email Integration, sends a verification link.
     If not, verification is deferred until an admin verifies manually.
+    Returns the verification token so callers can include it in the response.
     """
     import logging
 
@@ -680,7 +815,7 @@ async def _send_verification_email_if_possible(actor):
     platform_org = await Organization.find_one({"slug": "_platform"})
     if not platform_org:
         logger.info("No _platform org — email verification deferred for %s", actor.email)
-        return
+        return None
 
     email_integration = await Integration.find_one({
         "org_id": platform_org.id,
@@ -689,15 +824,15 @@ async def _send_verification_email_if_possible(actor):
     })
     if not email_integration:
         logger.info("No email Integration on _platform — verification deferred for %s", actor.email)
-        return
+        return None
 
     # Generate verification token and send via the email Integration
     from kernel.auth.jwt import generate_magic_link_token
 
-    _token = generate_magic_link_token(actor, purpose="email_verify", expires_hours=48)
+    token = generate_magic_link_token(actor, purpose="email_verify", expires_hours=48)
     logger.info("Verification token generated for %s (email delivery pending adapter)", actor.email)
     # Full email delivery depends on the email adapter — token passed to adapter.send()
-    _ = _token  # Will be passed to email adapter when implemented
+    return token
 
 
 def _slugify(name: str) -> str:

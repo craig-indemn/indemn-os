@@ -9,6 +9,7 @@ import logging
 from bson import ObjectId
 from temporalio import activity
 
+from kernel.context import current_org_id
 from kernel.db import ENTITY_REGISTRY
 from kernel.message.mongodb_bus import MongoDBMessageBus
 from kernel.message.schema import Message
@@ -41,18 +42,19 @@ class BulkAbortError(Exception):
 @activity.defn
 async def claim_message(message_id: str, actor_id: str) -> dict | None:
     """Atomic claim via findOneAndUpdate. Returns message data or None if already claimed."""
-    bus = MongoDBMessageBus()
-    msg = await bus.claim_by_id(message_id, ObjectId(actor_id))
-    if not msg:
-        return None
-    return {
-        "id": str(msg.id),
-        "entity_type": msg.entity_type,
-        "entity_id": str(msg.entity_id),
-        "correlation_id": msg.correlation_id or "",
-        "depth": getattr(msg, "depth", 0),
-        "target_role": msg.target_role,
-    }
+    with create_span("activity.claim_message", message_id=message_id, actor_id=actor_id):
+        bus = MongoDBMessageBus()
+        msg = await bus.claim_by_id(message_id, ObjectId(actor_id))
+        if not msg:
+            return None
+        return {
+            "id": str(msg.id),
+            "entity_type": msg.entity_type,
+            "entity_id": str(msg.entity_id),
+            "correlation_id": msg.correlation_id or "",
+            "depth": getattr(msg, "depth", 0),
+            "target_role": msg.target_role,
+        }
 
 
 @activity.defn
@@ -133,15 +135,17 @@ async def process_human_decision(message_id: str, decision: dict) -> dict:
 @activity.defn
 async def complete_message(message_id: str, result: dict) -> None:
     """Move message from queue to log."""
-    bus = MongoDBMessageBus()
-    await bus.complete(ObjectId(message_id), result)
+    with create_span("activity.complete_message", message_id=message_id):
+        bus = MongoDBMessageBus()
+        await bus.complete(ObjectId(message_id), result)
 
 
 @activity.defn
 async def fail_message(message_id: str, error: str) -> None:
     """Return message to queue or move to dead_letter."""
-    bus = MongoDBMessageBus()
-    await bus.fail(ObjectId(message_id), error)
+    with create_span("activity.fail_message", message_id=message_id):
+        bus = MongoDBMessageBus()
+        await bus.fail(ObjectId(message_id), error)
 
 
 # --- Bulk operation activities ---
@@ -150,108 +154,109 @@ async def fail_message(message_id: str, error: str) -> None:
 @activity.defn
 async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
     """Process one batch of a bulk operation within a MongoDB transaction."""
-    from kernel.capability.registry import get_capability
-    from kernel.entity.save import VersionConflictError
-    from kernel.entity.state_machine import StateMachineError
-    from kernel.temporal.workflows import BulkOperationSpec
+    with create_span("activity.process_bulk_batch", offset=offset):
+        from kernel.capability.registry import get_capability
+        from kernel.entity.save import VersionConflictError
+        from kernel.entity.state_machine import StateMachineError
+        from kernel.temporal.workflows import BulkOperationSpec
 
-    spec = BulkOperationSpec(**spec_dict)
+        spec = BulkOperationSpec(**spec_dict)
 
-    entity_cls = ENTITY_REGISTRY.get(spec.entity_type)
-    if not entity_cls:
-        raise PermanentProcessingError(f"Entity type {spec.entity_type} not found")
+        entity_cls = ENTITY_REGISTRY.get(spec.entity_type)
+        if not entity_cls:
+            raise PermanentProcessingError(f"Entity type {spec.entity_type} not found")
 
-    # Query entities
-    if spec.filter_query:
-        entities = (
-            await entity_cls.find_scoped(spec.filter_query)
-            .skip(offset)
-            .limit(spec.batch_size)
-            .to_list()
-        )
-    elif spec.source_data:
-        entities = spec.source_data[offset : offset + spec.batch_size]
-    else:
-        return {"done": True, "batch_processed": 0}
+        # Query entities
+        if spec.filter_query:
+            entities = (
+                await entity_cls.find_scoped(spec.filter_query)
+                .skip(offset)
+                .limit(spec.batch_size)
+                .to_list()
+            )
+        elif spec.source_data:
+            entities = spec.source_data[offset : offset + spec.batch_size]
+        else:
+            return {"done": True, "batch_processed": 0}
 
-    if not entities:
-        return {"done": True, "batch_processed": 0, "total_count": offset}
+        if not entities:
+            return {"done": True, "batch_processed": 0, "total_count": offset}
 
-    errors = []
-    batch_processed = 0
+        errors = []
+        batch_processed = 0
 
-    # Process batch within a MongoDB transaction
-    from kernel.db import get_client
+        # Process batch within a MongoDB transaction
+        from kernel.db import get_client
 
-    mongo_client = get_client()
-    async with await mongo_client.start_session() as session:
-        async with session.start_transaction():
-            for entity in entities:
-                try:
-                    if spec.operation == "transition":
-                        entity.transition_to(spec.target_state)
-                        await entity.save_tracked(
-                            method="bulk_transition",
-                            method_metadata={
-                                "bulk_operation_id": activity.info().workflow_id
-                            },
-                        )
-                    elif spec.operation == "method":
-                        cap_fn = get_capability(spec.method_name)
-                        result = await cap_fn(entity, {}, entity.org_id)
-                        if not result.get("needs_reasoning"):
-                            for field, value in result.get("result", {}).items():
-                                setattr(entity, field, value)
+        mongo_client = get_client()
+        async with await mongo_client.start_session() as session:
+            async with session.start_transaction():
+                for entity in entities:
+                    try:
+                        if spec.operation == "transition":
+                            entity.transition_to(spec.target_state)
                             await entity.save_tracked(
-                                method=spec.method_name,
+                                method="bulk_transition",
                                 method_metadata={
-                                    "rule_evaluation": result.get("rule_evaluation"),
-                                    "bulk_operation_id": activity.info().workflow_id,
+                                    "bulk_operation_id": activity.info().workflow_id
                                 },
                             )
-                    elif spec.operation == "update":
-                        if spec.sets:
-                            for field, value in spec.sets.items():
-                                setattr(entity, field, value)
-                            # Silent update — bypasses save_tracked() to avoid event emission
-                            await entity.get_motor_collection().update_one(
-                                {"_id": entity.id},
-                                {"$set": spec.sets, "$inc": {"version": 1}},
-                                session=session,
+                        elif spec.operation == "method":
+                            cap_fn = get_capability(spec.method_name)
+                            result = await cap_fn(entity, {}, entity.org_id)
+                            if not result.get("needs_reasoning"):
+                                for field, value in result.get("result", {}).items():
+                                    setattr(entity, field, value)
+                                await entity.save_tracked(
+                                    method=spec.method_name,
+                                    method_metadata={
+                                        "rule_evaluation": result.get("rule_evaluation"),
+                                        "bulk_operation_id": activity.info().workflow_id,
+                                    },
+                                )
+                        elif spec.operation == "update":
+                            if spec.sets:
+                                for field, value in spec.sets.items():
+                                    setattr(entity, field, value)
+                                # Silent update — bypasses save_tracked() to avoid event emission
+                                await entity.get_motor_collection().update_one(
+                                    {"_id": entity.id},
+                                    {"$set": spec.sets, "$inc": {"version": 1}},
+                                    session=session,
+                                )
+                        elif spec.operation == "create":
+                            new_entity = entity_cls(org_id=current_org_id.get(), **entity)
+                            await new_entity.save_tracked(method="bulk_create")
+                        elif spec.operation == "delete":
+                            await entity.get_motor_collection().delete_one(
+                                {"_id": entity.id}, session=session
                             )
-                    elif spec.operation == "create":
-                        new_entity = entity_cls(org_id=current_org_id.get(), **entity)
-                        await new_entity.save_tracked(method="bulk_create")
-                    elif spec.operation == "delete":
-                        await entity.get_motor_collection().delete_one(
-                            {"_id": entity.id}, session=session
-                        )
 
-                    batch_processed += 1
+                        batch_processed += 1
 
-                except VersionConflictError:
-                    # Transient — propagate for Temporal retry
-                    raise
-                except (StateMachineError, ValueError, PermissionError) as e:
-                    if spec.failure_mode == "abort":
-                        raise BulkAbortError(str(e))
-                    errors.append({
-                        "entity_id": str(entity.id) if hasattr(entity, "id") else str(entity),
-                        "error_type": type(e).__name__,
-                        "message": str(e),
-                    })
+                    except VersionConflictError:
+                        # Transient — propagate for Temporal retry
+                        raise
+                    except (StateMachineError, ValueError, PermissionError) as e:
+                        if spec.failure_mode == "abort":
+                            raise BulkAbortError(str(e))
+                        errors.append({
+                            "entity_id": str(entity.id) if hasattr(entity, "id") else str(entity),
+                            "error_type": type(e).__name__,
+                            "message": str(e),
+                        })
 
-                activity.heartbeat(f"batch progress: {batch_processed}")
+                    activity.heartbeat(f"batch progress: {batch_processed}")
 
-    total_count = offset + len(entities)
-    done = len(entities) < spec.batch_size
+        total_count = offset + len(entities)
+        done = len(entities) < spec.batch_size
 
-    return {
-        "done": done,
-        "batch_processed": batch_processed,
-        "total_count": total_count,
-        "errors": errors,
-    }
+        return {
+            "done": done,
+            "batch_processed": batch_processed,
+            "total_count": total_count,
+            "errors": errors,
+        }
 
 
 @activity.defn

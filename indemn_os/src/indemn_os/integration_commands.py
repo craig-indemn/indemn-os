@@ -41,9 +41,27 @@ def create_integration(
 
     # Resolve owner_id
     if owner == "org":
-        # Use current org (the API injects org_id from auth context)
-        # Set owner_id to org_id — resolved server-side
-        data["owner_id"] = "current_org"
+        # Resolve actual org_id from auth context via a lightweight API call.
+        # The server extracts org_id from the JWT on every authenticated
+        # request, so any scoped list endpoint reflects the current org.
+        try:
+            actors_resp = client.get("/api/actors", params={"limit": 1})
+            if actors_resp and isinstance(actors_resp, list) and actors_resp[0].get("org_id"):
+                data["owner_id"] = actors_resp[0]["org_id"]
+            else:
+                typer.echo(
+                    "Error: could not resolve current org_id from auth context",
+                    err=True,
+                )
+                raise typer.Exit(1)
+        except SystemExit:
+            raise
+        except Exception:
+            typer.echo(
+                "Error: could not resolve current org_id — check API connectivity and token",
+                err=True,
+            )
+            raise typer.Exit(1)
     elif owner == "actor" and actor_email:
         # Resolve email to actor ID
         try:
@@ -165,5 +183,5 @@ def integration_health(
         params["system_type"] = system_type
     if status:
         params["status"] = status
-    result = client.post("/api/_platform/integration/health-check", json=params)
+    result = client.post("/api/integrations/health-check", json=params)
     render(result)

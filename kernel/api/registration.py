@@ -104,7 +104,16 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         entity = entity_cls(org_id=current_org_id.get(), **data)
         created_messages = await entity.save_tracked(method="create")
         _fire_dispatch(created_messages)
-        return to_dict(entity)
+        result = to_dict(entity)
+
+        # Post-creation hook: generate setup token for human actors [U-01]
+        if entity_name == "Actor" and data.get("type") == "human":
+            from kernel.auth.jwt import generate_magic_link_token
+
+            setup_token = generate_magic_link_token(entity, purpose="setup")
+            result["setup_token"] = setup_token
+
+        return result
 
     @router.put("/{entity_id}")
     async def update_entity(entity_id: str, data: dict, actor=Depends(get_current_actor)):

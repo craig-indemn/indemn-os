@@ -7,7 +7,7 @@ excluded from auto-generated CRUD for security.
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from kernel.api.serialize import to_dict
-from kernel.auth.middleware import check_permission, get_current_actor
+from kernel.auth.middleware import check_permission, get_current_actor, mark_claims_stale
 from kernel.context import current_org_id
 from kernel.entity.definition import CapabilityActivation, EntityDefinition, FieldDefinition
 
@@ -110,7 +110,7 @@ async def enable_capability(
 
 @admin_router.put("/api/entitydefinitions/{name}/modify")
 async def modify_entity_definition(
-    name: str, data: dict, actor=Depends(get_current_actor)
+    name: str, data: dict, request: Request, actor=Depends(get_current_actor)
 ):
     """Modify an entity definition — add/remove fields.
 
@@ -144,7 +144,69 @@ async def modify_entity_definition(
         defn.version += 1
         await defn.save()
 
+        # Re-register the dynamic class so changes take effect without restart
+        from kernel.db import register_domain_entity
+
+        await register_domain_entity(defn, app=request.app)
+
+        # Regenerate the entity skill to reflect the modified definition
+        from kernel.skill.generator import generate_entity_skill
+        from kernel.skill.integrity import compute_content_hash
+        from kernel.skill.schema import Skill
+
+        skill_content = generate_entity_skill(name, defn)
+        existing_skill = await Skill.find_one({"name": name, "org_id": defn.org_id})
+        if existing_skill:
+            existing_skill.content = skill_content
+            existing_skill.content_hash = compute_content_hash(skill_content)
+            await existing_skill.save()
+        else:
+            skill = Skill(
+                org_id=defn.org_id,
+                name=name,
+                type="entity",
+                content=skill_content,
+                content_hash=compute_content_hash(skill_content),
+                status="active",
+            )
+            await skill.insert()
+
     return {"status": "modified", "added": added, "removed": removed}
+
+
+# --- Entity Migration ---
+
+
+@admin_router.post("/api/entitydefinitions/{name}/migrate")
+async def migrate_entity(name: str, request: Request, actor=Depends(get_current_actor)):
+    """Run schema migration on a domain entity."""
+    check_permission(actor, "EntityDefinition", "write")
+    from kernel.entity.migration import execute_migration, plan_migration
+
+    body = await request.json()
+    operations = body.get("operations", [])
+    dry_run = body.get("dry_run", True)
+    batch_size = body.get("batch_size", 100)
+
+    # Verify the entity definition exists
+    org_id = current_org_id.get()
+    defn = await EntityDefinition.find_one({"name": name, "org_id": org_id})
+    if not defn:
+        raise HTTPException(404, f"Entity definition '{name}' not found")
+
+    plan = await plan_migration(name, operations)
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "entity": plan.entity_name,
+            "affected_count": plan.affected_count,
+            "operations": plan.operations,
+            "preview_sample": plan.preview_sample,
+        }
+
+    result = await execute_migration(plan, batch_size=batch_size)
+    return result
 
 
 # --- Role Management ---
@@ -206,6 +268,7 @@ async def actor_add_role(data: dict, actor=Depends(get_current_actor)):
     if role.id not in target.role_ids:
         target.role_ids.append(role.id)
         await target.save_tracked(actor_id=str(actor.id), method="add_role")
+        await mark_claims_stale(str(target.id))
 
     return {"actor_id": str(target.id), "role_added": role_name}
 
@@ -284,7 +347,7 @@ async def create_service_token(data: dict, actor=Depends(get_current_actor)):
     )
 
     # Create a long-lived session (associate_service — no refresh, no expiry rotation)
-    session, _jwt = await create_session(
+    session, _jwt, _refresh = await create_session(
         service_actor,
         auth_method="token",
         session_type="associate_service",

@@ -13,7 +13,18 @@ export function Navigation() {
   const navItems = [
     { path: "/queue", label: "Queue" },
     { path: "/roles", label: "Roles" },
+    { path: "/observability", label: "Observability" },
   ];
+
+  const KERNEL_ENTITIES = new Set([
+    "Organization",
+    "Actor",
+    "Role",
+    "Integration",
+    "Attention",
+    "Runtime",
+    "Session",
+  ]);
 
   const entityItems =
     entities
@@ -22,7 +33,14 @@ export function Navigation() {
         path: `/${e.name.toLowerCase()}s`,
         label: e.name,
         isKernel: e.is_kernel_entity,
-      })) ?? [];
+      }))
+      .sort((a, b) => {
+        const aKernel = KERNEL_ENTITIES.has(a.label);
+        const bKernel = KERNEL_ENTITIES.has(b.label);
+        if (aKernel && !bKernel) return -1;
+        if (!aKernel && bKernel) return 1;
+        return a.label.localeCompare(b.label);
+      }) ?? [];
 
   const isActive = (path: string) => location.pathname === path;
 

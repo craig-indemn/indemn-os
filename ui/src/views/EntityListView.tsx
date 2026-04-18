@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import { useEntities, useEntityMeta } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntity } from "../hooks/useRealtime";
@@ -130,7 +130,17 @@ export function EntityListView() {
 
   return (
     <div>
-      <h1 className="text-xl font-semibold mb-4">{entityName} List</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-semibold">{entityName} List</h1>
+        {meta.permissions.write && (
+          <Link
+            to={`/${entityType}/new`}
+            className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+          >
+            + New {entityName}
+          </Link>
+        )}
+      </div>
       <EntityTable
         columns={columns}
         data={entities || []}

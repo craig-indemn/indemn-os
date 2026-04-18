@@ -81,7 +81,7 @@ class TestSessionLifecycle:
     """Test session creation and revocation."""
 
     async def test_create_session(self, db, org_id, actor):
-        session, token = await create_session(actor, "password")
+        session, token, refresh_token = await create_session(actor, "password")
         assert session.status == "active"
         assert session.auth_method_used == "password"
         assert token is not None
@@ -91,8 +91,8 @@ class TestSessionLifecycle:
         assert payload["actor_id"] == str(actor.id)
 
     async def test_revoke_all_sessions(self, db, org_id, actor):
-        s1, _ = await create_session(actor, "password")
-        s2, _ = await create_session(actor, "sso:google")
+        s1, _, _ = await create_session(actor, "password")
+        s2, _, _ = await create_session(actor, "sso:google")
 
         await revoke_all_sessions(actor.id)
 
@@ -106,7 +106,7 @@ class TestRevocationCache:
     """Test revocation cache with real JWTs."""
 
     async def test_revoked_token_rejected(self, db, org_id, actor):
-        session, token = await create_session(actor, "password")
+        session, token, _ = await create_session(actor, "password")
         payload = verify_access_token(token)
         assert payload is not None
 

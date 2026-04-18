@@ -17,11 +17,22 @@ class CLIClient:
     def __init__(self):
         self.base_url = os.environ.get("INDEMN_API_URL", "http://localhost:8000")
         self.token = os.environ.get("INDEMN_SERVICE_TOKEN", "")
+        if not self.token:
+            import json as _json
+            from pathlib import Path
+
+            token_file = Path.home() / ".indemn" / "credentials"
+            if token_file.exists():
+                creds = _json.loads(token_file.read_text())
+                self.token = creds.get("access_token", "")
 
     def _headers(self):
         h = {"Content-Type": "application/json"}
         if self.token:
             h["Authorization"] = f"Bearer {self.token}"
+        causation = os.environ.get("INDEMN_CAUSATION_MESSAGE_ID")
+        if causation:
+            h["X-Causation-Message-ID"] = causation
         return h
 
     def _handle_error(self, response: httpx.Response):
