@@ -64,40 +64,28 @@ def _setup_gcp_credentials():
 _checkpointer = None
 
 
-def _init_checkpointer_sync():
-    """Synchronous checkpointer init — runs in thread to avoid blocking event loop.
+async def _init_checkpointer_at_startup():
+    """Initialize async MongoDB checkpointer during app startup.
 
-    Uses 30s timeout at startup (generous for Atlas cold connect + TLS handshake
-    to 3 shards). The connection pool stays warm after init.
+    Uses motor (AsyncIOMotorClient) — the same async driver the kernel API uses.
+    This avoids the pymongo sync connectivity issue on Railway containers.
     """
+    global _checkpointer
     mongodb_uri = os.environ.get("MONGODB_URI", "")
     if not mongodb_uri:
-        return None
-    from pymongo import MongoClient
-    from langgraph.checkpoint.mongodb import MongoDBSaver
+        log.warning("No MONGODB_URI — conversation persistence disabled")
+        _checkpointer = False
+        return
 
-    client = MongoClient(
-        mongodb_uri,
-        serverSelectionTimeoutMS=30000,
-        connectTimeoutMS=10000,
-        socketTimeoutMS=10000,
-    )
-    client.admin.command("ping")
-    return MongoDBSaver(client, db_name="indemn_os_checkpoints")
-
-
-async def _init_checkpointer_at_startup():
-    """Initialize checkpointer during app startup (lifespan). Runs in thread pool."""
-    global _checkpointer
     try:
-        _checkpointer = await asyncio.get_event_loop().run_in_executor(
-            None, _init_checkpointer_sync
-        )
-        if _checkpointer:
-            log.info("MongoDB checkpointer initialized — conversation persistence enabled")
-        else:
-            log.warning("No MONGODB_URI — conversation persistence disabled")
-            _checkpointer = False
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from langgraph.checkpoint.mongodb.aio import AsyncMongoDBSaver
+
+        client = AsyncIOMotorClient(mongodb_uri)
+        # Verify connectivity
+        await client.admin.command("ping")
+        _checkpointer = AsyncMongoDBSaver(client, db_name="indemn_os_checkpoints")
+        log.info("MongoDB checkpointer initialized — conversation persistence enabled")
     except Exception as e:
         log.warning("MongoDB checkpointer unavailable — persistence disabled: %s", e)
         _checkpointer = False
