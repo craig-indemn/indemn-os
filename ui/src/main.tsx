@@ -1,3 +1,4 @@
+// Tier 2 UI: search, filtering, pagination, enums, confirmations, changes, pickers
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
