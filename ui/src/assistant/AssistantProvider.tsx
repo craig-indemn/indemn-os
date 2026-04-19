@@ -40,22 +40,21 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
     if (STATIC_ASSOCIATE_ID) return; // env var takes priority
     const token = getToken();
     if (!token) return;
-    fetch("/api/actors/?limit=100", {
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    })
-      .then((r) => r.json())
-      .then((actors: Array<Record<string, unknown>>) => {
-        const assistant = actors.find(
-          (a) =>
-            a.type === "associate" &&
-            a.status === "active" &&
-            a.mode === "reasoning" &&
-            a.runtime_id != null &&
-            (a.name as string)?.toLowerCase().includes("assistant")
-        );
-        if (assistant) setAssociateId(String(assistant._id || assistant.id));
-      })
-      .catch(() => {}); // Silent — assistant just won't connect
+    import("../api/client").then(({ apiClient: api }) => {
+      api<Array<Record<string, unknown>>>("/api/actors/?limit=100")
+        .then((actors) => {
+          const assistant = actors.find(
+            (a) =>
+              a.type === "associate" &&
+              a.status === "active" &&
+              a.mode === "reasoning" &&
+              a.runtime_id != null &&
+              (a.name as string)?.toLowerCase().includes("assistant")
+          );
+          if (assistant) setAssociateId(String(assistant._id || assistant.id));
+        })
+        .catch(() => {}); // Silent — assistant just won't connect
+    });
   }, []);
 
   const togglePanel = useCallback(() => setIsOpen((o) => !o), []);
