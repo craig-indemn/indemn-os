@@ -14,8 +14,8 @@ const CHAT_HARNESS_URL =
       : window.location.host) +
     "/ws/chat";
 
-// Default associate — per-user CRM assistant. Set via env or API.
-const DEFAULT_ASSOCIATE_ID = import.meta.env.VITE_DEFAULT_ASSOCIATE_ID || "";
+// Default associate — per-user CRM assistant. Set via env or discovered from API.
+const STATIC_ASSOCIATE_ID = import.meta.env.VITE_DEFAULT_ASSOCIATE_ID || "";
 
 const STORAGE_KEY = "indemn_assistant_messages";
 
@@ -33,6 +33,30 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
   const [isStreaming, setIsStreaming] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const connectedRef = useRef(false);
+  const [associateId, setAssociateId] = useState(STATIC_ASSOCIATE_ID);
+
+  // Discover default assistant from API if not set via env var
+  useEffect(() => {
+    if (STATIC_ASSOCIATE_ID) return; // env var takes priority
+    const token = getToken();
+    if (!token) return;
+    fetch("/api/actors/?limit=100", {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    })
+      .then((r) => r.json())
+      .then((actors: Array<Record<string, unknown>>) => {
+        const assistant = actors.find(
+          (a) =>
+            a.type === "associate" &&
+            a.status === "active" &&
+            a.mode === "reasoning" &&
+            a.runtime_id != null &&
+            (a.name as string)?.toLowerCase().includes("assistant")
+        );
+        if (assistant) setAssociateId(String(assistant._id || assistant.id));
+      })
+      .catch(() => {}); // Silent — assistant just won't connect
+  }, []);
 
   const togglePanel = useCallback(() => setIsOpen((o) => !o), []);
 
@@ -49,6 +73,18 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
   // Connect to chat harness WebSocket
   const ensureConnected = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (!associateId) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "Error: No assistant configured for this organization. Create an associate actor named 'OS Assistant' with mode=reasoning and a runtime_id.",
+        },
+      ]);
+      setIsStreaming(false);
+      return;
+    }
 
     const ws = new WebSocket(CHAT_HARNESS_URL);
     wsRef.current = ws;
@@ -58,7 +94,7 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
       ws.send(
         JSON.stringify({
           type: "connect",
-          associate_id: DEFAULT_ASSOCIATE_ID,
+          associate_id: associateId,
           auth_token: getToken(), // User's JWT — assistant inherits user's permissions
         })
       );
@@ -76,7 +112,7 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
     ws.onclose = () => {
       connectedRef.current = false;
     };
-  }, []);
+  }, [associateId]);
 
   // Handle typed JSON messages from the chat harness
   const handleHarnessMessage = useCallback((data: Record<string, unknown>) => {

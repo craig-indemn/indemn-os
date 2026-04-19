@@ -26,21 +26,34 @@ export function Navigation() {
     "Session",
   ]);
 
-  const entityItems =
+  const INFRASTRUCTURE_ENTITIES = new Set([
+    "ChangeRecord",
+    "EntityDefinition",
+    "Interaction",
+    "Lookup",
+    "Message",
+    "MessageLog",
+    "Rule",
+    "RuleGroup",
+    "Skill",
+    "TestTask",
+    "VerifyTest",
+  ]);
+
+  const allItems =
     entities
       ?.filter((e) => e.permissions.read)
       .map((e) => ({
         path: `/${e.name.toLowerCase()}s`,
         label: e.name,
-        isKernel: e.is_kernel_entity,
+        isKernel: KERNEL_ENTITIES.has(e.name),
+        isInfra: INFRASTRUCTURE_ENTITIES.has(e.name),
       }))
-      .sort((a, b) => {
-        const aKernel = KERNEL_ENTITIES.has(a.label);
-        const bKernel = KERNEL_ENTITIES.has(b.label);
-        if (aKernel && !bKernel) return -1;
-        if (!aKernel && bKernel) return 1;
-        return a.label.localeCompare(b.label);
-      }) ?? [];
+      .sort((a, b) => a.label.localeCompare(b.label)) ?? [];
+
+  const domainItems = allItems.filter((e) => !e.isKernel && !e.isInfra);
+  const kernelItems = allItems.filter((e) => e.isKernel);
+  const infraItems = allItems.filter((e) => e.isInfra);
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -68,12 +81,12 @@ export function Navigation() {
             </Link>
           ))}
         </div>
-        {entityItems.length > 0 && (
+        {domainItems.length > 0 && (
           <div className="px-3 mb-4">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
               Entities
             </p>
-            {entityItems.map((item) => (
+            {domainItems.map((item) => (
               <Link
                 key={item.path}
                 to={item.path}
@@ -84,9 +97,26 @@ export function Navigation() {
                 }`}
               >
                 {item.label}
-                {item.isKernel && (
-                  <span className="ml-1 text-xs text-gray-400">K</span>
-                )}
+              </Link>
+            ))}
+          </div>
+        )}
+        {kernelItems.length > 0 && (
+          <div className="px-3 mb-4">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+              System
+            </p>
+            {kernelItems.map((item) => (
+              <Link
+                key={item.path}
+                to={item.path}
+                className={`block px-3 py-1.5 rounded text-sm ${
+                  isActive(item.path)
+                    ? "bg-blue-50 text-blue-700 font-medium"
+                    : "text-gray-600 hover:bg-gray-100"
+                }`}
+              >
+                {item.label}
               </Link>
             ))}
           </div>

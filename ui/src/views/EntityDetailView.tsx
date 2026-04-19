@@ -1,4 +1,5 @@
 import { useParams, Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { useEntity, useEntityMeta, useChanges } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntityDetail } from "../hooks/useRealtime";
@@ -6,6 +7,40 @@ import { apiClient } from "../api/client";
 import { EntityForm } from "../components/EntityForm";
 import { StateIndicator } from "../components/StateIndicator";
 import { ChangeTimeline } from "../components/ChangeTimeline";
+
+function ResolvedRelationship({
+  fieldName,
+  entityType,
+  entityId,
+}: {
+  fieldName: string;
+  entityType: string;
+  entityId: string;
+}) {
+  const slug = entityType.toLowerCase() + "s";
+  const { data } = useQuery({
+    queryKey: ["resolved-name", entityType, entityId],
+    queryFn: () => apiClient<Record<string, unknown>>(`/api/${slug}/${entityId}`),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!entityId && entityId.length >= 12,
+  });
+
+  const displayName = data
+    ? String(data.name || data.email || data.title || entityId.slice(-8))
+    : entityId.slice(-8) + "…";
+
+  return (
+    <div className="text-sm">
+      <span className="text-gray-500">{fieldName.replace(/_/g, " ")}: </span>
+      <Link
+        to={`/${slug}/${entityId}`}
+        className="text-blue-600 hover:underline"
+      >
+        {displayName}
+      </Link>
+    </div>
+  );
+}
 
 export function EntityDetailView() {
   const { entityType, entityId } = useParams<{
@@ -111,17 +146,14 @@ export function EntityDetailView() {
 
           {/* Related entities */}
           {meta.fields
-            .filter((f) => f.is_relationship && entity[f.name])
+            .filter((f) => f.is_relationship && entity[f.name] && f.relationship_target)
             .map((f) => (
-              <div key={f.name} className="text-sm">
-                <span className="text-gray-500">{f.name}: </span>
-                <Link
-                  to={`/${f.relationship_target?.toLowerCase()}s/${entity[f.name]}`}
-                  className="text-blue-600 hover:underline"
-                >
-                  {String(entity[f.name]).slice(-8)}
-                </Link>
-              </div>
+              <ResolvedRelationship
+                key={f.name}
+                fieldName={f.name}
+                entityType={f.relationship_target!}
+                entityId={String(entity[f.name])}
+              />
             ))}
 
           {/* Recent changes */}
