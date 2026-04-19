@@ -38,3 +38,4 @@ htmlcov/
 *_secret.json
 *.pem
 *.key
+ui/node_modules/
