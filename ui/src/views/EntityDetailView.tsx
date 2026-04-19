@@ -95,6 +95,7 @@ export function EntityDetailView() {
               <h3 className="text-sm font-medium text-gray-700 mb-2">State</h3>
               <StateIndicator
                 state={currentState}
+                entityName={String(entity.name || entity.title || entityName)}
                 availableTransitions={meta.state_machine[currentState] || []}
                 onTransition={async (to) => {
                   await apiClient(

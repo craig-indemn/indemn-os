@@ -16,6 +16,26 @@ const baseClass =
 export function FormField({ field, control }: Props) {
   const { field: formField } = useController({ name: field.name, control });
 
+  // Fields with enum_values render as dropdowns regardless of type
+  if (field.enum_values?.length) {
+    return (
+      <select
+        value={String(formField.value ?? "")}
+        onChange={formField.onChange}
+        onBlur={formField.onBlur}
+        name={formField.name}
+        className={baseClass}
+      >
+        <option value="">Select...</option>
+        {field.enum_values.map((v) => (
+          <option key={v} value={v}>
+            {v.replace(/_/g, " ")}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
   switch (field.type) {
     case "str":
       return (

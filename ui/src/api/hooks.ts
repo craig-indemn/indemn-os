@@ -54,11 +54,23 @@ export function useQueue() {
 export function useChanges(entityName: string, entityId: string) {
   return useQuery({
     queryKey: ["changes", entityName, entityId],
-    queryFn: () =>
-      apiClient<ChangeRecord[]>(
-        `/api/audit/changes?entity_type=${entityName}&entity_id=${entityId}&limit=20`
-      ),
-    enabled: !!entityId,
+    queryFn: async () => {
+      const trace = await apiClient<{
+        timeline: Array<Record<string, unknown>>;
+        summary: Record<string, unknown>;
+      }>(`/api/trace/entity/${entityName}/${entityId}?limit=20`);
+      // Extract change entries from the unified timeline
+      return (trace.timeline || [])
+        .filter((e) => e.source === "changes")
+        .map((e) => ({
+          id: String(e.entity_id || e.id || ""),
+          timestamp: String(e.timestamp || ""),
+          change_type: String(e.change_type || ""),
+          method: e.method as string | undefined,
+          changes: e.changes as Array<{ field: string; old: unknown; new: unknown }> | undefined,
+        })) as ChangeRecord[];
+    },
+    enabled: !!entityId && !!entityName,
   });
 }
 
