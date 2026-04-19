@@ -26,11 +26,11 @@ export function ChangeTimeline({ changes }: Props) {
               <div key={j} className="text-gray-500 ml-2">
                 <span className="font-medium">{fc.field}</span>:{" "}
                 <span className="text-red-400 line-through">
-                  {fc.old != null ? String(fc.old) : "∅"}
+                  {fc.old_value != null ? String(fc.old_value) : "∅"}
                 </span>{" "}
                 →{" "}
                 <span className="text-green-600">
-                  {fc.new != null ? String(fc.new) : "∅"}
+                  {fc.new_value != null ? String(fc.new_value) : "∅"}
                 </span>
               </div>
             ))}

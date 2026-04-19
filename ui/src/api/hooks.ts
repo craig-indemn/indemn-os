@@ -62,13 +62,23 @@ export function useChanges(entityName: string, entityId: string) {
       // Extract change entries from the unified timeline
       return (trace.timeline || [])
         .filter((e) => e.source === "changes")
-        .map((e) => ({
-          id: String(e.entity_id || e.id || ""),
-          timestamp: String(e.timestamp || ""),
-          change_type: String(e.change_type || ""),
-          method: e.method as string | undefined,
-          changes: e.changes as Array<{ field: string; old: unknown; new: unknown }> | undefined,
-        })) as ChangeRecord[];
+        .map((e) => {
+          const raw = (e.changes || []) as Array<Record<string, unknown>>;
+          return {
+            id: String(e.entity_id || e.id || ""),
+            entity_type: String(e.entity_type || entityName),
+            entity_id: String(e.entity_id || entityId),
+            actor_id: String(e.actor_id || ""),
+            timestamp: String(e.timestamp || ""),
+            change_type: String(e.change_type || ""),
+            method: e.method as string | undefined,
+            changes: raw.map((c) => ({
+              field: String(c.field || ""),
+              old_value: c.old_value ?? c.old,
+              new_value: c.new_value ?? c.new,
+            })),
+          } satisfies ChangeRecord;
+        });
     },
     enabled: !!entityId && !!entityName,
   });
