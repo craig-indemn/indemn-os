@@ -22,11 +22,18 @@ export interface EntityChange {
   data: Record<string, unknown>;
 }
 
+const MAX_RECONNECT_ATTEMPTS = 20;
+
 class WebSocketManager {
   private ws: WebSocket | null = null;
   private subscriptions = new Map<string, Subscription>();
   private reconnectAttempts = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private _disconnected = false;
+
+  get isDisconnected() {
+    return this._disconnected;
+  }
 
   connect() {
     const token = getToken();
@@ -38,6 +45,7 @@ class WebSocketManager {
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
+      this._disconnected = false;
       this.resyncSubscriptions();
       // Keepalive pings — Railway drops idle connections at 60s
       this.pingInterval = setInterval(() => {
@@ -59,6 +67,11 @@ class WebSocketManager {
 
     this.ws.onclose = () => {
       if (this.pingInterval) clearInterval(this.pingInterval);
+      if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        this._disconnected = true;
+        console.warn(`WebSocket: gave up after ${MAX_RECONNECT_ATTEMPTS} attempts`);
+        return;
+      }
       const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
       this.reconnectAttempts++;
       setTimeout(() => this.connect(), delay);

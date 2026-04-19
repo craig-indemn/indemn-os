@@ -1,9 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAssistant } from "./useAssistant";
 
 export function AssistantPanel() {
-  const { messages, isOpen, togglePanel, isStreaming, clearMessages } = useAssistant();
+  const { messages, isOpen, togglePanel, isStreaming, clearMessages, sendMessage } =
+    useAssistant();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [input, setInput] = useState("");
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -62,6 +64,37 @@ export function AssistantPanel() {
           </div>
         )}
         <div ref={bottomRef} />
+      </div>
+      <div className="border-t p-3">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && input.trim() && !isStreaming) {
+                sendMessage(input.trim());
+                setInput("");
+              }
+            }}
+            placeholder="Type a message..."
+            disabled={isStreaming}
+            className="flex-1 px-3 py-1.5 border rounded text-sm focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+            autoFocus
+          />
+          <button
+            onClick={() => {
+              if (input.trim() && !isStreaming) {
+                sendMessage(input.trim());
+                setInput("");
+              }
+            }}
+            disabled={!input.trim() || isStreaming}
+            className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-30"
+          >
+            Send
+          </button>
+        </div>
       </div>
     </div>
   );

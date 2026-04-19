@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AssistantContext, type AssistantMessage } from "./useAssistant";
 import { AssistantPanel } from "./AssistantPanel";
 import { getToken } from "../api/client";
+import { useAuth } from "../auth/useAuth";
 
 // Chat harness WebSocket URL — resolves from env or derives from current host
 const CHAT_HARNESS_URL =
@@ -33,22 +34,13 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
   const [isStreaming, setIsStreaming] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const connectedRef = useRef(false);
+  const { isAuthenticated } = useAuth();
   const [associateId, setAssociateId] = useState(STATIC_ASSOCIATE_ID);
 
-  // Discover default assistant from API if not set via env var.
-  // Re-runs on token changes (login/logout) via storage event polling.
-  const [tokenPresent, setTokenPresent] = useState(!!getToken());
-  useEffect(() => {
-    const check = setInterval(() => {
-      const has = !!getToken();
-      setTokenPresent((prev) => (prev !== has ? has : prev));
-    }, 1000);
-    return () => clearInterval(check);
-  }, []);
-
+  // Discover default assistant from API after login
   useEffect(() => {
     if (associateId) return; // already resolved
-    if (!tokenPresent) return; // not logged in yet
+    if (!isAuthenticated) return; // not logged in yet
     import("../api/client").then(({ apiClient: api }) => {
       api<Array<Record<string, unknown>>>("/api/actors/?limit=100")
         .then((actors) => {
@@ -64,7 +56,7 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
         })
         .catch(() => {});
     });
-  }, [tokenPresent, associateId]);
+  }, [isAuthenticated, associateId]);
 
   const togglePanel = useCallback(() => setIsOpen((o) => !o), []);
 
