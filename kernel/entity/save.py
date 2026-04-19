@@ -123,7 +123,7 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                         # Update with optimistic concurrency
                         result = await entity.get_motor_collection().update_one(
                             {"_id": entity.id, "version": expected_version},
-                            {"$set": entity.model_dump(by_alias=True)},
+                            {"$set": _serialize_entity(entity)},
                             session=session,
                         )
                         if result.modified_count == 0:
