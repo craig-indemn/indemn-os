@@ -65,13 +65,24 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         limit: int = Query(20, le=100),
         offset: int = 0,
         status: Optional[str] = None,
+        search: Optional[str] = None,
         sort: str = "-created_at",
         actor=Depends(get_current_actor),
     ):
         check_permission(actor, entity_name, "read")
         filter_doc = {}
         if status:
-            filter_doc["status"] = status
+            # Resolve the actual state field name (e.g., "stage" for Company)
+            state_field = getattr(entity_cls, "_state_field_name", None) or "status"
+            filter_doc[state_field] = status
+        if search:
+            # Search by name or title field (case-insensitive regex)
+            import re
+            pattern = re.escape(search)
+            filter_doc["$or"] = [
+                {"name": {"$regex": pattern, "$options": "i"}},
+                {"title": {"$regex": pattern, "$options": "i"}},
+            ]
         entities = await entity_cls.find_scoped(filter_doc).skip(offset).limit(limit).to_list()
         return [to_dict(e) for e in entities]
 
