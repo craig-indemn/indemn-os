@@ -35,11 +35,20 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
   const connectedRef = useRef(false);
   const [associateId, setAssociateId] = useState(STATIC_ASSOCIATE_ID);
 
-  // Discover default assistant from API if not set via env var
+  // Discover default assistant from API if not set via env var.
+  // Re-runs on token changes (login/logout) via storage event polling.
+  const [tokenPresent, setTokenPresent] = useState(!!getToken());
   useEffect(() => {
-    if (STATIC_ASSOCIATE_ID) return; // env var takes priority
-    const token = getToken();
-    if (!token) return;
+    const check = setInterval(() => {
+      const has = !!getToken();
+      setTokenPresent((prev) => (prev !== has ? has : prev));
+    }, 1000);
+    return () => clearInterval(check);
+  }, []);
+
+  useEffect(() => {
+    if (associateId) return; // already resolved
+    if (!tokenPresent) return; // not logged in yet
     import("../api/client").then(({ apiClient: api }) => {
       api<Array<Record<string, unknown>>>("/api/actors/?limit=100")
         .then((actors) => {
@@ -53,9 +62,9 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
           );
           if (assistant) setAssociateId(String(assistant._id || assistant.id));
         })
-        .catch(() => {}); // Silent — assistant just won't connect
+        .catch(() => {});
     });
-  }, []);
+  }, [tokenPresent, associateId]);
 
   const togglePanel = useCallback(() => setIsOpen((o) => !o), []);
 
