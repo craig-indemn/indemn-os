@@ -259,30 +259,51 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
   );
 
   // Build context from current UI state [G-59]
-  // Per base-ui-operational-surface: {view_type, current_entity, current_filter, role_focus}
+  // Gives the assistant awareness of what the user is looking at.
   const buildContext = () => {
     const path = window.location.pathname;
     const parts = path.split("/").filter(Boolean);
+    const entitySlug = parts[0];
+    const entityId = parts.length >= 2 ? parts[1] : undefined;
+
     const context: Record<string, unknown> = {
-      view_type: parts[0] || "queue",
       current_path: path,
-      entity_type: parts.length >= 2 ? parts[0] : undefined,
-      entity_id: parts.length >= 2 ? parts[1] : undefined,
+      entity_type_slug: entitySlug || "queue",
     };
 
-    // Inject full entity data from TanStack Query cache when on a detail view [P-09]
-    // Query keys use resolved entity names (e.g. "Lead") while URLs use slugs (e.g. "leads"),
-    // so we search cache entries matching ["entity", *, entityId].
-    if (context.entity_type && context.entity_id) {
-      const entityId = context.entity_id as string;
-      const cached = queryClient.getQueriesData<Record<string, unknown>>({
-        queryKey: ["entity"],
+    if (entitySlug && entitySlug !== "queue" && entitySlug !== "roles" && entitySlug !== "observability") {
+      context.view_type = entityId ? "detail" : "list";
+
+      // Inject entity metadata (fields, state machine) from cache
+      const metaCache = queryClient.getQueriesData<Record<string, unknown>>({
+        queryKey: ["entity-meta-detail"],
       });
-      const match = cached.find(
-        ([key]) => Array.isArray(key) && key[2] === entityId
-      );
-      if (match?.[1]) {
-        context.entity_data = match[1];
+      const metaMatch = metaCache.find(([key]) => {
+        if (!Array.isArray(key)) return false;
+        const name = String(key[1] || "").toLowerCase();
+        return entitySlug.startsWith(name);
+      });
+      if (metaMatch?.[1]) {
+        const meta = metaMatch[1] as Record<string, unknown>;
+        context.entity_name = meta.name;
+        context.entity_fields = (meta.fields as Array<Record<string, unknown>>)?.map(
+          (f) => `${f.name} (${f.type}${f.enum_values ? `, enum: ${(f.enum_values as string[]).join("/")}` : ""})`
+        );
+        context.entity_states = meta.state_machine ? Object.keys(meta.state_machine as Record<string, unknown>) : undefined;
+      }
+
+      // Inject full entity data on detail views
+      if (entityId) {
+        context.entity_id = entityId;
+        const cached = queryClient.getQueriesData<Record<string, unknown>>({
+          queryKey: ["entity"],
+        });
+        const match = cached.find(
+          ([key]) => Array.isArray(key) && key[2] === entityId
+        );
+        if (match?.[1]) {
+          context.entity_data = match[1];
+        }
       }
     }
 
