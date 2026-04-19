@@ -26,7 +26,7 @@ def bulk_list(status: str = typer.Option(None, "--status")):
     params = {}
     if status:
         params["status"] = status
-    result = client.get("/api/bulk", params=params)
+    result = client.get("/api/bulk/", params=params)
     render(result, "table")
 
 

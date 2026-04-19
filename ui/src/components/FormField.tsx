@@ -106,23 +106,9 @@ export function FormField({ field, control }: Props) {
           className={baseClass}
         />
       );
+    // "enum" type: handled by the enum_values check above the switch.
+    // Falls through to default (text input) for type="enum" without enum_values.
     case "enum":
-      return (
-        <select
-          value={String(formField.value ?? "")}
-          onChange={formField.onChange}
-          onBlur={formField.onBlur}
-          name={formField.name}
-          className={baseClass}
-        >
-          <option value="">Select...</option>
-          {field.enum_values?.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
-          ))}
-        </select>
-      );
     case "objectid":
       return (
         <EntityPicker

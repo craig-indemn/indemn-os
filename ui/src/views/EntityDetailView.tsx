@@ -1,46 +1,12 @@
 import { useParams, Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { useEntity, useEntityMeta, useChanges } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntityDetail } from "../hooks/useRealtime";
 import { apiClient } from "../api/client";
 import { EntityForm } from "../components/EntityForm";
+import { ResolvedLink } from "../components/ResolvedLink";
 import { StateIndicator } from "../components/StateIndicator";
 import { ChangeTimeline } from "../components/ChangeTimeline";
-
-function ResolvedRelationship({
-  fieldName,
-  entityType,
-  entityId,
-}: {
-  fieldName: string;
-  entityType: string;
-  entityId: string;
-}) {
-  const slug = entityType.toLowerCase() + "s";
-  const { data } = useQuery({
-    queryKey: ["resolved-name", entityType, entityId],
-    queryFn: () => apiClient<Record<string, unknown>>(`/api/${slug}/${entityId}`),
-    staleTime: 5 * 60 * 1000,
-    enabled: !!entityId && entityId.length >= 12,
-  });
-
-  const displayName = data
-    ? String(data.name || data.email || data.title || entityId.slice(-8))
-    : entityId.slice(-8) + "…";
-
-  return (
-    <div className="text-sm">
-      <span className="text-gray-500">{fieldName.replace(/_/g, " ")}: </span>
-      <Link
-        to={`/${slug}/${entityId}`}
-        className="text-blue-600 hover:underline"
-      >
-        {displayName}
-      </Link>
-    </div>
-  );
-}
 
 export function EntityDetailView() {
   const { entityType, entityId } = useParams<{
@@ -98,14 +64,18 @@ export function EntityDetailView() {
                 entityName={String(entity.name || entity.title || entityName)}
                 availableTransitions={meta.state_machine[currentState] || []}
                 onTransition={async (to) => {
-                  await apiClient(
-                    `/api/${entityType}/${entityId}/transition`,
-                    {
-                      method: "POST",
-                      body: JSON.stringify({ to }),
-                    }
-                  );
-                  refetch();
+                  try {
+                    await apiClient(
+                      `/api/${entityType}/${entityId}/transition`,
+                      {
+                        method: "POST",
+                        body: JSON.stringify({ to }),
+                      }
+                    );
+                    refetch();
+                  } catch (err) {
+                    alert(`Transition failed: ${err instanceof Error ? err.message : String(err)}`);
+                  }
                 }}
                 canTransition={meta.permissions.write}
               />
@@ -116,11 +86,15 @@ export function EntityDetailView() {
             <button
               key={cap.name}
               onClick={async () => {
-                await apiClient(
-                  `/api/${entityType}/${entityId}/${cap.name.replace(/_/g, "-")}?auto=true`,
-                  { method: "POST", body: "{}" }
-                );
-                refetch();
+                try {
+                  await apiClient(
+                    `/api/${entityType}/${entityId}/${cap.name.replace(/_/g, "-")}?auto=true`,
+                    { method: "POST", body: "{}" }
+                  );
+                  refetch();
+                } catch (err) {
+                  alert(`${cap.name} failed: ${err instanceof Error ? err.message : String(err)}`);
+                }
               }}
               className="w-full px-3 py-2 text-sm border rounded hover:bg-blue-50 text-blue-600 text-left"
             >
@@ -133,11 +107,15 @@ export function EntityDetailView() {
             <button
               key={method.name}
               onClick={async () => {
-                await apiClient(
-                  `/api/${entityType}/${entityId}/${method.name.replace(/_/g, "-")}`,
-                  { method: "POST", body: "{}" }
-                );
-                refetch();
+                try {
+                  await apiClient(
+                    `/api/${entityType}/${entityId}/${method.name.replace(/_/g, "-")}`,
+                    { method: "POST", body: "{}" }
+                  );
+                  refetch();
+                } catch (err) {
+                  alert(`${method.name} failed: ${err instanceof Error ? err.message : String(err)}`);
+                }
               }}
               className="w-full px-3 py-2 text-sm border rounded hover:bg-green-50 text-green-600 text-left"
             >
@@ -149,12 +127,13 @@ export function EntityDetailView() {
           {meta.fields
             .filter((f) => f.is_relationship && entity[f.name] && f.relationship_target)
             .map((f) => (
-              <ResolvedRelationship
-                key={f.name}
-                fieldName={f.name}
-                entityType={f.relationship_target!}
-                entityId={String(entity[f.name])}
-              />
+              <div key={f.name} className="text-sm">
+                <span className="text-gray-500">{f.name.replace(/_/g, " ")}: </span>
+                <ResolvedLink
+                  entityType={f.relationship_target!}
+                  entityId={String(entity[f.name])}
+                />
+              </div>
             ))}
 
           {/* Recent changes */}

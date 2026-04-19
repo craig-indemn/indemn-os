@@ -32,7 +32,7 @@ def create_entity_def(
         data["description"] = description
 
     client = CLIClient()
-    result = client.post("/api/entitydefinitions", json=data)
+    result = client.post("/api/entitydefinitions/", json=data)
     typer.echo(f"Created entity definition: {result.get('name', name)}")
     render(result, "json")
 
@@ -41,7 +41,7 @@ def create_entity_def(
 def list_entity_defs(fmt: str = typer.Option("json", "--format")):
     """List all entity definitions for the current org."""
     client = CLIClient()
-    result = client.get("/api/entitydefinitions")
+    result = client.get("/api/entitydefinitions/")
     render(result, fmt)
 
 

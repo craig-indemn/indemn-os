@@ -149,8 +149,9 @@ export function EntityListView() {
       {/* Pagination */}
       <div className="flex items-center justify-between mt-4 text-sm text-gray-500">
         <span>
-          Showing {page * PAGE_SIZE + 1}–
-          {page * PAGE_SIZE + (entities?.length || 0)}
+          {(entities?.length || 0) > 0
+            ? `Showing ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + (entities?.length || 0)}`
+            : "No results"}
         </span>
         <div className="flex gap-2">
           <button

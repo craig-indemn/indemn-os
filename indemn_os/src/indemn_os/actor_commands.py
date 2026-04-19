@@ -93,7 +93,7 @@ def list_actors(
     client = CLIClient()
     params = {"limit": 100}
     if type:
-        params["status"] = type  # uses generic filter
+        params["type"] = type
     result = client.get("/api/actors/", params=params)
     render(result, fmt)
 

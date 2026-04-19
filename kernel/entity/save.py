@@ -13,6 +13,7 @@ This is non-negotiable. ALL entity modifications go through this.
 
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import uuid4
 
 from bson import ObjectId
@@ -175,8 +176,6 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
 
 def _serialize_entity(entity) -> dict:
     """Serialize entity to dict. Works for kernel (Beanie) and domain (Pydantic)."""
-    from decimal import Decimal
-
     data = entity.model_dump(by_alias=True)
     # pymongo cannot encode Decimal — convert to float before writing.
     _convert_decimals(data)
@@ -185,8 +184,6 @@ def _serialize_entity(entity) -> dict:
 
 def _convert_decimals(obj):
     """Recursively convert Decimal values to float for BSON serialization."""
-    from decimal import Decimal
-
     if isinstance(obj, dict):
         for key in obj:
             if isinstance(obj[key], Decimal):
