@@ -9,7 +9,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="h-screen bg-gray-50 flex">
       {sidebarOpen && <Navigation />}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <StatusBanner />
@@ -17,7 +17,7 @@ export function Shell({ children }: { children: ReactNode }) {
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
         />
-        <main className="flex-1 p-6 overflow-auto">{children}</main>
+        <main className="flex-1 p-6 min-h-0 overflow-hidden">{children}</main>
       </div>
       <KeyboardHelp />
     </div>

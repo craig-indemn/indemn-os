@@ -109,8 +109,8 @@ export function EntityListView() {
   const canBulk = !!meta.state_machine && meta.permissions.write;
 
   return (
-    <div className="min-w-0">
-      <div className="flex items-center justify-between mb-4">
+    <div className="min-w-0 h-full flex flex-col">
+      <div className="flex items-center justify-between mb-4 flex-shrink-0">
         <h1 className="text-xl font-semibold">{entityName} List</h1>
         {meta.permissions.write && (
           <Link
@@ -123,7 +123,7 @@ export function EntityListView() {
       </div>
 
       {/* Search + Filter bar */}
-      <div className="flex gap-3 mb-4">
+      <div className="flex gap-3 mb-4 flex-shrink-0">
         <input
           type="text"
           placeholder={`Search ${entityName.toLowerCase()}s...`}
@@ -181,17 +181,19 @@ export function EntityListView() {
         </div>
       )}
 
-      <EntityTable
-        columns={columns}
-        data={entities || []}
-        onRowClick={(row) => navigate(`/${entityType}/${row._id}`)}
-        enableSelection={canBulk}
-        onSelectionChange={setSelectedIds}
-        storageKey={entityName}
-      />
+      <div className="flex-1 min-h-0">
+        <EntityTable
+          columns={columns}
+          data={entities || []}
+          onRowClick={(row) => navigate(`/${entityType}/${row._id}`)}
+          enableSelection={canBulk}
+          onSelectionChange={setSelectedIds}
+          storageKey={entityName}
+        />
+      </div>
 
       {/* Pagination */}
-      <div className="flex items-center justify-between mt-4 text-sm text-gray-500">
+      <div className="flex items-center justify-between mt-4 text-sm text-gray-500 flex-shrink-0">
         <span>
           {(entities?.length || 0) > 0
             ? `Showing ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + (entities?.length || 0)}`

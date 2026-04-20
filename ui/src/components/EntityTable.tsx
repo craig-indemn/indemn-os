@@ -96,9 +96,9 @@ export function EntityTable({
   });
 
   return (
-    <div>
+    <div className="h-full flex flex-col">
       {/* Column visibility toggle */}
-      <div className="flex justify-end mb-2">
+      <div className="flex justify-end mb-2 flex-shrink-0">
         <div className="relative">
           <button
             onClick={() => setShowColumnPicker((v) => !v)}
@@ -144,9 +144,9 @@ export function EntityTable({
       </div>
 
       {/* Spreadsheet-style scrollable table */}
-      <div className="overflow-x-auto border rounded-lg">
+      <div className="flex-1 min-h-0 overflow-auto border rounded-lg scrollbar-visible">
         <table className="divide-y divide-gray-200" style={{ minWidth: "100%" }}>
-          <thead className="bg-gray-50">
+          <thead className="bg-gray-50 sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
