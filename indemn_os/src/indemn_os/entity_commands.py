@@ -32,7 +32,7 @@ def create_entity_def(
         data["description"] = description
 
     client = CLIClient()
-    result = client.post("/api/entitydefinitions/", json=data)
+    result = client.post("/api/entitydefinitions", json=data)
     typer.echo(f"Created entity definition: {result.get('name', name)}")
     render(result, "json")
 
@@ -41,8 +41,36 @@ def create_entity_def(
 def list_entity_defs(fmt: str = typer.Option("json", "--format")):
     """List all entity definitions for the current org."""
     client = CLIClient()
-    result = client.get("/api/entitydefinitions/")
+    result = client.get("/api/entitydefinitions")
     render(result, fmt)
+
+
+@entity_app.command("get")
+def get_entity_def(name: str, fmt: str = typer.Option("json", "--format")):
+    """Get an entity definition by name."""
+    client = CLIClient()
+    result = client.get(f"/api/entitydefinitions/{name}")
+    render(result, fmt)
+
+
+@entity_app.command("delete")
+def delete_entity_def(
+    name: str,
+    force: bool = typer.Option(False, "--force", help="Skip confirmation"),
+):
+    """Delete an entity definition and its associated skill."""
+    if not force:
+        confirm = typer.confirm(f"Delete entity definition '{name}'? This cannot be undone")
+        if not confirm:
+            raise typer.Abort()
+
+    client = CLIClient()
+    result = client.delete(f"/api/entitydefinitions/{name}")
+    typer.echo(f"Deleted entity definition: {name}")
+    if result.get("skill_deleted"):
+        typer.echo(f"  Also deleted skill: {name}")
+    if result.get("collection_dropped"):
+        typer.echo(f"  Also dropped collection: {result['collection_dropped']}")
 
 
 @entity_app.command("modify")

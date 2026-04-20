@@ -61,6 +61,60 @@ async def create_entity_definition(request: Request, data: dict, actor=Depends(g
     return to_dict(defn)
 
 
+@admin_router.get("/api/entitydefinitions/{name}")
+async def get_entity_definition(name: str, actor=Depends(get_current_actor)):
+    """Get a single entity definition by name."""
+    org_id = current_org_id.get()
+    defn = await EntityDefinition.find_one({"name": name, "org_id": org_id})
+    if not defn:
+        raise HTTPException(404, f"Entity definition '{name}' not found")
+    return to_dict(defn)
+
+
+@admin_router.delete("/api/entitydefinitions/{name}")
+async def delete_entity_definition(name: str, actor=Depends(get_current_actor)):
+    """Delete an entity definition, its skill, and optionally its collection."""
+    check_permission(actor, "EntityDefinition", "write")
+    org_id = current_org_id.get()
+
+    defn = await EntityDefinition.find_one({"name": name, "org_id": org_id})
+    if not defn:
+        raise HTTPException(404, f"Entity definition '{name}' not found")
+
+    result = {"deleted": name, "skill_deleted": False, "collection_dropped": None}
+
+    # Delete the associated skill
+    from kernel.skill.schema import Skill
+
+    skill = await Skill.find_one({"name": name, "org_id": org_id})
+    if skill:
+        await skill.delete()
+        result["skill_deleted"] = True
+
+    # Drop the collection if empty
+    collection_name = defn.collection_name
+    if collection_name:
+        from kernel.db import get_database
+
+        db = get_database()
+        collection = db[collection_name]
+        count = await collection.count_documents({"org_id": org_id})
+        if count == 0:
+            await collection.drop()
+            result["collection_dropped"] = collection_name
+
+    # Remove from entity registry
+    from kernel.db import ENTITY_REGISTRY
+
+    if name in ENTITY_REGISTRY:
+        del ENTITY_REGISTRY[name]
+
+    # Delete the definition
+    await defn.delete()
+
+    return result
+
+
 @admin_router.put("/api/entitydefinitions/{name}/enable-capability")
 async def enable_capability(
     request: Request,
