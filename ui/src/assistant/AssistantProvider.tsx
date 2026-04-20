@@ -409,6 +409,25 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    // Active filters from URL
+    const searchParams = new URLSearchParams(window.location.search);
+    const statusFilter = searchParams.get("status");
+    const searchQuery = searchParams.get("search");
+    if (statusFilter) context.active_filter_status = statusFilter;
+    if (searchQuery) context.search_query = searchQuery;
+
+    // Visible columns from localStorage (EntityTable persists these)
+    if (context.entity_name) {
+      try {
+        const colVis = localStorage.getItem(`col-vis-${context.entity_name}`);
+        if (colVis) {
+          const parsed = JSON.parse(colVis);
+          const hiddenCols = Object.entries(parsed).filter(([, v]) => !v).map(([k]) => k);
+          if (hiddenCols.length > 0) context.hidden_columns = hiddenCols;
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
     return context;
   };
 
