@@ -117,41 +117,69 @@ export function AssistantPanel({ width, inputRef, onClose }: Props) {
   );
 }
 
-/** Try to parse message content as entity data (JSON with _id fields). */
+/** Try to parse message content as entity data (JSON with _id fields).
+ *  Handles mixed content like: [{...}]\n\nHere is a list of companies.
+ *  Uses bracket-depth counting to find where the JSON ends.
+ */
 function tryDetectEntityData(
   content: string
-): { type: "list" | "detail"; data: unknown } | null {
+): { type: "list" | "detail"; data: unknown; remainder: string } | null {
   if (!content || content.length < 10) return null;
   const trimmed = content.trim();
 
-  // Must start with [ or { to be JSON
-  if (trimmed[0] !== "[" && trimmed[0] !== "{") return null;
+  // Find the first [ or { in the content
+  const arrStart = trimmed.indexOf("[");
+  const objStart = trimmed.indexOf("{");
+
+  // Determine which comes first
+  let start = -1;
+  let openChar = "";
+  let closeChar = "";
+  if (arrStart >= 0 && (objStart < 0 || arrStart <= objStart)) {
+    start = arrStart; openChar = "["; closeChar = "]";
+  } else if (objStart >= 0) {
+    start = objStart; openChar = "{"; closeChar = "}";
+  }
+  if (start < 0) return null;
+
+  // Only detect if JSON starts near the beginning (allow small preamble)
+  if (start > 20) return null;
+
+  // Bracket-depth counting to find the matching close bracket
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let end = -1;
+  for (let i = start; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === openChar) depth++;
+    if (ch === closeChar) { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end < 0) return null;
 
   try {
-    const data = JSON.parse(trimmed);
+    const data = JSON.parse(trimmed.slice(start, end + 1));
+    const remainder = trimmed.slice(end + 1).trim();
 
-    // Entity list: array of objects with _id
     if (
-      Array.isArray(data) &&
-      data.length > 0 &&
-      typeof data[0] === "object" &&
-      data[0] !== null &&
-      "_id" in data[0]
+      Array.isArray(data) && data.length > 0 &&
+      typeof data[0] === "object" && data[0] !== null && "_id" in data[0]
     ) {
-      return { type: "list", data };
+      return { type: "list", data, remainder };
     }
 
-    // Single entity: object with _id
     if (
-      typeof data === "object" &&
-      data !== null &&
-      !Array.isArray(data) &&
-      "_id" in data
+      typeof data === "object" && data !== null &&
+      !Array.isArray(data) && "_id" in data
     ) {
-      return { type: "detail", data };
+      return { type: "detail", data, remainder };
     }
   } catch {
-    // Not valid JSON — that's fine, render as text
+    // Parse failed
   }
 
   return null;
@@ -207,15 +235,25 @@ function MessageBubble({ msg }: { msg: AssistantMessage }) {
       const detected = tryDetectEntityData(msg.content);
       if (detected?.type === "list") {
         return (
-          <div className="max-w-[95%]">
+          <div className="max-w-[95%] space-y-2">
             <CompactEntityTable data={detected.data as Record<string, unknown>[]} entityType="" />
+            {detected.remainder && (
+              <div className="p-3 rounded-lg text-sm bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none">
+                <Markdown>{detected.remainder}</Markdown>
+              </div>
+            )}
           </div>
         );
       }
       if (detected?.type === "detail") {
         return (
-          <div className="max-w-[85%]">
+          <div className="max-w-[85%] space-y-2">
             <EntityCard data={detected.data as Record<string, unknown>} entityType="" />
+            {detected.remainder && (
+              <div className="p-3 rounded-lg text-sm bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none">
+                <Markdown>{detected.remainder}</Markdown>
+              </div>
+            )}
           </div>
         );
       }
