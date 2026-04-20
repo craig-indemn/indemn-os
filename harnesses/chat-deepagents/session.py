@@ -56,6 +56,7 @@ class ChatSession:
         self._events_task = None
         self._events_process = None
         self._event_queue: list[dict] = []
+        self._message_count = 0
 
     async def start(self):
         """Initialize the session — load config, create Interaction + Attention, build agent."""
@@ -137,6 +138,20 @@ class ChatSession:
         if not self.agent:
             await self._send({"type": "error", "content": "Session not initialized"})
             return
+
+        # Save first message preview for conversation history UI
+        if self._message_count == 0 and self.interaction_id:
+            try:
+                indemn(
+                    "interaction",
+                    "update",
+                    self.interaction_id,
+                    "--data",
+                    json.dumps({"first_message_preview": content[:100]}),
+                )
+            except Exception:
+                pass  # non-critical
+        self._message_count += 1
 
         # Build the user message with context
         user_content = content
