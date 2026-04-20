@@ -19,6 +19,8 @@ export interface AssistantContextType {
   togglePanel: () => void;
   sendMessage: (content: string) => void;
   clearMessages: () => void;
+  loadConversation: (interactionId: string, createdAt: string) => void;
+  interactionId: string | null;
 }
 
 export const AssistantContext = createContext<AssistantContextType>({
@@ -28,6 +30,8 @@ export const AssistantContext = createContext<AssistantContextType>({
   togglePanel: () => {},
   sendMessage: () => {},
   clearMessages: () => {},
+  loadConversation: () => {},
+  interactionId: null,
 });
 
 export function useAssistant() {

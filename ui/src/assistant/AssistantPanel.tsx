@@ -5,6 +5,7 @@ import { useAssistant } from "./useAssistant";
 import { CompactEntityTable } from "./CompactEntityTable";
 import { EntityCard } from "./EntityCard";
 import { CollapsibleToolCall } from "./CollapsibleToolCall";
+import { ConversationHistory } from "./ConversationHistory";
 import type { AssistantMessage } from "./useAssistant";
 
 interface Props {
@@ -14,7 +15,7 @@ interface Props {
 }
 
 export function AssistantPanel({ width, inputRef, onClose }: Props) {
-  const { messages, isStreaming, clearMessages, sendMessage } = useAssistant();
+  const { messages, isStreaming, clearMessages, sendMessage, loadConversation, interactionId } = useAssistant();
   const bottomRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState("");
   const location = useLocation();
@@ -48,6 +49,10 @@ export function AssistantPanel({ width, inputRef, onClose }: Props) {
       <div className="flex justify-between items-center p-4 border-b">
         <h2 className="font-semibold">Assistant</h2>
         <div className="flex items-center gap-2">
+          <ConversationHistory
+            currentInteractionId={interactionId}
+            onSelect={loadConversation}
+          />
           {messages.length > 0 && (
             <button
               onClick={clearMessages}

@@ -73,7 +73,36 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(INTERACTION_KEY);
     setInteractionId(null);
     setMessages([]);
+    // Close existing connection so next message creates fresh session
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    connectedRef.current = false;
   }, []);
+
+  const loadConversation = useCallback(
+    (targetInteractionId: string, createdAt: string) => {
+      // Clear current state and show resume divider
+      setMessages([
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `Resumed conversation from ${new Date(createdAt).toLocaleDateString()}`,
+          messageType: "divider",
+        },
+      ]);
+      setInteractionId(targetInteractionId);
+      localStorage.setItem(INTERACTION_KEY, targetInteractionId);
+      // Close existing WebSocket — next message will reconnect with new interaction_id
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      connectedRef.current = false;
+    },
+    []
+  );
 
   // Connect to chat harness WebSocket
   const ensureConnected = useCallback(() => {
@@ -126,8 +155,28 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
       case "connected":
         connectedRef.current = true;
         if (data.interaction_id) {
-          setInteractionId(String(data.interaction_id));
-          localStorage.setItem(INTERACTION_KEY, String(data.interaction_id));
+          setInteractionId((prev) => {
+            const newId = String(data.interaction_id);
+            const resuming = prev === newId;
+            localStorage.setItem(INTERACTION_KEY, newId);
+            if (resuming) {
+              setMessages((msgs) => {
+                if (msgs.length > 0) {
+                  return [
+                    ...msgs,
+                    {
+                      id: crypto.randomUUID(),
+                      role: "assistant" as const,
+                      content: "Session resumed",
+                      messageType: "divider" as const,
+                    },
+                  ];
+                }
+                return msgs;
+              });
+            }
+            return newId;
+          });
         }
         break;
 
@@ -372,7 +421,7 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
 
   return (
     <AssistantContext.Provider
-      value={{ messages, isOpen, isStreaming, togglePanel, sendMessage, clearMessages }}
+      value={{ messages, isOpen, isStreaming, togglePanel, sendMessage, clearMessages, loadConversation, interactionId }}
     >
       {children}
     </AssistantContext.Provider>
