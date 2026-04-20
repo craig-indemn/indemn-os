@@ -180,8 +180,9 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
         }
         break;
 
+      case "token":
       case "response":
-        // Agent text response — append to streaming message
+        // Token-by-token streaming or full response — append to streaming message
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === "assistant" && last.id === "streaming") {

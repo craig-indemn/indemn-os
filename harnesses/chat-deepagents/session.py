@@ -6,7 +6,6 @@ Manages the lifecycle of one WebSocket conversation:
 - Agent instance (deepagents with checkpointer)
 - Events stream (mid-conversation entity awareness)
 - Heartbeat loop
-- Handoff mode switching
 """
 
 import asyncio
@@ -23,6 +22,9 @@ from harness_common.runtime import RUNTIME_ID
 from starlette.websockets import WebSocket
 
 log = logging.getLogger(__name__)
+
+WORKSPACE_DIR = "/workspace"
+SKILLS_DIR = os.path.join(WORKSPACE_DIR, "skills")
 
 
 def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -> dict:
@@ -79,20 +81,10 @@ class ChatSession:
         # Three-layer LLM config merge
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Load all skills in one CLI call and filter to associate's skill refs
-        skill_refs = associate.get("skills", [])
-        if skill_refs:
-            loop = asyncio.get_event_loop()
-            all_skills = await loop.run_in_executor(
-                None, indemn, "skill", "list", "--format", "json"
-            )
-            skill_map = {s["name"]: s["content"] for s in all_skills}
-            skill_contents = [skill_map[ref] for ref in skill_refs if ref in skill_map]
-            if len(skill_contents) < len(skill_refs):
-                missing = [r for r in skill_refs if r not in skill_map]
-                log.warning("Skills not found: %s", missing)
-        else:
-            skill_contents = []
+        # Write skills to filesystem for deepagents progressive disclosure.
+        # deepagents loads skill metadata into the prompt and the agent reads
+        # full content on demand via read_file — NOT loaded upfront.
+        skill_paths = await self._write_skills_to_filesystem(associate.get("skills", []))
 
         # Resume existing Interaction or create a new one
         if self.interaction_id:
@@ -115,10 +107,10 @@ class ChatSession:
         )
         self.attention_id = attention.get("_id")
 
-        # Build agent with checkpointer for conversation persistence
+        # Build agent with skills as file paths (progressive disclosure)
         self.agent = build_agent(
             associate=associate,
-            skills=skill_contents,
+            skill_paths=skill_paths,
             llm_config=llm_config,
             checkpointer=self.checkpointer,
         )
@@ -132,11 +124,54 @@ class ChatSession:
         self._events_task = asyncio.create_task(self._run_events_stream())
 
         log.info(
-            "Session started: interaction=%s, attention=%s", self.interaction_id, self.attention_id
+            "Session started: interaction=%s, attention=%s",
+            self.interaction_id,
+            self.attention_id,
         )
 
+    async def _write_skills_to_filesystem(self, skill_refs: list[str]) -> list[str]:
+        """Fetch skills and write as SKILL.md files for deepagents to load on demand."""
+        if not skill_refs:
+            return []
+
+        os.makedirs(SKILLS_DIR, exist_ok=True)
+
+        # Fetch all skills in one CLI call
+        loop = asyncio.get_event_loop()
+        all_skills = await loop.run_in_executor(None, indemn, "skill", "list", "--format", "json")
+        skill_map = {s["name"]: s for s in all_skills}
+
+        skill_paths = []
+        for ref in skill_refs:
+            skill = skill_map.get(ref)
+            if not skill:
+                log.warning("Skill not found: %s", ref)
+                continue
+
+            # Write skill as SKILL.md with frontmatter
+            skill_dir = os.path.join(SKILLS_DIR, ref.lower().replace(" ", "-"))
+            os.makedirs(skill_dir, exist_ok=True)
+            skill_path = os.path.join(skill_dir, "SKILL.md")
+
+            content = skill.get("content", "")
+            # Add frontmatter for deepagents skill discovery
+            frontmatter = (
+                f"---\n"
+                f"name: {ref}\n"
+                f"description: Entity skill for {ref} — fields, lifecycle, CLI commands\n"
+                f"---\n\n"
+            )
+            with open(skill_path, "w") as f:
+                f.write(frontmatter + content)
+
+            # Path relative to backend root_dir (/workspace)
+            skill_paths.append(f"skills/{ref.lower().replace(' ', '-')}")
+
+        log.info("Wrote %d skills to filesystem for progressive disclosure", len(skill_paths))
+        return skill_paths
+
     async def handle_message(self, content: str, context: dict | None = None):
-        """Process one user message — run agent, stream response tokens."""
+        """Process one user message — stream response tokens to the UI."""
         if not self.agent:
             await self._send({"type": "error", "content": "Session not initialized"})
             return
@@ -176,56 +211,47 @@ class ChatSession:
             messages.append({"role": "system", "content": system_event_msg})
         messages.append({"role": "user", "content": user_content})
 
-        # Run agent — collect the response
+        # Stream agent response — tokens arrive as they're generated
         try:
-            result = await self.agent.ainvoke(
+            async for event in self.agent.astream_events(
                 {"messages": messages},
                 config={"configurable": {"thread_id": self.interaction_id}},
-            )
+                version="v2",
+            ):
+                kind = event.get("event", "")
 
-            # Extract NEW messages only (skip input messages from this turn)
-            all_msgs = result.get("messages", [])
-            input_count = len(messages)  # messages we sent as input
-            new_msgs = all_msgs[input_count:] if len(all_msgs) > input_count else all_msgs
+                if kind == "on_chat_model_stream":
+                    # Token-by-token streaming from the LLM
+                    chunk = event.get("data", {}).get("chunk")
+                    if chunk:
+                        token = getattr(chunk, "content", "")
+                        if token:
+                            await self._send({"type": "token", "content": token})
 
-            # Send only the final AI response + tool calls from this turn
-            last_ai_content = ""
-            for msg in new_msgs:
-                msg_type = getattr(msg, "type", type(msg).__name__)
-                if msg_type == "ai":
-                    content = getattr(msg, "content", "")
-                    if content:
-                        last_ai_content = content
-                    # Send tool calls as collapsible blocks
-                    for tc in getattr(msg, "tool_calls", []):
-                        tc_name = (
-                            tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-                        )
-                        tc_args = (
-                            tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-                        )
-                        tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
-                        await self._send(
-                            {
-                                "type": "tool_call",
-                                "name": tc_name,
-                                "args": tc_args,
-                                "call_id": tc_id,
-                            }
-                        )
-                elif msg_type == "tool":
-                    tool_name = getattr(msg, "name", "")
-                    tool_content = getattr(msg, "content", "")
-                    await self._classify_and_send_tool_result(tool_name, tool_content)
+                        # Tool calls within streaming chunks
+                        tool_call_chunks = getattr(chunk, "tool_call_chunks", [])
+                        for tc in tool_call_chunks:
+                            if tc.get("name"):
+                                await self._send(
+                                    {
+                                        "type": "tool_call",
+                                        "name": tc.get("name", ""),
+                                        "args": tc.get("args", {}),
+                                        "call_id": tc.get("id", ""),
+                                    }
+                                )
 
-            # Send the final AI response (last one wins — avoids duplicates)
-            if last_ai_content:
-                await self._send({"type": "response", "content": last_ai_content})
+                elif kind == "on_tool_end":
+                    # Tool execution completed — classify output
+                    output = event.get("data", {}).get("output", "")
+                    tool_name = event.get("name", "")
+                    content_str = str(output.content) if hasattr(output, "content") else str(output)
+                    await self._classify_and_send_tool_result(tool_name, content_str)
 
             await self._send({"type": "done"})
 
         except Exception as e:
-            log.error("Agent error: %s", e)
+            log.error("Agent error: %s", e, exc_info=True)
             await self._send({"type": "error", "content": str(e)[:500]})
 
     async def close(self):
@@ -264,29 +290,16 @@ class ChatSession:
             and isinstance(data[0], dict)
             and "_id" in data[0]
         ):
-            entity_type = self._infer_entity_type(tool_name)
-            await self._send({"type": "entity_list", "data": data, "entity_type": entity_type})
+            await self._send({"type": "entity_list", "data": data, "entity_type": ""})
             return
 
         # Detect single entity (dict with _id)
         if isinstance(data, dict) and "_id" in data:
-            entity_type = self._infer_entity_type(tool_name)
-            await self._send({"type": "entity_detail", "data": data, "entity_type": entity_type})
+            await self._send({"type": "entity_detail", "data": data, "entity_type": ""})
             return
 
         # Fallback: send as tool_result
         await self._send({"type": "tool_result", "name": tool_name, "content": content_str[:1000]})
-
-    def _infer_entity_type(self, tool_name: str) -> str:
-        """Infer entity type from the tool/command name.
-
-        deepagents execute tool captures the full command.
-        Pattern: 'indemn <entity_type> list/get/create/...'
-        """
-        # tool_name from deepagents is typically "execute" — the command is in args
-        # But the content itself reveals the entity type from the data shape
-        # For now, return empty and let the UI infer from data
-        return ""
 
     async def _send(self, data: dict):
         """Send a typed JSON message to the WebSocket client."""
