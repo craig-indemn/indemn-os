@@ -314,7 +314,9 @@ class ChatSession:
         data = None
         try:
             data = json.loads(json_str)
-        except (json.JSONDecodeError, TypeError):
+            log.info("JSON parse succeeded: type=%s", type(data).__name__)
+        except (json.JSONDecodeError, TypeError) as parse_err:
+            log.info("JSON direct parse failed: %s", parse_err)
             # Try to extract JSON array or object from the content
             for start_char, end_char in [("[", "]"), ("{", "}")]:
                 start = json_str.find(start_char)
@@ -322,11 +324,15 @@ class ChatSession:
                 if start != -1 and end > start:
                     try:
                         data = json.loads(json_str[start : end + 1])
+                        log.info("JSON extract succeeded: type=%s", type(data).__name__)
                         break
                     except (json.JSONDecodeError, TypeError):
                         continue
+        except Exception as unexpected_err:
+            log.error("Unexpected error parsing JSON: %s", unexpected_err, exc_info=True)
 
         if data is None:
+            log.info("No JSON detected, sending as tool_result (len=%d)", len(content_str))
             await self._send(
                 {"type": "tool_result", "name": tool_name, "content": content_str[:1000]}
             )
