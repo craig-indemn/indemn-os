@@ -58,9 +58,10 @@ export function EntityListView() {
   const columns: ColumnDef<Record<string, unknown>>[] = [];
 
   // State badge as first column if state machine exists
+  const stateFieldName = meta.fields.find((f) => f.is_state_field)?.name || "status";
   if (meta.state_machine) {
     columns.push({
-      accessorKey: "status",
+      accessorKey: stateFieldName,
       header: "State",
       cell: ({ getValue }) => <StateIndicator state={String(getValue() || "")} />,
     });
