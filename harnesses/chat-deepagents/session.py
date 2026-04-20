@@ -79,16 +79,18 @@ class ChatSession:
         # Three-layer LLM config merge
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Load skills in parallel (each CLI call is independent)
+        # Load all skills in one CLI call and filter to associate's skill refs
         skill_refs = associate.get("skills", [])
         if skill_refs:
             loop = asyncio.get_event_loop()
-            skill_futures = [
-                loop.run_in_executor(None, indemn, "skill", "get", skill_ref)
-                for skill_ref in skill_refs
-            ]
-            skill_results = await asyncio.gather(*skill_futures)
-            skill_contents = [s["content"] for s in skill_results]
+            all_skills = await loop.run_in_executor(
+                None, indemn, "skill", "list", "--format", "json"
+            )
+            skill_map = {s["name"]: s["content"] for s in all_skills}
+            skill_contents = [skill_map[ref] for ref in skill_refs if ref in skill_map]
+            if len(skill_contents) < len(skill_refs):
+                missing = [r for r in skill_refs if r not in skill_map]
+                log.warning("Skills not found: %s", missing)
         else:
             skill_contents = []
 
