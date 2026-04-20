@@ -253,26 +253,10 @@ class ChatSession:
                                 )
 
                 elif kind == "on_tool_end":
-                    # Tool execution completed — classify output
-                    output = event.get("data", {}).get("output", "")
-                    tool_name = event.get("name", "")
-                    # Extract content from ToolMessage or plain string
-                    if hasattr(output, "content"):
-                        content_str = output.content
-                    elif isinstance(output, dict) and "content" in output:
-                        content_str = output["content"]
-                    else:
-                        content_str = str(output)
-                    # Ensure it's a string
-                    if not isinstance(content_str, str):
-                        content_str = str(content_str)
-                    log.info(
-                        "Tool end: name=%s, content_type=%s, len=%d",
-                        tool_name,
-                        type(output).__name__,
-                        len(content_str),
-                    )
-                    await self._classify_and_send_tool_result(tool_name, content_str)
+                    # Tool results are NOT sent here — the LLM echoes them as
+                    # streaming tokens, and the UI detects entity data client-side.
+                    # Sending from both paths causes duplicate rendering.
+                    pass
 
             await self._send({"type": "done"})
 
