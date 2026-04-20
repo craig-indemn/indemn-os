@@ -17,7 +17,7 @@ def build_agent(associate: dict, skills: list[str], llm_config: dict, checkpoint
     llm_config is the three-layer merge result:
     {**runtime.llm_config, **associate.llm_config, **deployment.llm_override}
     """
-    model_id = llm_config.pop("model", "google_vertexai:gemini-3-flash-preview")
+    model_id = llm_config.pop("model", "google_vertexai:gemini-2.5-flash")
 
     # Vertex AI needs project + location
     if "vertexai" in model_id:
