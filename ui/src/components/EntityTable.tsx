@@ -233,9 +233,17 @@ export function EntityTable({
               <tr>
                 <td
                   colSpan={allColumns.length}
-                  className="px-4 py-8 text-center text-gray-400 text-sm"
+                  className="px-4 py-12 text-center text-sm"
                 >
-                  No data
+                  <p className="text-gray-400">No results found</p>
+                  {columnFilters.length > 0 && (
+                    <button
+                      onClick={() => setColumnFilters([])}
+                      className="mt-2 text-blue-600 hover:underline text-xs"
+                    >
+                      Clear filters
+                    </button>
+                  )}
                 </td>
               </tr>
             )}
