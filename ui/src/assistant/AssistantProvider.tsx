@@ -155,7 +155,11 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
           {
             id: crypto.randomUUID(),
             role: "assistant",
-            content: `Running: ${data.name} ${JSON.stringify(data.args).slice(0, 200)}`,
+            content: `${data.name} ${JSON.stringify(data.args).slice(0, 200)}`,
+            messageType: "tool_call",
+            toolName: String(data.name || ""),
+            toolArgs: (data.args as Record<string, unknown>) || {},
+            callId: String(data.call_id || ""),
           },
         ]);
         break;
@@ -167,20 +171,67 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
             id: crypto.randomUUID(),
             role: "assistant",
             content: String(data.content || "").slice(0, 500),
+            messageType: "tool_result",
+            toolName: String(data.name || ""),
           },
         ]);
         break;
 
-      case "entity":
-        // TODO: render as EntityTable component instead of JSON
+      case "entity_list":
         setMessages((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
             role: "assistant",
-            content: JSON.stringify(data.data, null, 2),
+            content: "",
+            messageType: "entity_list",
+            entityData: data.data as Record<string, unknown>[],
+            entityType: String(data.entity_type || ""),
           },
         ]);
+        break;
+
+      case "entity_detail":
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "",
+            messageType: "entity_detail",
+            entityData: data.data as Record<string, unknown>,
+            entityType: String(data.entity_type || ""),
+          },
+        ]);
+        break;
+
+      case "entity":
+        // Legacy entity message — detect list vs detail
+        if (Array.isArray(data.data)) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: "",
+              messageType: "entity_list",
+              entityData: data.data as Record<string, unknown>[],
+              entityType: String(data.entity_type || ""),
+            },
+          ]);
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: "",
+              messageType: "entity_detail",
+              entityData: data.data as Record<string, unknown>,
+              entityType: String(data.entity_type || ""),
+            },
+          ]);
+        }
         break;
 
       case "event":

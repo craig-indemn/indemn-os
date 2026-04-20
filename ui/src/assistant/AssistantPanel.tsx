@@ -2,6 +2,10 @@ import { useState, useEffect, useRef, type RefObject } from "react";
 import { useLocation } from "react-router-dom";
 import Markdown from "react-markdown";
 import { useAssistant } from "./useAssistant";
+import { CompactEntityTable } from "./CompactEntityTable";
+import { EntityCard } from "./EntityCard";
+import { CollapsibleToolCall } from "./CollapsibleToolCall";
+import type { AssistantMessage } from "./useAssistant";
 
 interface Props {
   width: number;
@@ -63,21 +67,7 @@ export function AssistantPanel({ width, inputRef, onClose }: Props) {
       <div className="text-xs text-gray-400 px-3 py-1 border-b">{contextLabel}</div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((msg) => (
-          <div key={msg.id} className={msg.role === "user" ? "text-right" : ""}>
-            <div
-              className={`inline-block p-3 rounded-lg max-w-[85%] text-sm ${
-                msg.role === "user"
-                  ? "bg-blue-100 text-blue-900 whitespace-pre-wrap"
-                  : "bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none"
-              }`}
-            >
-              {msg.role === "user" ? (
-                msg.content
-              ) : (
-                <Markdown>{msg.content}</Markdown>
-              )}
-            </div>
-          </div>
+          <MessageBubble key={msg.id} msg={msg} />
         ))}
         {isStreaming && (
           <div className="flex items-center gap-2 text-gray-400 text-sm">
@@ -120,4 +110,76 @@ export function AssistantPanel({ width, inputRef, onClose }: Props) {
       </div>
     </div>
   );
+}
+
+function MessageBubble({ msg }: { msg: AssistantMessage }) {
+  // User messages always get the blue bubble
+  if (msg.role === "user") {
+    return (
+      <div className="text-right">
+        <div className="inline-block p-3 rounded-lg max-w-[85%] text-sm bg-blue-100 text-blue-900 whitespace-pre-wrap">
+          {msg.content}
+        </div>
+      </div>
+    );
+  }
+
+  // Assistant messages: switch on messageType
+  switch (msg.messageType) {
+    case "entity_list":
+      return (
+        <div className="max-w-[95%]">
+          <CompactEntityTable
+            data={msg.entityData as Record<string, unknown>[]}
+            entityType={msg.entityType || ""}
+          />
+        </div>
+      );
+
+    case "entity_detail":
+      return (
+        <div className="max-w-[85%]">
+          <EntityCard
+            data={msg.entityData as Record<string, unknown>}
+            entityType={msg.entityType || ""}
+          />
+        </div>
+      );
+
+    case "tool_call":
+      return (
+        <div className="max-w-[85%]">
+          <CollapsibleToolCall
+            name={msg.toolName || ""}
+            args={msg.toolArgs || {}}
+          />
+        </div>
+      );
+
+    case "tool_result":
+      return (
+        <div className="max-w-[85%]">
+          <pre className="text-xs text-gray-500 font-mono bg-gray-50 p-2 rounded overflow-x-auto">
+            {msg.content}
+          </pre>
+        </div>
+      );
+
+    case "divider":
+      return (
+        <div className="text-xs text-gray-400 text-center py-2 border-t border-b">
+          &mdash; {msg.content} &mdash;
+        </div>
+      );
+
+    default:
+      // Standard text/markdown message — gray bubble
+      return (
+        <div>
+          <div className="inline-block p-3 rounded-lg max-w-[85%] text-sm bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none">
+            <Markdown>{msg.content}</Markdown>
+          </div>
+        </div>
+      );
+  }
 }
