@@ -177,6 +177,7 @@ class BulkOperationSpec:
     dry_run: bool = False
     target_state: Optional[str] = None
     sets: Optional[dict] = None
+    org_id: Optional[str] = None
 
 
 @dataclass

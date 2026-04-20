@@ -329,6 +329,7 @@ def _register_bulk_route(router, entity_name: str):
     async def start_bulk(spec: dict, actor=Depends(get_current_actor)):
         check_permission(actor, entity_name, "write")
         spec["entity_type"] = entity_name
+        spec["org_id"] = str(current_org_id.get())
         from kernel.temporal.client import get_temporal_client
         from kernel.temporal.workflows import BulkExecuteWorkflow
 

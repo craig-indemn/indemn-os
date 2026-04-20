@@ -38,12 +38,12 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
 class ChatSession:
     """Manages one WebSocket conversation session."""
 
-    def __init__(self, websocket: WebSocket, associate_id: str, auth_token: str, checkpointer=None):
+    def __init__(self, websocket: WebSocket, associate_id: str, auth_token: str, checkpointer=None, interaction_id=None):
         self.ws = websocket
         self.associate_id = associate_id
         self.auth_token = auth_token
         self.checkpointer = checkpointer
-        self.interaction_id = None
+        self.interaction_id = interaction_id
         self.attention_id = None
         self.agent = None
         self._heartbeat_task = None
@@ -72,19 +72,29 @@ class ChatSession:
         # Three-layer LLM config merge
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Load skills (CLI verifies hash integrity)
-        skill_contents = []
-        for skill_ref in associate.get("skills", []):
-            skill = indemn("skill", "get", skill_ref)
-            skill_contents.append(skill["content"])
+        # Load skills in parallel (each CLI call is independent)
+        skill_refs = associate.get("skills", [])
+        if skill_refs:
+            loop = asyncio.get_event_loop()
+            skill_futures = [
+                loop.run_in_executor(None, indemn, "skill", "get", skill_ref)
+                for skill_ref in skill_refs
+            ]
+            skill_results = await asyncio.gather(*skill_futures)
+            skill_contents = [s["content"] for s in skill_results]
+        else:
+            skill_contents = []
 
-        # Create Interaction entity
-        interaction = await create_interaction(
-            channel_type="chat",
-            associate_id=self.associate_id,
-            deployment_id=deployment_id,
-        )
-        self.interaction_id = interaction.get("_id")
+        # Resume existing Interaction or create a new one
+        if self.interaction_id:
+            log.info("Resuming interaction: %s", self.interaction_id)
+        else:
+            interaction = await create_interaction(
+                channel_type="chat",
+                associate_id=self.associate_id,
+                deployment_id=deployment_id,
+            )
+            self.interaction_id = interaction.get("_id")
 
         # Open Attention (real-time session tracking)
         attention = await open_attention(

@@ -19,6 +19,7 @@ const CHAT_HARNESS_URL =
 const STATIC_ASSOCIATE_ID = import.meta.env.VITE_DEFAULT_ASSOCIATE_ID || "";
 
 const STORAGE_KEY = "indemn_assistant_messages";
+const INTERACTION_KEY = "indemn_assistant_interaction_id";
 
 export function AssistantProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
@@ -30,6 +31,9 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
       return [];
     }
   });
+  const [interactionId, setInteractionId] = useState<string | null>(
+    () => localStorage.getItem(INTERACTION_KEY)
+  );
   const [isOpen, setIsOpen] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -67,6 +71,8 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
 
   const clearMessages = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(INTERACTION_KEY);
+    setInteractionId(null);
     setMessages([]);
   }, []);
 
@@ -96,6 +102,7 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
           type: "connect",
           associate_id: associateId,
           auth_token: getToken(), // User's JWT — assistant inherits user's permissions
+          interaction_id: interactionId, // Resume existing conversation if available
         })
       );
     };
@@ -112,13 +119,17 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
     ws.onclose = () => {
       connectedRef.current = false;
     };
-  }, [associateId]);
+  }, [associateId, interactionId]);
 
   // Handle typed JSON messages from the chat harness
   const handleHarnessMessage = useCallback((data: Record<string, unknown>) => {
     switch (data.type) {
       case "connected":
         connectedRef.current = true;
+        if (data.interaction_id) {
+          setInteractionId(String(data.interaction_id));
+          localStorage.setItem(INTERACTION_KEY, String(data.interaction_id));
+        }
         break;
 
       case "response":

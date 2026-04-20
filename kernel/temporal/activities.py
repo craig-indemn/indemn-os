@@ -162,6 +162,10 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
 
         spec = BulkOperationSpec(**spec_dict)
 
+        # Restore org_id context — Temporal activities run in a fresh context
+        if spec.org_id:
+            current_org_id.set(ObjectId(spec.org_id))
+
         entity_cls = ENTITY_REGISTRY.get(spec.entity_type)
         if not entity_cls:
             raise PermanentProcessingError(f"Entity type {spec.entity_type} not found")
@@ -225,7 +229,8 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
                                     session=session,
                                 )
                         elif spec.operation == "create":
-                            new_entity = entity_cls(org_id=current_org_id.get(), **entity)
+                            org = ObjectId(spec.org_id) if spec.org_id else current_org_id.get()
+                            new_entity = entity_cls(org_id=org, **entity)
                             await new_entity.save_tracked(method="bulk_create")
                         elif spec.operation == "delete":
                             await entity.get_motor_collection().delete_one(

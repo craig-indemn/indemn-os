@@ -6,8 +6,35 @@ Tampering with any record breaks the chain. Verification is a CLI command.
 
 import hashlib
 from datetime import datetime
+from decimal import Decimal
 
 import orjson
+from bson import ObjectId
+
+
+def _normalize_value(val):
+    """Normalize a value for consistent hashing across MongoDB round-trips.
+
+    After round-trip: datetime loses tzinfo and microsecond precision,
+    ObjectId may arrive as str, Decimal becomes float.
+    """
+    if val is None:
+        return val
+    if isinstance(val, datetime):
+        return val.replace(
+            tzinfo=None,
+            microsecond=(val.microsecond // 1000) * 1000,
+        ).strftime("%Y-%m-%dT%H:%M:%S.%f")
+    if isinstance(val, ObjectId):
+        return str(val)
+    if isinstance(val, Decimal):
+        return float(val)
+    if isinstance(val, (str, int, float, bool)):
+        return val
+    if isinstance(val, (list, dict)):
+        return val
+    # Fallback: stringify unknown types
+    return str(val)
 
 
 def compute_hash(record) -> str:
@@ -18,28 +45,18 @@ def compute_hash(record) -> str:
         for c in changes:
             d = c.model_dump()
             for key in ("old_value", "new_value"):
-                val = d.get(key)
-                if val is None:
-                    continue
-                if isinstance(val, datetime):
-                    # Normalize: strip timezone (Motor returns naive UTC),
-                    # truncate to milliseconds (MongoDB precision).
-                    val = val.replace(
-                        tzinfo=None,
-                        microsecond=(val.microsecond // 1000) * 1000,
-                    )
-                    d[key] = val.strftime("%Y-%m-%dT%H:%M:%S.%f")
-                elif not isinstance(val, (str, int, float, bool, list, dict)):
-                    d[key] = str(val)
+                d[key] = _normalize_value(d.get(key))
             result.append(d)
         return result
 
-    # Two normalizations for MongoDB round-trip consistency:
-    # 1. strftime instead of isoformat — MongoDB returns naive datetimes,
-    #    Python creates aware ones. isoformat differs (+00:00 vs none).
+    # Normalize timestamp for MongoDB round-trip consistency:
+    # 1. Strip tzinfo — MongoDB returns naive datetimes,
+    #    Python creates aware ones.
     # 2. Truncate microseconds to milliseconds — MongoDB drops the last 3 digits.
+    # 3. strftime instead of isoformat — avoids +00:00 vs naive divergence.
     ts = record.timestamp.replace(
-        microsecond=(record.timestamp.microsecond // 1000) * 1000
+        tzinfo=None,
+        microsecond=(record.timestamp.microsecond // 1000) * 1000,
     )
     content = orjson.dumps(
         {

@@ -24,7 +24,34 @@ def build_agent(associate: dict, skills: list[str], llm_config: dict, checkpoint
         llm_config.setdefault("project", os.environ.get("GCP_PROJECT_ID", ""))
         llm_config.setdefault("location", os.environ.get("GCP_LOCATION", "us-central1"))
 
-    system_prompt = associate.get("prompt", "") + "\n\n---\n\n" + "\n\n".join(skills)
+    # Operational instructions teach the assistant how to use the CLI
+    operational_block = """You are the Indemn OS Assistant. You help users manage their insurance operations.
+
+## Your Capabilities
+You can perform ANY operation the user can do, using the `indemn` CLI via the execute tool. Key commands:
+- `indemn {entity} list [--limit N] [--status STATE]` — list entities
+- `indemn {entity} get ID` — get entity details
+- `indemn {entity} create --data 'JSON'` — create entity
+- `indemn {entity} update ID --data 'JSON'` — update fields
+- `indemn {entity} transition ID --to STATE` — change state
+
+Entity types: Company, Contact, Deal, Conference, Task, Meeting, Signal, Decision, Commitment, AssociateDeployment, Outcome, Playbook, Stage, OutcomeType, AssociateType
+
+## Guidelines
+- When asked about the current entity, use the context provided (entity_data in the user message context).
+- When asked to create or modify entities, use the CLI via the execute tool.
+- When querying across entities, use `indemn {entity} list`.
+- Confirm destructive actions before executing.
+- Be concise and helpful.
+
+## Entity Skills
+The following skills describe each entity's fields, lifecycle, and commands:
+"""
+
+    # Build system prompt: operational block + associate prompt + skill contents
+    associate_prompt = associate.get("prompt", "")
+    skills_block = "\n\n".join(skills) if skills else ""
+    system_prompt = operational_block + "\n\n" + associate_prompt + "\n\n---\n\n" + skills_block
 
     return create_deep_agent(
         model=init_chat_model(model_id, **llm_config),

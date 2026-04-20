@@ -117,6 +117,7 @@ async def websocket_handler(websocket: WebSocket):
 
         associate_id = connect_msg.get("associate_id", "")
         auth_token = connect_msg.get("auth_token", os.environ.get("INDEMN_SERVICE_TOKEN", ""))
+        interaction_id = connect_msg.get("interaction_id")
 
         if not associate_id:
             await websocket.send_json({"type": "error", "content": "associate_id required"})
@@ -129,6 +130,7 @@ async def websocket_handler(websocket: WebSocket):
             associate_id=associate_id,
             auth_token=auth_token,
             checkpointer=get_checkpointer(),
+            interaction_id=interaction_id,
         )
         _sessions[id(websocket)] = session
 
