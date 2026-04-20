@@ -256,7 +256,22 @@ class ChatSession:
                     # Tool execution completed — classify output
                     output = event.get("data", {}).get("output", "")
                     tool_name = event.get("name", "")
-                    content_str = str(output.content) if hasattr(output, "content") else str(output)
+                    # Extract content from ToolMessage or plain string
+                    if hasattr(output, "content"):
+                        content_str = output.content
+                    elif isinstance(output, dict) and "content" in output:
+                        content_str = output["content"]
+                    else:
+                        content_str = str(output)
+                    # Ensure it's a string
+                    if not isinstance(content_str, str):
+                        content_str = str(content_str)
+                    log.info(
+                        "Tool end: name=%s, content_type=%s, len=%d",
+                        tool_name,
+                        type(output).__name__,
+                        len(content_str),
+                    )
                     await self._classify_and_send_tool_result(tool_name, content_str)
 
             await self._send({"type": "done"})
