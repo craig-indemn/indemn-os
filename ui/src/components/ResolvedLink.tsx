@@ -20,7 +20,7 @@ export function ResolvedLink({ entityType, entityId, className }: Props) {
 
   const displayName = data
     ? String(data.name || data.email || data.title || entityId.slice(-8))
-    : entityId.slice(-8) + "\u2026";
+    : "Loading\u2026";
 
   return (
     <Link

@@ -22,7 +22,7 @@ export function useEntity(entityName: string, entityId: string) {
     queryKey: ["entity", entityName, entityId],
     queryFn: () =>
       apiClient<Record<string, unknown>>(
-        `/api/${entityName.toLowerCase()}s/${entityId}`
+        `/api/${entityName.toLowerCase()}s/${entityId}?depth=2&include_related=true`
       ),
     enabled: !!entityId,
   });
