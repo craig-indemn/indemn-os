@@ -3,11 +3,13 @@ import { useEntityMeta } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { apiClient } from "../api/client";
 import { EntityForm } from "../components/EntityForm";
+import { useToast } from "../context/ToastContext";
 
 export function EntityCreateView() {
   const { entityType } = useParams<{ entityType: string }>();
   const entityName = useEntityNameFromSlug(entityType) || "";
   const navigate = useNavigate();
+  const { toast } = useToast();
   const { data: meta } = useEntityMeta(entityName);
 
   if (!meta) {
@@ -50,6 +52,7 @@ export function EntityCreateView() {
                 body: JSON.stringify(data),
               }
             );
+            toast(`${entityName} created`, "success");
             navigate(`/${entityType}/${created._id}`);
           }}
         />

@@ -7,6 +7,7 @@ import { EntityForm } from "../components/EntityForm";
 import { ResolvedLink } from "../components/ResolvedLink";
 import { StateIndicator } from "../components/StateIndicator";
 import { ChangeTimeline } from "../components/ChangeTimeline";
+import { useToast } from "../context/ToastContext";
 
 export function EntityDetailView() {
   const { entityType, entityId } = useParams<{
@@ -17,6 +18,7 @@ export function EntityDetailView() {
   const { data: meta } = useEntityMeta(entityName);
   const { data: entity, refetch } = useEntity(entityName, entityId || "");
   const { data: changes } = useChanges(entityName, entityId || "");
+  const { toast } = useToast();
 
   useRealtimeEntityDetail(entityName, entityId);
 
@@ -72,9 +74,10 @@ export function EntityDetailView() {
                         body: JSON.stringify({ to }),
                       }
                     );
+                    toast(`Transitioned to ${to}`, "success");
                     refetch();
                   } catch (err) {
-                    alert(`Transition failed: ${err instanceof Error ? err.message : String(err)}`);
+                    toast(`Transition failed: ${err instanceof Error ? err.message : String(err)}`, "error");
                   }
                 }}
                 canTransition={meta.permissions.write}
@@ -93,7 +96,7 @@ export function EntityDetailView() {
                   );
                   refetch();
                 } catch (err) {
-                  alert(`${cap.name} failed: ${err instanceof Error ? err.message : String(err)}`);
+                  toast(`${cap.name} failed: ${err instanceof Error ? err.message : String(err)}`, "error");
                 }
               }}
               className="w-full px-3 py-2 text-sm border rounded hover:bg-blue-50 text-blue-600 text-left"
@@ -114,7 +117,7 @@ export function EntityDetailView() {
                   );
                   refetch();
                 } catch (err) {
-                  alert(`${method.name} failed: ${err instanceof Error ? err.message : String(err)}`);
+                  toast(`${method.name} failed: ${err instanceof Error ? err.message : String(err)}`, "error");
                 }
               }}
               className="w-full px-3 py-2 text-sm border rounded hover:bg-green-50 text-green-600 text-left"
