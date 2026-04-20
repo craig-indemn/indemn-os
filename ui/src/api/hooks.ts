@@ -14,6 +14,7 @@ export function useEntities(entityName: string, params?: Record<string, string>)
         `/api/${entityName.toLowerCase()}s/${query}`
       );
     },
+    enabled: !!entityName,
   });
 }
 
