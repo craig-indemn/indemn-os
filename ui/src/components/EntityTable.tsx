@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -29,11 +29,6 @@ export function EntityTable({
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
-
-  // Clear selection when data changes (pagination, filtering)
-  useEffect(() => {
-    setRowSelection({});
-  }, [data]);
 
   const allColumns: ColumnDef<Record<string, unknown>>[] = enableSelection
     ? [
