@@ -253,10 +253,19 @@ class ChatSession:
                                 )
 
                 elif kind == "on_tool_end":
-                    # Tool results are NOT sent here — the LLM echoes them as
-                    # streaming tokens, and the UI detects entity data client-side.
-                    # Sending from both paths causes duplicate rendering.
-                    pass
+                    # Send entity data to UI — the LLM may summarize instead
+                    # of echoing JSON, so we must detect here.
+                    # Client-side detection handles the case where LLM echoes JSON.
+                    output = event.get("data", {}).get("output", "")
+                    if hasattr(output, "content"):
+                        content_str = output.content
+                    elif isinstance(output, dict) and "content" in output:
+                        content_str = output["content"]
+                    else:
+                        content_str = str(output)
+                    if not isinstance(content_str, str):
+                        content_str = str(content_str)
+                    await self._classify_and_send_tool_result(event.get("name", ""), content_str)
 
             await self._send({"type": "done"})
 
