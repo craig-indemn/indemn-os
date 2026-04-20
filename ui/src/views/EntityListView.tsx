@@ -3,6 +3,7 @@ import { useNavigate, useParams, Link } from "react-router-dom";
 import { useEntities, useEntityMeta } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntity } from "../hooks/useRealtime";
+import { apiClient } from "../api/client";
 import { EntityTable } from "../components/EntityTable";
 import { FieldRenderer } from "../components/FieldRenderer";
 import { StateIndicator } from "../components/StateIndicator";
@@ -94,6 +95,8 @@ export function EntityListView() {
   }
 
   const allStates = meta.state_machine ? Object.keys(meta.state_machine) : [];
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const canBulk = !!meta.state_machine && meta.permissions.write;
 
   return (
     <div>
@@ -140,10 +143,55 @@ export function EntityListView() {
         )}
       </div>
 
+      {/* Bulk action bar */}
+      {selectedIds.length > 0 && canBulk && (
+        <div className="flex items-center gap-3 mb-3 p-3 bg-blue-50 rounded border border-blue-200">
+          <span className="text-sm font-medium">
+            {selectedIds.length} selected
+          </span>
+          {allStates.map((target) => (
+            <button
+              key={target}
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    `Transition ${selectedIds.length} items to "${target}"?`
+                  )
+                )
+                  return;
+                for (const id of selectedIds) {
+                  try {
+                    await apiClient(`/api/${entityType}/${id}/transition`, {
+                      method: "POST",
+                      body: JSON.stringify({ to: target }),
+                    });
+                  } catch {
+                    /* skip failures */
+                  }
+                }
+                setSelectedIds([]);
+                refetch();
+              }}
+              className="px-2 py-1 text-xs border rounded hover:bg-white"
+            >
+              → {target}
+            </button>
+          ))}
+          <button
+            onClick={() => setSelectedIds([])}
+            className="ml-auto text-xs text-gray-500 hover:text-gray-700"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       <EntityTable
         columns={columns}
         data={entities || []}
         onRowClick={(row) => navigate(`/${entityType}/${row._id}`)}
+        enableSelection={canBulk}
+        onSelectionChange={setSelectedIds}
       />
 
       {/* Pagination */}
