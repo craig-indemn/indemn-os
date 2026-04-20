@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate, useParams, Link } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useParams, Link, useSearchParams } from "react-router-dom";
 import { useEntities, useEntityMeta } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntity } from "../hooks/useRealtime";
@@ -17,10 +17,19 @@ export function EntityListView() {
   const navigate = useNavigate();
   const { data: meta } = useEntityMeta(entityName);
 
-  const [search, setSearch] = useState("");
-  const [stateFilter, setStateFilter] = useState("");
-  const [page, setPage] = useState(0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [search, setSearch] = useState(searchParams.get("search") || "");
+  const [stateFilter, setStateFilter] = useState(searchParams.get("status") || "");
+  const [page, setPage] = useState(Number(searchParams.get("page") || "0"));
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (stateFilter) params.set("status", stateFilter);
+    if (page > 0) params.set("page", String(page));
+    setSearchParams(params, { replace: true });
+  }, [search, stateFilter, page, setSearchParams]);
 
   const params: Record<string, string> = {
     limit: String(PAGE_SIZE),
