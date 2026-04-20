@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
+import { Breadcrumb } from "../components/Breadcrumb";
 import { useEntityMeta } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { apiClient } from "../api/client";
@@ -33,14 +34,10 @@ export function EntityCreateView() {
 
   return (
     <div>
-      <div className="mb-4">
-        <Link
-          to={`/${entityType}`}
-          className="text-blue-600 hover:underline text-sm"
-        >
-          &larr; Back to {entityName} list
-        </Link>
-      </div>
+      <Breadcrumb crumbs={[
+        { label: entityName, to: `/${entityType}` },
+        { label: "New" },
+      ]} />
       <h1 className="text-xl font-semibold mb-6">New {entityName}</h1>
       <div className="max-w-2xl">
         <EntityForm

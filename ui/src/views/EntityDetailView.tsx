@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams } from "react-router-dom";
+import { Breadcrumb } from "../components/Breadcrumb";
 import { useEntity, useEntityMeta, useChanges } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntityDetail } from "../hooks/useRealtime";
@@ -42,14 +43,10 @@ export function EntityDetailView() {
 
   return (
     <div>
-      <div className="mb-4">
-        <Link
-          to={`/${entityType}`}
-          className="text-blue-600 hover:underline text-sm"
-        >
-          &larr; Back to {entityName} list
-        </Link>
-      </div>
+      <Breadcrumb crumbs={[
+        { label: entityName, to: `/${entityType}` },
+        { label: String(entity.name || entity.title || entityId || "") },
+      ]} />
       <h1 className="text-xl font-semibold mb-6">{entityName} Detail</h1>
       <div className="grid grid-cols-3 gap-6">
         <div className="col-span-2">
