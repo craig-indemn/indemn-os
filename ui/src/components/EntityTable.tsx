@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -8,25 +8,69 @@ import {
   type ColumnDef,
   type SortingState,
   type ColumnFiltersState,
+  type RowSelectionState,
 } from "@tanstack/react-table";
 
 interface Props {
   columns: ColumnDef<Record<string, unknown>>[];
   data: Record<string, unknown>[];
   onRowClick?: (row: Record<string, unknown>) => void;
+  enableSelection?: boolean;
+  onSelectionChange?: (selectedIds: string[]) => void;
 }
 
-export function EntityTable({ columns, data, onRowClick }: Props) {
+export function EntityTable({
+  columns,
+  data,
+  onRowClick,
+  enableSelection,
+  onSelectionChange,
+}: Props) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+
+  // Checkbox column prepended when selection is enabled
+  const allColumns = useMemo<ColumnDef<Record<string, unknown>>[]>(() => {
+    if (!enableSelection) return columns;
+    const selectCol: ColumnDef<Record<string, unknown>> = {
+      id: "select",
+      header: ({ table: t }) => (
+        <input
+          type="checkbox"
+          checked={t.getIsAllPageRowsSelected()}
+          onChange={t.getToggleAllPageRowsSelectedHandler()}
+          className="h-4 w-4"
+        />
+      ),
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          checked={row.getIsSelected()}
+          onChange={row.getToggleSelectedHandler()}
+          onClick={(e) => e.stopPropagation()}
+          className="h-4 w-4"
+        />
+      ),
+      enableSorting: false,
+    };
+    return [selectCol, ...columns];
+  }, [columns, enableSelection]);
 
   const table = useReactTable({
     data,
-    columns,
+    columns: allColumns,
     getRowId: (row) => String(row._id || row.id || ""),
-    state: { sorting, columnFilters },
+    state: { sorting, columnFilters, rowSelection },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
+    onRowSelectionChange: (updater) => {
+      const next =
+        typeof updater === "function" ? updater(rowSelection) : updater;
+      setRowSelection(next);
+      onSelectionChange?.(Object.keys(next).filter((k) => next[k]));
+    },
+    enableRowSelection: true,  // Always enabled — checkbox column controls visibility
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -74,7 +118,7 @@ export function EntityTable({ columns, data, onRowClick }: Props) {
           ))}
           {table.getRowModel().rows.length === 0 && (
             <tr>
-              <td colSpan={columns.length} className="px-4 py-8 text-center text-gray-400 text-sm">
+              <td colSpan={allColumns.length} className="px-4 py-8 text-center text-gray-400 text-sm">
                 No data
               </td>
             </tr>
