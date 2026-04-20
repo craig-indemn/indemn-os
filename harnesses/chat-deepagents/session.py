@@ -107,10 +107,11 @@ class ChatSession:
         )
         self.attention_id = attention.get("_id")
 
-        # Build agent with skills as file paths (progressive disclosure)
+        # Build agent with skills directory for progressive disclosure.
+        # Pass the parent directory — deepagents discovers subdirectories with SKILL.md.
         self.agent = build_agent(
             associate=associate,
-            skill_paths=skill_paths,
+            skill_paths=["skills"] if skill_paths else [],
             llm_config=llm_config,
             checkpointer=self.checkpointer,
         )
@@ -148,26 +149,36 @@ class ChatSession:
                 log.warning("Skill not found: %s", ref)
                 continue
 
-            # Write skill as SKILL.md with frontmatter
-            skill_dir = os.path.join(SKILLS_DIR, ref.lower().replace(" ", "-"))
+            slug = ref.lower().replace(" ", "-")
+            skill_dir = os.path.join(SKILLS_DIR, slug)
             os.makedirs(skill_dir, exist_ok=True)
-            skill_path = os.path.join(skill_dir, "SKILL.md")
 
             content = skill.get("content", "")
-            # Add frontmatter for deepagents skill discovery
             frontmatter = (
                 f"---\n"
                 f"name: {ref}\n"
                 f"description: Entity skill for {ref} — fields, lifecycle, CLI commands\n"
                 f"---\n\n"
             )
-            with open(skill_path, "w") as f:
+
+            # Write SKILL.md inside the skill directory
+            skill_file = os.path.join(skill_dir, "SKILL.md")
+            with open(skill_file, "w") as f:
                 f.write(frontmatter + content)
 
-            # Path relative to backend root_dir (/workspace)
-            skill_paths.append(f"skills/{ref.lower().replace(' ', '-')}")
+            # deepagents expects directory paths relative to backend root_dir
+            skill_paths.append(f"skills/{slug}")
 
-        log.info("Wrote %d skills to filesystem for progressive disclosure", len(skill_paths))
+        log.info(
+            "Wrote %d skills to %s for progressive disclosure",
+            len(skill_paths),
+            SKILLS_DIR,
+        )
+        # Log actual file listing for debugging
+        for sp in skill_paths:
+            full = os.path.join(WORKSPACE_DIR, sp, "SKILL.md")
+            log.info("  Skill file exists=%s: %s", os.path.exists(full), full)
+
         return skill_paths
 
     async def handle_message(self, content: str, context: dict | None = None):
