@@ -1,6 +1,7 @@
-/** fetch wrapper with auth token injection. */
+/** fetch wrapper with auth token injection + automatic token refresh. */
 
 const TOKEN_KEY = "indemn_access_token";
+const REFRESH_KEY = "indemn_refresh_token";
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -10,8 +11,36 @@ export function setToken(token: string) {
   localStorage.setItem(TOKEN_KEY, token);
 }
 
+export function setRefreshToken(token: string) {
+  localStorage.setItem(REFRESH_KEY, token);
+}
+
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+}
+
+let refreshPromise: Promise<boolean> | null = null;
+
+async function tryRefresh(): Promise<boolean> {
+  const refreshToken = localStorage.getItem(REFRESH_KEY);
+  if (!refreshToken) return false;
+
+  const baseUrl = (import.meta as any).env?.VITE_API_URL || "";
+  try {
+    const res = await fetch(`${baseUrl}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    setToken(data.access_token);
+    setRefreshToken(data.refresh_token);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function apiClient<T = unknown>(
@@ -29,12 +58,19 @@ export async function apiClient<T = unknown>(
 
   const baseUrl = (import.meta as any).env?.VITE_API_URL || "";
   const url = path.startsWith("http") ? path : `${baseUrl}${path}`;
-  const response = await fetch(url, { ...options, headers });
+  let response = await fetch(url, { ...options, headers });
 
-  // Check for refreshed token header [G-39]
-  const refreshedToken = response.headers.get("X-Refreshed-Token");
-  if (refreshedToken) {
-    setToken(refreshedToken);
+  // On 401, attempt token refresh and retry once
+  if (response.status === 401 && localStorage.getItem(REFRESH_KEY)) {
+    // Deduplicate concurrent refresh attempts
+    if (!refreshPromise) {
+      refreshPromise = tryRefresh().finally(() => { refreshPromise = null; });
+    }
+    const refreshed = await refreshPromise;
+    if (refreshed) {
+      headers["Authorization"] = `Bearer ${getToken()}`;
+      response = await fetch(url, { ...options, headers });
+    }
   }
 
   if (!response.ok) {

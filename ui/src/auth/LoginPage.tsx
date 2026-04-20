@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./useAuth";
+import { setRefreshToken } from "../api/client";
 
 export function LoginPage() {
   const [email, setEmail] = useState("");
@@ -39,6 +40,9 @@ export function LoginPage() {
       }
 
       login(data.access_token);
+      if (data.refresh_token) {
+        setRefreshToken(data.refresh_token);
+      }
       navigate("/");
     } catch {
       setError("Network error");
