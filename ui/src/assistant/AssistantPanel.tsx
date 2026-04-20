@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { useAssistant } from "./useAssistant";
 
 export function AssistantPanel() {
@@ -6,6 +7,15 @@ export function AssistantPanel() {
     useAssistant();
   const bottomRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState("");
+  const location = useLocation();
+  const parts = location.pathname.split("/").filter(Boolean);
+  const contextLabel = parts.length >= 2 && parts[1] !== "new"
+    ? `Viewing: ${parts[0]} detail`
+    : parts.length >= 2 && parts[1] === "new"
+      ? `Viewing: New ${parts[0]}`
+      : parts.length === 1 && parts[0] !== "queue"
+        ? `Viewing: ${parts[0]} list`
+        : "Viewing: Queue";
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -44,6 +54,7 @@ export function AssistantPanel() {
           </button>
         </div>
       </div>
+      <div className="text-xs text-gray-400 px-3 py-1 border-b">{contextLabel}</div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((msg) => (
           <div key={msg.id} className={msg.role === "user" ? "text-right" : ""}>
