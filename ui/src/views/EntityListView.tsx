@@ -95,7 +95,7 @@ export function EntityListView() {
   const canBulk = !!meta.state_machine && meta.permissions.write;
 
   return (
-    <div>
+    <div className="min-w-0">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">{entityName} List</h1>
         {meta.permissions.write && (
