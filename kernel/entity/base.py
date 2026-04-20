@@ -112,9 +112,10 @@ class DomainBaseEntity(_EntityMixin, BaseModel):
 
     model_config = {"arbitrary_types_allowed": True, "populate_by_name": True}
 
-    def get_motor_collection(self):
+    @classmethod
+    def get_motor_collection(cls):
         """Get the Motor collection for this entity type."""
-        return self.__class__._db_ref[self.__class__._collection_name]
+        return cls._db_ref[cls._collection_name]
 
     @classmethod
     def find_scoped(cls, filter_doc: dict = None, **kwargs):
