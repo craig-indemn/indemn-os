@@ -19,7 +19,7 @@ class FakeEntity:
         "quoted": ["closed"],
         "declined": ["closed"],
     }
-    _state_field_name = None
+    _state_field_name = "status"
     _is_kernel_entity = False
     _pending_transition = None
     status = "received"
@@ -43,10 +43,10 @@ class FakeEntityWithStage:
 
 
 class FakeKernelEntity:
-    """Kernel entity uses convention (status)."""
+    """Kernel entity uses status field."""
 
     _state_machine = {"active": ["suspended"], "suspended": ["active"]}
-    _state_field_name = None  # Kernel entities don't set this
+    _state_field_name = "status"
     _is_kernel_entity = True
     _pending_transition = None
     status = "active"
@@ -104,7 +104,7 @@ def test_find_state_field_with_state_field_name():
     assert _find_state_field(entity) == "stage"
 
 
-def test_find_state_field_kernel_convention():
+def test_find_state_field_kernel_explicit():
     entity = FakeKernelEntity()
     assert _find_state_field(entity) == "status"
 
