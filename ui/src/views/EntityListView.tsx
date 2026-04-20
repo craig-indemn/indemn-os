@@ -9,7 +9,7 @@ import { FieldRenderer } from "../components/FieldRenderer";
 import { StateIndicator } from "../components/StateIndicator";
 import type { ColumnDef } from "@tanstack/react-table";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 100;
 
 export function EntityListView() {
   const { entityType } = useParams<{ entityType: string }>();
@@ -82,6 +82,12 @@ export function EntityListView() {
       cell: ({ getValue }) => (
         <FieldRenderer type={field.type} value={getValue()} meta={field} />
       ),
+      meta: { fieldType: field.type, enumValues: field.enum_values },
+      filterFn: field.enum_values?.length
+        ? "equals"
+        : field.type === "int" || field.type === "float" || field.type === "decimal"
+          ? "inNumberRange" as const
+          : "includesString",
     });
   }
 

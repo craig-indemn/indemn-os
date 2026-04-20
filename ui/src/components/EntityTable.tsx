@@ -138,7 +138,7 @@ export function EntityTable({
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
-                    className={`px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap${
+                    className={`px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap${
                       header.column.getCanSort()
                         ? " cursor-pointer select-none"
                         : ""
@@ -159,6 +159,55 @@ export function EntityTable({
                 ))}
               </tr>
             ))}
+            {/* Per-column filter row */}
+            <tr className="border-t">
+              {table.getHeaderGroups()[0]?.headers.map((header) => {
+                const meta = header.column.columnDef.meta as
+                  | { fieldType?: string; enumValues?: string[] }
+                  | undefined;
+                const canFilter =
+                  header.column.getCanFilter() &&
+                  header.id !== "select" &&
+                  header.id !== "status";
+
+                return (
+                  <th key={header.id + "-filter"} className="px-4 py-1">
+                    {canFilter && meta?.enumValues?.length ? (
+                      <select
+                        value={(header.column.getFilterValue() as string) ?? ""}
+                        onChange={(e) =>
+                          header.column.setFilterValue(
+                            e.target.value || undefined
+                          )
+                        }
+                        className="w-full px-1 py-0.5 text-xs border rounded"
+                      >
+                        <option value="">All</option>
+                        {meta.enumValues.map((v) => (
+                          <option key={v} value={v}>
+                            {v.replace(/_/g, " ")}
+                          </option>
+                        ))}
+                      </select>
+                    ) : canFilter ? (
+                      <input
+                        type="text"
+                        value={
+                          (header.column.getFilterValue() as string) ?? ""
+                        }
+                        onChange={(e) =>
+                          header.column.setFilterValue(
+                            e.target.value || undefined
+                          )
+                        }
+                        placeholder="Filter..."
+                        className="w-full px-1 py-0.5 text-xs border rounded"
+                      />
+                    ) : null}
+                  </th>
+                );
+              })}
+            </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {table.getRowModel().rows.map((row) => (
