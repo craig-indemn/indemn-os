@@ -23,8 +23,8 @@ export function EntityCreateView() {
   // Build empty initial values from meta fields
   const emptyEntity: Record<string, unknown> = {};
   for (const field of meta.fields) {
-    if (!field.name.startsWith("_")) {
-      emptyEntity[field.name] = "";
+    if (!field.name.startsWith("_") && !["org_id", "version", "created_at", "updated_at", "created_by"].includes(field.name)) {
+      emptyEntity[field.name] = field.default != null ? field.default : "";
     }
   }
 
