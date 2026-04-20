@@ -182,17 +182,19 @@ class ChatSession:
                         tc_args = (
                             tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
                         )
-                        await self._send({"type": "tool_call", "name": tc_name, "args": tc_args})
+                        tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                        await self._send(
+                            {
+                                "type": "tool_call",
+                                "name": tc_name,
+                                "args": tc_args,
+                                "call_id": tc_id,
+                            }
+                        )
                 elif msg_type == "tool":
                     tool_name = getattr(msg, "name", "")
                     tool_content = getattr(msg, "content", "")
-                    await self._send(
-                        {
-                            "type": "tool_result",
-                            "name": tool_name,
-                            "content": str(tool_content)[:1000],
-                        }
-                    )
+                    await self._classify_and_send_tool_result(tool_name, tool_content)
 
             await self._send({"type": "done"})
 
@@ -215,6 +217,50 @@ class ChatSession:
             await close_interaction(self.interaction_id)
 
         log.info("Session closed: interaction=%s", self.interaction_id)
+
+    async def _classify_and_send_tool_result(self, tool_name: str, tool_content):
+        """Classify tool output — detect entity data and send as typed message."""
+        content_str = str(tool_content) if not isinstance(tool_content, str) else tool_content
+
+        # Try to parse as JSON for entity detection
+        try:
+            data = json.loads(content_str)
+        except (json.JSONDecodeError, TypeError):
+            await self._send(
+                {"type": "tool_result", "name": tool_name, "content": content_str[:1000]}
+            )
+            return
+
+        # Detect entity list (array of dicts with _id)
+        if (
+            isinstance(data, list)
+            and len(data) > 0
+            and isinstance(data[0], dict)
+            and "_id" in data[0]
+        ):
+            entity_type = self._infer_entity_type(tool_name)
+            await self._send({"type": "entity_list", "data": data, "entity_type": entity_type})
+            return
+
+        # Detect single entity (dict with _id)
+        if isinstance(data, dict) and "_id" in data:
+            entity_type = self._infer_entity_type(tool_name)
+            await self._send({"type": "entity_detail", "data": data, "entity_type": entity_type})
+            return
+
+        # Fallback: send as tool_result
+        await self._send({"type": "tool_result", "name": tool_name, "content": content_str[:1000]})
+
+    def _infer_entity_type(self, tool_name: str) -> str:
+        """Infer entity type from the tool/command name.
+
+        deepagents execute tool captures the full command.
+        Pattern: 'indemn <entity_type> list/get/create/...'
+        """
+        # tool_name from deepagents is typically "execute" — the command is in args
+        # But the content itself reveals the entity type from the data shape
+        # For now, return empty and let the UI infer from data
+        return ""
 
     async def _send(self, data: dict):
         """Send a typed JSON message to the WebSocket client."""
