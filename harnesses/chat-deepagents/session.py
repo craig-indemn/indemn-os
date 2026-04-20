@@ -310,26 +310,39 @@ class ChatSession:
         # The execute tool may return output with extra text — try to find JSON within.
         json_str = content_str.strip()
 
-        # Try direct parse first
+        # Try to parse JSON — CLI may append decorative borders after the data.
         data = None
         try:
             data = json.loads(json_str)
-            log.info("JSON parse succeeded: type=%s", type(data).__name__)
-        except (json.JSONDecodeError, TypeError) as parse_err:
-            log.info("JSON direct parse failed: %s", parse_err)
-            # Try to extract JSON array or object from the content
-            for start_char, end_char in [("[", "]"), ("{", "}")]:
-                start = json_str.find(start_char)
-                end = json_str.rfind(end_char)
-                if start != -1 and end > start:
-                    try:
-                        data = json.loads(json_str[start : end + 1])
-                        log.info("JSON extract succeeded: type=%s", type(data).__name__)
-                        break
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-        except Exception as unexpected_err:
-            log.error("Unexpected error parsing JSON: %s", unexpected_err, exc_info=True)
+        except (json.JSONDecodeError, TypeError):
+            # Find the JSON portion — look for matching brackets
+            if json_str.startswith("["):
+                # Find closing ] by parsing incrementally
+                depth = 0
+                for i, ch in enumerate(json_str):
+                    if ch == "[":
+                        depth += 1
+                    elif ch == "]":
+                        depth -= 1
+                        if depth == 0:
+                            try:
+                                data = json.loads(json_str[: i + 1])
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                            break
+            elif json_str.startswith("{"):
+                depth = 0
+                for i, ch in enumerate(json_str):
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            try:
+                                data = json.loads(json_str[: i + 1])
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                            break
 
         if data is None:
             log.info("No JSON detected, sending as tool_result (len=%d)", len(content_str))
