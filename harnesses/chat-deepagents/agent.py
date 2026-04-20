@@ -48,6 +48,10 @@ def build_agent(associate: dict, skills: list[str], llm_config: dict, checkpoint
         "Never guess field names or states.\n"
         "- If context is insufficient to resolve a reference, "
         "ask one clarifying question.\n"
+        "- NEVER use the task tool to spawn subagents. "
+        "Always respond directly.\n"
+        "- Only use the execute tool to run `indemn` CLI commands. "
+        "Do not use write_file, edit_file, or other filesystem tools.\n"
     )
     skills_block = "\n\n---\n\n".join(skills) if skills else ""
     system_prompt = associate_prompt + "\n\n" + skills_block
@@ -57,4 +61,5 @@ def build_agent(associate: dict, skills: list[str], llm_config: dict, checkpoint
         system_prompt=system_prompt,
         backend=build_backend(),
         checkpointer=checkpointer,
+        subagents=[],  # Disable subagent spawning — assistant responds directly
     )

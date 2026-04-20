@@ -25,8 +25,6 @@ export function ConversationHistory({ currentInteractionId, onSelect }: Props) {
     (c) => c._id !== currentInteractionId && c.channel_type === "chat"
   );
 
-  if (items.length === 0 && !open) return null;
-
   return (
     <div className="relative">
       <button

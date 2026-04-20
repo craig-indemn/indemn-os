@@ -183,15 +183,20 @@ class ChatSession:
                 config={"configurable": {"thread_id": self.interaction_id}},
             )
 
-            # Extract and send the agent's response
-            messages = result.get("messages", [])
-            for msg in messages:
+            # Extract NEW messages only (skip input messages from this turn)
+            all_msgs = result.get("messages", [])
+            input_count = len(messages)  # messages we sent as input
+            new_msgs = all_msgs[input_count:] if len(all_msgs) > input_count else all_msgs
+
+            # Send only the final AI response + tool calls from this turn
+            last_ai_content = ""
+            for msg in new_msgs:
                 msg_type = getattr(msg, "type", type(msg).__name__)
                 if msg_type == "ai":
                     content = getattr(msg, "content", "")
                     if content:
-                        await self._send({"type": "response", "content": content})
-                    # Send tool calls
+                        last_ai_content = content
+                    # Send tool calls as collapsible blocks
                     for tc in getattr(msg, "tool_calls", []):
                         tc_name = (
                             tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
@@ -212,6 +217,10 @@ class ChatSession:
                     tool_name = getattr(msg, "name", "")
                     tool_content = getattr(msg, "content", "")
                     await self._classify_and_send_tool_result(tool_name, tool_content)
+
+            # Send the final AI response (last one wins — avoids duplicates)
+            if last_ai_content:
+                await self._send({"type": "response", "content": last_ai_content})
 
             await self._send({"type": "done"})
 
