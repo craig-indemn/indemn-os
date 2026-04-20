@@ -52,18 +52,10 @@ export function EntityListView() {
     });
   }
 
-  // Smart column selection: prioritize name/title, key fields, hide noise
-  const LOW_VALUE_FIELDS = new Set([
-    "notes", "description", "summary", "drive_folder_url", "linkedin_url",
-    "website", "recording_ref", "transcript_ref", "competitive_notes",
-    "lost_reason", "escalation_paths", "success_metrics", "steps",
-    "required_inputs", "proof_points", "language_guidance",
-    "standard_checklist", "attendee_list_ref",
-  ]);
-
+  // All fields as columns — sorted by priority, scrollable like a spreadsheet
   const priorityScore = (f: typeof meta.fields[0]) => {
     if (f.name === "name" || f.name === "title") return 0;
-    if (f.type === "str" && f.enum_values?.length) return 1; // enums are useful
+    if (f.type === "str" && f.enum_values?.length) return 1;
     if (f.name.includes("arr") || f.name.includes("score")) return 2;
     if (f.type === "str" && !f.is_relationship) return 3;
     if (f.type === "int" || f.type === "decimal" || f.type === "float") return 4;
@@ -73,19 +65,17 @@ export function EntityListView() {
     return 8;
   };
 
-  const visibleFields = meta.fields
+  const allFields = meta.fields
     .filter(
       (f) =>
         !f.name.startsWith("_") &&
         f.name !== "org_id" &&
         f.name !== "version" &&
-        !f.is_state_field &&
-        !LOW_VALUE_FIELDS.has(f.name)
+        !f.is_state_field
     )
-    .sort((a, b) => priorityScore(a) - priorityScore(b))
-    .slice(0, 6);
+    .sort((a, b) => priorityScore(a) - priorityScore(b));
 
-  for (const field of visibleFields) {
+  for (const field of allFields) {
     columns.push({
       accessorKey: field.name,
       header: field.description || field.name.replace(/_/g, " "),
