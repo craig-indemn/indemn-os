@@ -56,7 +56,7 @@ async def trace_entity(
             "actor_id": c.actor_id,
             "correlation_id": c.correlation_id,
             "method": c.method,
-            "changes": [{"field": fc.field, "old": fc.old_value, "new": fc.new_value} for fc in c.changes],
+            "changes": [{"field": fc.field, "old_value": fc.old_value, "new_value": fc.new_value} for fc in c.changes],
         })
 
     for m in messages:
@@ -86,7 +86,7 @@ async def trace_entity(
     return {
         "entity_type": entity_type,
         "entity_id": entity_id,
-        "events": timeline[:limit],
+        "timeline": timeline[:limit],
         "sources": {
             "changes": len(changes),
             "messages": len(messages),
