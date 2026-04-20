@@ -47,7 +47,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <main className="flex-1 p-6 overflow-auto min-w-0">{children}</main>
           {isOpen && (
             <>
-              <ResizeDivider onResize={(delta) => setWidth(width + delta)} />
+              <ResizeDivider onResize={(delta) => setWidth((w) => w + delta)} />
               <AssistantPanel
                 width={width}
                 inputRef={inputRef}

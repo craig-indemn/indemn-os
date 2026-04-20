@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useAllEntityMeta } from "../api/hooks";
 import { StateIndicator } from "../components/StateIndicator";
 
 interface Props {
@@ -8,7 +9,18 @@ interface Props {
 }
 
 export function CompactEntityTable({ data, entityType, maxRows = 10 }: Props) {
-  const slug = entityType ? entityType.toLowerCase() + "s" : "";
+  const { data: allMeta } = useAllEntityMeta();
+
+  // Infer entity type from data fields if not provided
+  let slug = entityType ? entityType.toLowerCase() + "s" : "";
+  if (!slug && allMeta && data.length > 0) {
+    const dataFields = new Set(Object.keys(data[0]));
+    const match = allMeta.find((m) => {
+      const metaFields = m.fields.map((f) => f.name);
+      return metaFields.length > 0 && metaFields.every((f) => dataFields.has(f));
+    });
+    if (match) slug = match.name.toLowerCase() + "s";
+  }
   const rows = data.slice(0, maxRows);
 
   // Auto-detect key fields from first row

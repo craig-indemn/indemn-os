@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useAllEntityMeta } from "../api/hooks";
 import { StateIndicator } from "../components/StateIndicator";
 
 interface Props {
@@ -7,7 +8,17 @@ interface Props {
 }
 
 export function EntityCard({ data, entityType }: Props) {
-  const slug = entityType ? entityType.toLowerCase() + "s" : "";
+  const { data: allMeta } = useAllEntityMeta();
+
+  let slug = entityType ? entityType.toLowerCase() + "s" : "";
+  if (!slug && allMeta) {
+    const dataFields = new Set(Object.keys(data));
+    const match = allMeta.find((m) => {
+      const metaFields = m.fields.map((f) => f.name);
+      return metaFields.length > 0 && metaFields.every((f) => dataFields.has(f));
+    });
+    if (match) slug = match.name.toLowerCase() + "s";
+  }
   const id = String(data._id || "");
   const nameField = "name" in data ? "name" : "title" in data ? "title" : null;
   const stateField = "status" in data ? "status" : "stage" in data ? "stage" : null;

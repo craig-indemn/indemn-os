@@ -5,23 +5,21 @@ interface Props {
 }
 
 export function ResizeDivider({ onResize }: Props) {
-  const dragging = useRef(false);
   const lastX = useRef(0);
+  const onResizeRef = useRef(onResize);
+  onResizeRef.current = onResize;
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    dragging.current = true;
     lastX.current = e.clientX;
     e.preventDefault();
 
     const handleMouseMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
       const delta = ev.clientX - lastX.current;
       lastX.current = ev.clientX;
-      onResize(-delta); // negative because dragging left increases pane width
+      onResizeRef.current(-delta);
     };
 
     const handleMouseUp = () => {
-      dragging.current = false;
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
       document.body.style.cursor = "";
@@ -32,12 +30,13 @@ export function ResizeDivider({ onResize }: Props) {
     document.addEventListener("mouseup", handleMouseUp);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-  }, [onResize]);
+  }, []);
 
   return (
     <div
       onMouseDown={handleMouseDown}
-      className="w-1.5 bg-gray-200 hover:bg-blue-300 cursor-col-resize flex-shrink-0 transition-colors"
+      className="w-2 bg-gray-200 hover:bg-blue-400 cursor-col-resize flex-shrink-0 transition-colors"
+      title="Drag to resize"
     />
   );
 }

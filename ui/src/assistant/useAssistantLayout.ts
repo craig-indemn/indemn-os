@@ -19,11 +19,14 @@ export function useAssistantLayout() {
     } catch { return DEFAULT_WIDTH; }
   });
 
-  const setWidth = useCallback((w: number) => {
-    const maxW = window.innerWidth * MAX_WIDTH_RATIO;
-    const clamped = Math.max(MIN_WIDTH, Math.min(w, maxW));
-    setWidthState(clamped);
-    localStorage.setItem(WIDTH_KEY, String(clamped));
+  const setWidth = useCallback((w: number | ((prev: number) => number)) => {
+    setWidthState((prev) => {
+      const next = typeof w === "function" ? w(prev) : w;
+      const maxW = window.innerWidth * MAX_WIDTH_RATIO;
+      const clamped = Math.max(MIN_WIDTH, Math.min(next, maxW));
+      localStorage.setItem(WIDTH_KEY, String(clamped));
+      return clamped;
+    });
   }, []);
 
   const toggleOpen = useCallback(() => {
