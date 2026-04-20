@@ -7,14 +7,15 @@ import { JsonEditor } from "./JsonEditor";
 interface Props {
   field: FieldMeta;
   control: Control<Record<string, unknown>>;
+  rules?: Record<string, unknown>;
 }
 
 const baseClass =
   "w-full px-3 py-1.5 border rounded text-sm focus:ring-2 focus:ring-blue-400";
 
 /** Render the appropriate form control for a field type. [G-32] */
-export function FormField({ field, control }: Props) {
-  const { field: formField } = useController({ name: field.name, control });
+export function FormField({ field, control, rules }: Props) {
+  const { field: formField } = useController({ name: field.name, control, rules });
 
   // Fields with enum_values render as dropdowns regardless of type
   if (field.enum_values?.length) {

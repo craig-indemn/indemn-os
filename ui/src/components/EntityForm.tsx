@@ -21,7 +21,7 @@ export function EntityForm({ meta, entity, onSave, isCreate }: Props) {
   const {
     control,
     handleSubmit,
-    formState: { isDirty, isSubmitting },
+    formState: { isDirty, isSubmitting, errors },
   } = useForm({ defaultValues: entity as Record<string, unknown> });
 
   const editableFields = meta.fields.filter(
@@ -36,7 +36,16 @@ export function EntityForm({ meta, entity, onSave, isCreate }: Props) {
             {field.description || field.name.replace(/_/g, " ")}
             {field.required && <span className="text-red-500 ml-0.5">*</span>}
           </label>
-          <FormField field={field} control={control} />
+          <FormField
+            field={field}
+            control={control}
+            rules={field.required ? { required: `${field.name.replace(/_/g, " ")} is required` } : undefined}
+          />
+          {errors[field.name] && (
+            <p className="text-red-500 text-xs mt-1">
+              {String(errors[field.name]?.message || "Required")}
+            </p>
+          )}
         </div>
       ))}
       {meta.permissions.write && (
