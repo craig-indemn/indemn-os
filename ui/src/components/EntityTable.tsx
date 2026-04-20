@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -18,6 +18,7 @@ interface Props {
   onRowClick?: (row: Record<string, unknown>) => void;
   enableSelection?: boolean;
   onSelectionChange?: (selectedIds: string[]) => void;
+  storageKey?: string;
 }
 
 export function EntityTable({
@@ -26,12 +27,25 @@ export function EntityTable({
   onRowClick,
   enableSelection,
   onSelectionChange,
+  storageKey,
 }: Props) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
+    if (!storageKey) return {};
+    try {
+      const stored = localStorage.getItem(`col-vis-${storageKey}`);
+      return stored ? JSON.parse(stored) : {};
+    } catch { return {}; }
+  });
   const [showColumnPicker, setShowColumnPicker] = useState(false);
+
+  useEffect(() => {
+    if (storageKey && Object.keys(columnVisibility).length > 0) {
+      localStorage.setItem(`col-vis-${storageKey}`, JSON.stringify(columnVisibility));
+    }
+  }, [columnVisibility, storageKey]);
 
   // Checkbox column prepended when selection is enabled
   const allColumns = useMemo<ColumnDef<Record<string, unknown>>[]>(() => {

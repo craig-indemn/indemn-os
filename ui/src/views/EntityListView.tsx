@@ -173,6 +173,7 @@ export function EntityListView() {
         onRowClick={(row) => navigate(`/${entityType}/${row._id}`)}
         enableSelection={canBulk}
         onSelectionChange={setSelectedIds}
+        storageKey={entityName}
       />
 
       {/* Pagination */}
