@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
+import Markdown from "react-markdown";
 import { useAssistant } from "./useAssistant";
 
 export function AssistantPanel() {
@@ -59,13 +60,17 @@ export function AssistantPanel() {
         {messages.map((msg) => (
           <div key={msg.id} className={msg.role === "user" ? "text-right" : ""}>
             <div
-              className={`inline-block p-3 rounded-lg max-w-[85%] text-sm whitespace-pre-wrap ${
+              className={`inline-block p-3 rounded-lg max-w-[85%] text-sm ${
                 msg.role === "user"
-                  ? "bg-blue-100 text-blue-900"
-                  : "bg-gray-50 text-gray-800"
+                  ? "bg-blue-100 text-blue-900 whitespace-pre-wrap"
+                  : "bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none"
               }`}
             >
-              {msg.content}
+              {msg.role === "user" ? (
+                msg.content
+              ) : (
+                <Markdown>{msg.content}</Markdown>
+              )}
             </div>
           </div>
         ))}
