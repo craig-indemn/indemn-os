@@ -1,11 +1,16 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type RefObject } from "react";
 import { useLocation } from "react-router-dom";
 import Markdown from "react-markdown";
 import { useAssistant } from "./useAssistant";
 
-export function AssistantPanel() {
-  const { messages, isOpen, togglePanel, isStreaming, clearMessages, sendMessage } =
-    useAssistant();
+interface Props {
+  width: number;
+  inputRef: RefObject<HTMLInputElement | null>;
+  onClose: () => void;
+}
+
+export function AssistantPanel({ width, inputRef, onClose }: Props) {
+  const { messages, isStreaming, clearMessages, sendMessage } = useAssistant();
   const bottomRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState("");
   const location = useLocation();
@@ -22,20 +27,20 @@ export function AssistantPanel() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // ESC key closes panel [G-59]
+  // ESC key closes panel
   useEffect(() => {
-    if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") togglePanel();
+      if (e.key === "Escape") onClose();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [isOpen, togglePanel]);
-
-  if (!isOpen) return null;
+  }, [onClose]);
 
   return (
-    <div className="fixed right-0 top-0 h-full w-[450px] bg-white shadow-xl border-l z-50 flex flex-col">
+    <div
+      style={{ width }}
+      className="h-full bg-white border-l flex flex-col flex-shrink-0"
+    >
       <div className="flex justify-between items-center p-4 border-b">
         <h2 className="font-semibold">Assistant</h2>
         <div className="flex items-center gap-2">
@@ -48,7 +53,7 @@ export function AssistantPanel() {
             </button>
           )}
           <button
-            onClick={togglePanel}
+            onClick={onClose}
             className="text-gray-400 hover:text-gray-600 text-sm"
           >
             ESC
@@ -84,6 +89,7 @@ export function AssistantPanel() {
       <div className="border-t p-3">
         <div className="flex gap-2">
           <input
+            ref={inputRef as React.RefObject<HTMLInputElement>}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}

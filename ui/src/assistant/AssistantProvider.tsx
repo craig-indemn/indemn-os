@@ -1,7 +1,6 @@
 import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AssistantContext, type AssistantMessage } from "./useAssistant";
-import { AssistantPanel } from "./AssistantPanel";
 import { getToken } from "../api/client";
 import { useAuth } from "../auth/useAuth";
 
@@ -325,7 +324,6 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
       value={{ messages, isOpen, isStreaming, togglePanel, sendMessage, clearMessages }}
     >
       {children}
-      <AssistantPanel />
     </AssistantContext.Provider>
   );
 }

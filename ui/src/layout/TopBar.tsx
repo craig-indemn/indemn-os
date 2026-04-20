@@ -1,12 +1,13 @@
 import { useAuth } from "../auth/useAuth";
-import { AssistantInput } from "../assistant/AssistantInput";
 
 interface Props {
   sidebarOpen?: boolean;
   onToggleSidebar?: () => void;
+  onOpenAssistant?: () => void;
+  assistantOpen?: boolean;
 }
 
-export function TopBar({ sidebarOpen, onToggleSidebar }: Props) {
+export function TopBar({ sidebarOpen, onToggleSidebar, onOpenAssistant, assistantOpen }: Props) {
   const { logout } = useAuth();
 
   return (
@@ -16,9 +17,19 @@ export function TopBar({ sidebarOpen, onToggleSidebar }: Props) {
         className="text-gray-500 hover:text-gray-700 text-lg"
         title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
       >
-        {sidebarOpen ? "\u2630" : "\u2630"}
+        &#x2630;
       </button>
-      <AssistantInput />
+      <div className="flex-1" />
+      {!assistantOpen && (
+        <button
+          onClick={onOpenAssistant}
+          className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+          title="Open Assistant (/ or Cmd+K)"
+        >
+          <span>Assistant</span>
+          <kbd className="px-1 py-0.5 bg-gray-100 rounded text-xs font-mono">/</kbd>
+        </button>
+      )}
       <button
         onClick={logout}
         className="text-sm text-gray-500 hover:text-gray-700 whitespace-nowrap"
