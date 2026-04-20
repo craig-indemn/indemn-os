@@ -42,7 +42,7 @@ export function EntityTable({
   const [showColumnPicker, setShowColumnPicker] = useState(false);
 
   useEffect(() => {
-    if (storageKey && Object.keys(columnVisibility).length > 0) {
+    if (storageKey) {
       localStorage.setItem(`col-vis-${storageKey}`, JSON.stringify(columnVisibility));
     }
   }, [columnVisibility, storageKey]);

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 
 interface Toast {
   id: string;
@@ -18,11 +18,22 @@ export function useToast() {
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const timeoutIds = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  useEffect(() => {
+    return () => {
+      timeoutIds.current.forEach((tid) => clearTimeout(tid));
+    };
+  }, []);
 
   const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
     const id = crypto.randomUUID();
     setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+    const tid = setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+      timeoutIds.current.delete(id);
+    }, 4000);
+    timeoutIds.current.set(id, tid);
   }, []);
 
   return (

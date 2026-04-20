@@ -24,11 +24,14 @@ export function EntityListView() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (search) params.set("search", search);
-    if (stateFilter) params.set("status", stateFilter);
-    if (page > 0) params.set("page", String(page));
-    setSearchParams(params, { replace: true });
+    const timeout = setTimeout(() => {
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      if (stateFilter) params.set("status", stateFilter);
+      if (page > 0) params.set("page", String(page));
+      setSearchParams(params, { replace: true });
+    }, 300);
+    return () => clearTimeout(timeout);
   }, [search, stateFilter, page, setSearchParams]);
 
   const params: Record<string, string> = {
