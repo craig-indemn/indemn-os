@@ -12,6 +12,8 @@ jobs:
 
   test-unit:
     runs-on: ubuntu-latest
+    env:
+      JWT_SIGNING_KEY: ci-test-signing-key
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
