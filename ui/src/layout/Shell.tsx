@@ -11,7 +11,7 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-gray-50 flex">
       {sidebarOpen && <Navigation />}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <StatusBanner />
         <TopBar
           sidebarOpen={sidebarOpen}
