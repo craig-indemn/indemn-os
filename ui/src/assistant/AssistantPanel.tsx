@@ -117,6 +117,46 @@ export function AssistantPanel({ width, inputRef, onClose }: Props) {
   );
 }
 
+/** Try to parse message content as entity data (JSON with _id fields). */
+function tryDetectEntityData(
+  content: string
+): { type: "list" | "detail"; data: unknown } | null {
+  if (!content || content.length < 10) return null;
+  const trimmed = content.trim();
+
+  // Must start with [ or { to be JSON
+  if (trimmed[0] !== "[" && trimmed[0] !== "{") return null;
+
+  try {
+    const data = JSON.parse(trimmed);
+
+    // Entity list: array of objects with _id
+    if (
+      Array.isArray(data) &&
+      data.length > 0 &&
+      typeof data[0] === "object" &&
+      data[0] !== null &&
+      "_id" in data[0]
+    ) {
+      return { type: "list", data };
+    }
+
+    // Single entity: object with _id
+    if (
+      typeof data === "object" &&
+      data !== null &&
+      !Array.isArray(data) &&
+      "_id" in data
+    ) {
+      return { type: "detail", data };
+    }
+  } catch {
+    // Not valid JSON — that's fine, render as text
+  }
+
+  return null;
+}
+
 function MessageBubble({ msg }: { msg: AssistantMessage }) {
   // User messages always get the blue bubble
   if (msg.role === "user") {
@@ -162,23 +202,43 @@ function MessageBubble({ msg }: { msg: AssistantMessage }) {
       );
 
     case "tool_result":
-      return (
-        <div className="max-w-[85%]">
-          <pre className="text-xs text-gray-500 font-mono bg-gray-50 p-2 rounded overflow-x-auto">
-            {msg.content}
-          </pre>
-        </div>
-      );
+    default: {
+      // Try to detect entity data in content (JSON with _id fields)
+      const detected = tryDetectEntityData(msg.content);
+      if (detected?.type === "list") {
+        return (
+          <div className="max-w-[95%]">
+            <CompactEntityTable data={detected.data as Record<string, unknown>[]} entityType="" />
+          </div>
+        );
+      }
+      if (detected?.type === "detail") {
+        return (
+          <div className="max-w-[85%]">
+            <EntityCard data={detected.data as Record<string, unknown>} entityType="" />
+          </div>
+        );
+      }
 
-    case "divider":
-      return (
-        <div className="text-xs text-gray-400 text-center py-2 border-t border-b">
-          &mdash; {msg.content} &mdash;
-        </div>
-      );
+      if (msg.messageType === "tool_result") {
+        return (
+          <div className="max-w-[85%]">
+            <pre className="text-xs text-gray-500 font-mono bg-gray-50 p-2 rounded overflow-x-auto">
+              {msg.content}
+            </pre>
+          </div>
+        );
+      }
 
-    default:
-      // Standard text/markdown message — gray bubble
+      if (msg.messageType === "divider") {
+        return (
+          <div className="text-xs text-gray-400 text-center py-2 border-t border-b">
+            &mdash; {msg.content} &mdash;
+          </div>
+        );
+      }
+
+      // Standard text/markdown
       return (
         <div>
           <div className="inline-block p-3 rounded-lg max-w-[85%] text-sm bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none">
@@ -186,5 +246,6 @@ function MessageBubble({ msg }: { msg: AssistantMessage }) {
           </div>
         </div>
       );
+    }
   }
 }
