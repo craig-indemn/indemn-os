@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useEntity, useEntityMeta, useChanges } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
@@ -21,6 +22,13 @@ export function EntityDetailView() {
   const { toast } = useToast();
 
   useRealtimeEntityDetail(entityName, entityId);
+
+  useEffect(() => {
+    if (entity) {
+      const name = String(entity.name || entity.title || entityId);
+      document.title = `${name} - ${entityName} - Indemn OS`;
+    }
+  }, [entity, entityName, entityId]);
 
   if (!meta || !entity) {
     return (

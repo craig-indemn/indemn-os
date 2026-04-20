@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useEntityMeta } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
@@ -11,6 +12,8 @@ export function EntityCreateView() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { data: meta } = useEntityMeta(entityName);
+
+  useEffect(() => { document.title = `New ${entityName} - Indemn OS`; }, [entityName]);
 
   if (!meta) {
     return (

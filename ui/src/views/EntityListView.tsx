@@ -42,6 +42,8 @@ export function EntityListView() {
 
   useRealtimeEntity(entityName);
 
+  useEffect(() => { document.title = `${entityName} List - Indemn OS`; }, [entityName]);
+
   if (!meta || isLoading) {
     return (
       <div className="flex items-center justify-center h-64 text-gray-400">
