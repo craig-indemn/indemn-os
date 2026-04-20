@@ -123,7 +123,7 @@ export function AssistantPanel({ width, inputRef, onClose }: Props) {
  */
 function tryDetectEntityData(
   content: string
-): { type: "list" | "detail"; data: unknown; remainder: string } | null {
+): { type: "list" | "detail"; data: unknown; remainder: string; preamble: string } | null {
   if (!content || content.length < 10) return null;
   const trimmed = content.trim();
 
@@ -142,8 +142,8 @@ function tryDetectEntityData(
   }
   if (start < 0) return null;
 
-  // Only detect if JSON starts near the beginning (allow small preamble)
-  if (start > 20) return null;
+  // JSON must contain enough data to be meaningful (not just a small snippet)
+  if (trimmed.length - start < 50) return null;
 
   // Bracket-depth counting to find the matching close bracket
   let depth = 0;
@@ -163,20 +163,21 @@ function tryDetectEntityData(
 
   try {
     const data = JSON.parse(trimmed.slice(start, end + 1));
+    const preamble = trimmed.slice(0, start).trim();
     const remainder = trimmed.slice(end + 1).trim();
 
     if (
       Array.isArray(data) && data.length > 0 &&
       typeof data[0] === "object" && data[0] !== null && "_id" in data[0]
     ) {
-      return { type: "list", data, remainder };
+      return { type: "list", data, remainder, preamble };
     }
 
     if (
       typeof data === "object" && data !== null &&
       !Array.isArray(data) && "_id" in data
     ) {
-      return { type: "detail", data, remainder };
+      return { type: "detail", data, remainder, preamble };
     }
   } catch {
     // Parse failed
@@ -236,6 +237,11 @@ function MessageBubble({ msg }: { msg: AssistantMessage }) {
       if (detected?.type === "list") {
         return (
           <div className="max-w-[95%] space-y-2">
+            {detected.preamble && (
+              <div className="p-3 rounded-lg text-sm bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none">
+                <Markdown>{detected.preamble}</Markdown>
+              </div>
+            )}
             <CompactEntityTable data={detected.data as Record<string, unknown>[]} entityType="" />
             {detected.remainder && (
               <div className="p-3 rounded-lg text-sm bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none">
@@ -248,6 +254,11 @@ function MessageBubble({ msg }: { msg: AssistantMessage }) {
       if (detected?.type === "detail") {
         return (
           <div className="max-w-[85%] space-y-2">
+            {detected.preamble && (
+              <div className="p-3 rounded-lg text-sm bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none">
+                <Markdown>{detected.preamble}</Markdown>
+              </div>
+            )}
             <EntityCard data={detected.data as Record<string, unknown>} entityType="" />
             {detected.remainder && (
               <div className="p-3 rounded-lg text-sm bg-gray-50 text-gray-800 prose prose-sm prose-gray max-w-none">
