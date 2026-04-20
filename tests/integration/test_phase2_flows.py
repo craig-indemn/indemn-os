@@ -4,16 +4,12 @@ Tests scheduled associate creation, direct invocation message creation,
 bulk operation dispatch, and adapter retry logic.
 """
 
-import asyncio
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-import pytest_asyncio
 from bson import ObjectId
 
-from kernel.context import current_actor_id, current_org_id
 from kernel.integration.adapter import (
     Adapter,
     AdapterAuthError,
@@ -22,8 +18,6 @@ from kernel.integration.adapter import (
 )
 from kernel.integration.dispatch import execute_with_retry
 from kernel.message.schema import Message
-from kernel.skill.integrity import compute_content_hash
-from kernel.skill.schema import Skill
 from kernel_entities.actor import Actor
 from kernel_entities.role import Role
 
@@ -59,10 +53,12 @@ class TestScheduledAssociateCreation:
         await check_scheduled_associates()
 
         # Should have created a scheduled message
-        msg = await Message.find_one({
-            "entity_type": "_scheduled",
-            "entity_id": associate.id,
-        })
+        msg = await Message.find_one(
+            {
+                "entity_type": "_scheduled",
+                "entity_id": associate.id,
+            }
+        )
         assert msg is not None
         assert msg.event_type == "schedule_fired"
         assert msg.target_role == "email_processor"
@@ -95,10 +91,12 @@ class TestScheduledAssociateCreation:
         await check_scheduled_associates()
 
         # Should only have one message
-        msgs = await Message.find({
-            "entity_type": "_scheduled",
-            "entity_id": associate.id,
-        }).to_list()
+        msgs = await Message.find(
+            {
+                "entity_type": "_scheduled",
+                "entity_id": associate.id,
+            }
+        ).to_list()
         assert len(msgs) == 1
 
 
@@ -162,9 +160,7 @@ class TestAdapterRetryLogic:
                 return {"token": "new"}
 
         adapter = MockAdapter()
-        with patch(
-            "kernel.integration.dispatch.store_credentials", new_callable=AsyncMock
-        ):
+        with patch("kernel.integration.dispatch.store_credentials", new_callable=AsyncMock):
             result = await execute_with_retry(adapter, "fetch")
         assert result == [{"id": "msg-1"}]
         assert adapter.call_count == 2
@@ -224,10 +220,12 @@ class TestWebhookEntityOperations:
             config={},
             credentials={"secret_key": "sk_test", "webhook_secret": "whsec_test"},
         )
-        parsed = await adapter.parse_webhook({
-            "type": "payment_intent.succeeded",
-            "data": {"object": {"id": "pi_abc123"}},
-        })
+        parsed = await adapter.parse_webhook(
+            {
+                "type": "payment_intent.succeeded",
+                "data": {"object": {"id": "pi_abc123"}},
+            }
+        )
         assert parsed["entity_type"] == "Payment"
         assert parsed["operation"] == "transition"
         assert parsed["params"]["to_status"] == "completed"

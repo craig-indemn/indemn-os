@@ -59,10 +59,12 @@ async def handle_webhook(provider: str, integration_id: str, request: Request):
     if not entity_cls:
         raise HTTPException(400, f"Unknown entity type: {parsed['entity_type']}")
 
-    entity = await entity_cls.find_one({
-        parsed["lookup_by"]: parsed["lookup_value"],
-        "org_id": integration.org_id,
-    })
+    entity = await entity_cls.find_one(
+        {
+            parsed["lookup_by"]: parsed["lookup_value"],
+            "org_id": integration.org_id,
+        }
+    )
 
     if parsed["operation"] == "create":
         new_entity = entity_cls(org_id=integration.org_id, **parsed["params"])
@@ -75,8 +77,7 @@ async def handle_webhook(provider: str, integration_id: str, request: Request):
     if not entity:
         raise HTTPException(
             404,
-            f"{parsed['entity_type']} not found: "
-            f"{parsed['lookup_by']}={parsed['lookup_value']}",
+            f"{parsed['entity_type']} not found: {parsed['lookup_by']}={parsed['lookup_value']}",
         )
 
     if parsed["operation"] == "transition":

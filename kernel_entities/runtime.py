@@ -31,9 +31,9 @@ class Runtime(BaseEntity):
     capacity: dict = Field(
         default_factory=lambda: {"max_concurrent_sessions": None, "max_memory_mb": None}
     )
-    status: Literal[
-        "configured", "deploying", "active", "draining", "stopped", "error"
-    ] = "configured"
+    status: Literal["configured", "deploying", "active", "draining", "stopped", "error"] = (
+        "configured"
+    )
     instances: list[dict] = Field(default_factory=list)
 
     _state_field_name = "status"
@@ -57,11 +57,13 @@ class Runtime(BaseEntity):
         import uuid
 
         instance_id = str(uuid.uuid4())[:8]
-        self.instances.append({
-            "instance_id": instance_id,
-            "registered_at": datetime.now(timezone.utc).isoformat(),
-            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-        })
+        self.instances.append(
+            {
+                "instance_id": instance_id,
+                "registered_at": datetime.now(timezone.utc).isoformat(),
+                "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         # Transition deploying → active when first instance registers
         if self.status == "deploying":
             self.transition_to("active")

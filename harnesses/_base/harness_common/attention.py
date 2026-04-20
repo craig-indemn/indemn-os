@@ -24,14 +24,14 @@ async def open_attention(
     Creates directly via API (not CLI) because Attention needs computed
     fields (expires_at, opened_at, last_heartbeat) set at creation.
     """
-    from datetime import datetime, timedelta, timezone
-    import json as json_mod
-
-    from .cli import CLIError
 
     # Use httpx directly — Attention has required fields the CLI wrapper doesn't handle
     import os
+    from datetime import datetime, timedelta, timezone
+
     import httpx
+
+    from .cli import CLIError
 
     base_url = os.environ["INDEMN_API_URL"]
     token = os.environ.get("INDEMN_SERVICE_TOKEN", "")

@@ -18,11 +18,13 @@ def create_integration(
     system_type: str = typer.Option(..., "--system-type", help="email, payment, etc."),
     provider: str = typer.Option(..., "--provider", help="outlook, gmail, stripe, etc."),
     access_roles: str = typer.Option(
-        None, "--access-roles",
+        None,
+        "--access-roles",
         help="Comma-separated role names for org-level access",
     ),
     actor_email: str = typer.Option(
-        None, "--actor",
+        None,
+        "--actor",
         help="Actor email for actor-level integrations (resolved to ID)",
     ),
 ):
@@ -66,7 +68,8 @@ def create_integration(
         # Resolve email to actor ID
         try:
             actors_resp = client.get(
-                "/api/actors/", params={"limit": 100},
+                "/api/actors/",
+                params={"limit": 100},
             )
             for a in actors_resp:
                 if a.get("email") == actor_email:
@@ -74,7 +77,8 @@ def create_integration(
                     break
             else:
                 typer.echo(
-                    f"Warning: actor '{actor_email}' not found", err=True,
+                    f"Warning: actor '{actor_email}' not found",
+                    err=True,
                 )
         except Exception:
             typer.echo(
@@ -102,7 +106,8 @@ def list_integrations(fmt: str = typer.Option("json", "--format")):
 
 @integration_app.command("get")
 def get_integration(
-    integration_id: str, fmt: str = typer.Option("json", "--format"),
+    integration_id: str,
+    fmt: str = typer.Option("json", "--format"),
 ):
     """Get an integration by ID."""
     client = CLIClient()
@@ -114,7 +119,9 @@ def get_integration(
 def set_credentials(
     integration_id: str,
     from_file: str = typer.Option(
-        ..., "--from-file", help="Path to JSON credentials file",
+        ...,
+        "--from-file",
+        help="Path to JSON credentials file",
     ),
 ):
     """Store credentials in Secrets Manager for an integration."""

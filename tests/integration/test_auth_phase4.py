@@ -26,10 +26,12 @@ class TestAuthAuditIntegration:
     async def test_write_auth_event(self, db, org_id, actor):
         await write_auth_event(actor, "auth.login_success", {"ip": "127.0.0.1"})
 
-        records = await ChangeRecord.find({
-            "org_id": org_id,
-            "change_type": "auth.login_success",
-        }).to_list()
+        records = await ChangeRecord.find(
+            {
+                "org_id": org_id,
+                "change_type": "auth.login_success",
+            }
+        ).to_list()
         assert len(records) == 1
         assert records[0].method == "auth.login_success"
         assert records[0].method_metadata["ip"] == "127.0.0.1"
@@ -39,10 +41,16 @@ class TestAuthAuditIntegration:
         await write_auth_event(actor, "auth.login_attempt", {})
         await write_auth_event(actor, "auth.login_success", {})
 
-        records = await ChangeRecord.find({
-            "org_id": org_id,
-            "change_type": {"$regex": "^auth\\."},
-        }).sort("timestamp").to_list()
+        records = (
+            await ChangeRecord.find(
+                {
+                    "org_id": org_id,
+                    "change_type": {"$regex": "^auth\\."},
+                }
+            )
+            .sort("timestamp")
+            .to_list()
+        )
         assert len(records) == 2
         # Second record should reference first's hash
         assert records[1].previous_hash is not None

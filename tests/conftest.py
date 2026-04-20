@@ -31,9 +31,21 @@ from kernel_entities import (
 )
 
 ALL_MODELS = [
-    Organization, Actor, Role, Integration, Attention, Runtime, Session,
-    EntityDefinition, Skill, Rule, RuleGroup, Lookup,
-    Message, MessageLog, ChangeRecord,
+    Organization,
+    Actor,
+    Role,
+    Integration,
+    Attention,
+    Runtime,
+    Session,
+    EntityDefinition,
+    Skill,
+    Rule,
+    RuleGroup,
+    Lookup,
+    Message,
+    MessageLog,
+    ChangeRecord,
 ]
 
 
@@ -45,6 +57,7 @@ def _get_mongodb_uri() -> str:
     # Try AWS Secrets Manager — build public endpoint URI
     try:
         import boto3
+
         client = boto3.client("secretsmanager", region_name="us-east-1")
         response = client.get_secret_value(SecretId="indemn/dev/shared/mongodb-uri")
         private_uri = response["SecretString"]
@@ -66,6 +79,7 @@ async def db():
 
     # Set module-level db references so get_database()/get_client() work
     import kernel.db as db_module
+
     db_module._client = client
     db_module._db = database
 
@@ -97,7 +111,10 @@ async def org_id(db):
     """Create a test organization and set context."""
     oid = ObjectId()
     org = Organization(
-        id=oid, org_id=oid, name="Test Org", slug=f"test-{uuid.uuid4().hex[:6]}",
+        id=oid,
+        org_id=oid,
+        name="Test Org",
+        slug=f"test-{uuid.uuid4().hex[:6]}",
         status="active",
     )
     await org.insert()
@@ -110,14 +127,19 @@ async def org_id(db):
 async def actor(db, org_id):
     """Create a test actor with admin role and set context."""
     role = Role(
-        org_id=org_id, name="admin",
+        org_id=org_id,
+        name="admin",
         permissions={"read": ["*"], "write": ["*"]},
     )
     await role.insert()
 
     act = Actor(
-        org_id=org_id, name="Test Actor", email="test@example.com",
-        type="human", status="active", role_ids=[role.id],
+        org_id=org_id,
+        name="Test Actor",
+        email="test@example.com",
+        type="human",
+        status="active",
+        role_ids=[role.id],
     )
     await act.insert()
     current_actor_id.set(str(act.id))

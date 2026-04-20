@@ -17,15 +17,14 @@ import logging
 import os
 from datetime import timedelta
 
+from harness.agent import build_agent
+from harness_common.cli import CLIError, indemn
+from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
+from indemn_os.types import AgentExecutionInput, AgentExecutionResult
 from temporalio import activity
 from temporalio.client import Client
-from temporalio.worker import Worker
 from temporalio.contrib.opentelemetry import TracingInterceptor
-
-from indemn_os.types import AgentExecutionInput, AgentExecutionResult
-from harness_common.cli import indemn, CLIError
-from harness_common.runtime import RUNTIME_ID, register_instance, heartbeat_loop
-from harness.agent import build_agent
+from temporalio.worker import Worker
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -61,8 +60,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         associate = indemn("actor", "get", input.associate_id)
         # Dynamic entity instances with related entities per design (depth 2)
         entity_slug = input.entity_type.lower()
-        context = indemn(entity_slug, "get", input.entity_id,
-                         "--depth", "2", "--include-related")
+        context = indemn(entity_slug, "get", input.entity_id, "--depth", "2", "--include-related")
 
         # Load Runtime for three-layer config merge
         runtime_id = associate.get("runtime_id", RUNTIME_ID)
@@ -90,12 +88,16 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         activity.heartbeat("starting_agent")
 
         # Run the agent loop
-        result = await agent.ainvoke({
-            "messages": [{
-                "role": "user",
-                "content": f"Process this work:\n\n{context}",
-            }],
-        })
+        result = await agent.ainvoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Process this work:\n\n{context}",
+                    }
+                ],
+            }
+        )
 
         # Log what the agent did — every message, every tool call
         messages = result.get("messages", [])
@@ -105,13 +107,20 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             if msg_type == "tool":
                 tool_name = getattr(msg, "name", "unknown")
                 tools_used.append(tool_name)
-                log.info("Agent tool result [%s]: %s", tool_name, str(getattr(msg, "content", ""))[:500])
+                content = str(getattr(msg, "content", ""))[:500]
+                log.info("Agent tool result [%s]: %s", tool_name, content)
             elif msg_type == "ai":
                 # Log tool calls the AI made
                 tool_calls = getattr(msg, "tool_calls", [])
                 for tc in tool_calls:
-                    tc_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
-                    tc_args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                    tc_name = (
+                        tc.get("name", "unknown")
+                        if isinstance(tc, dict)
+                        else getattr(tc, "name", "unknown")
+                    )
+                    tc_args = (
+                        tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                    )
                     log.info("Agent called tool [%s]: %s", tc_name, str(tc_args)[:500])
                 if not tool_calls:
                     log.info("Agent response: %s", str(getattr(msg, "content", ""))[:300])
@@ -150,6 +159,7 @@ def _setup_gcp_credentials():
     sa_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
     if sa_json:
         import json as json_mod
+
         try:
             data = json_mod.loads(sa_json)
             if "private_key" in data:
@@ -189,9 +199,7 @@ async def main():
     # Read capacity from Runtime config (not hardcoded)
     try:
         runtime_config = indemn("runtime", "get", RUNTIME_ID)
-        max_concurrent = (
-            runtime_config.get("capacity", {}).get("max_concurrent_sessions") or 10
-        )
+        max_concurrent = runtime_config.get("capacity", {}).get("max_concurrent_sessions") or 10
     except Exception:
         max_concurrent = 10  # Fallback if Runtime config unavailable at startup
 

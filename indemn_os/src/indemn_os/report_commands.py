@@ -16,15 +16,18 @@ def compare_report(
         ..., "--os-entity", help="Entity type in the OS to compare against"
     ),
     match_field: str = typer.Option(
-        "external_id", "--match-field",
+        "external_id",
+        "--match-field",
         help="Field to join old and new records",
     ),
     compare_fields: str = typer.Option(
-        ..., "--compare-fields",
+        ...,
+        "--compare-fields",
         help="Comma-separated fields to compare",
     ),
     output: str = typer.Option(
-        "comparison-report.csv", "--output",
+        "comparison-report.csv",
+        "--output",
     ),
 ):
     """Compare old system decisions against OS entity data.
@@ -79,11 +82,13 @@ def _write_csv(result: dict, path: str, match_field: str, fields: list):
             field_data = comp.get("fields", {})
             for field in fields:
                 fd = field_data.get(field, {})
-                row.extend([
-                    fd.get("old", ""),
-                    fd.get("new", ""),
-                    fd.get("match", ""),
-                ])
+                row.extend(
+                    [
+                        fd.get("old", ""),
+                        fd.get("new", ""),
+                        fd.get("match", ""),
+                    ]
+                )
             writer.writerow(row)
 
 

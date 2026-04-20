@@ -32,8 +32,7 @@ class OutlookAdapter(Adapter):
         """Refresh OAuth tokens using the refresh token. [G-26]"""
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"https://login.microsoftonline.com/"
-                f"{self.config['tenant_id']}/oauth2/v2.0/token",
+                f"https://login.microsoftonline.com/{self.config['tenant_id']}/oauth2/v2.0/token",
                 data={
                     "client_id": self.config["client_id"],
                     "client_secret": self.credentials["client_secret"],
@@ -49,9 +48,7 @@ class OutlookAdapter(Adapter):
             return {
                 **self.credentials,
                 "access_token": token_data["access_token"],
-                "refresh_token": token_data.get(
-                    "refresh_token", self.credentials["refresh_token"]
-                ),
+                "refresh_token": token_data.get("refresh_token", self.credentials["refresh_token"]),
                 "expires_at": (
                     datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
                 ).isoformat(),
@@ -68,9 +65,7 @@ class OutlookAdapter(Adapter):
             query_params["$filter"] = f"receivedDateTime ge {since}"
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url, headers=headers, params=query_params, timeout=30.0
-            )
+            response = await client.get(url, headers=headers, params=query_params, timeout=30.0)
 
             if response.status_code == 401:
                 raise AdapterAuthError("Outlook: access token expired")
@@ -121,8 +116,7 @@ class OutlookAdapter(Adapter):
         """Map OS format to Outlook message format."""
         return {
             "toRecipients": [
-                {"emailAddress": {"address": to}}
-                for to in email_data.get("to_addresses", [])
+                {"emailAddress": {"address": to}} for to in email_data.get("to_addresses", [])
             ],
             "subject": email_data.get("subject", ""),
             "body": {"contentType": "HTML", "content": email_data.get("body", "")},

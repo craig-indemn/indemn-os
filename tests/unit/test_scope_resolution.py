@@ -9,6 +9,7 @@ class TestInferEntityFromFieldName:
         # This test verifies the naming convention logic
         # The actual registry lookup happens at runtime
         from kernel.db import ENTITY_REGISTRY
+
         result = _infer_entity_from_field_name("organization_id")
         # If Organization is in registry (it is for kernel entities)
         if "Organization" in ENTITY_REGISTRY:

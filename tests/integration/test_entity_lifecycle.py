@@ -7,12 +7,9 @@ Acceptance tests covered:
 """
 
 import pytest
-from bson import ObjectId
 
 from kernel.changes.collection import ChangeRecord
-from kernel.context import current_actor_id
 from kernel.entity.definition import (
-    CapabilityActivation,
     ComputedFieldDef,
     EntityDefinition,
     FieldDefinition,
@@ -76,9 +73,7 @@ async def test_dynamic_entity_crud(db, org_id, actor):
     assert loaded.version == 3
 
     # Verify changes recorded
-    changes = await ChangeRecord.find(
-        {"entity_id": sub.id}
-    ).sort("-timestamp").to_list()
+    changes = await ChangeRecord.find({"entity_id": sub.id}).sort("-timestamp").to_list()
     assert len(changes) >= 2  # create + update
     assert changes[0].change_type == "update"
 

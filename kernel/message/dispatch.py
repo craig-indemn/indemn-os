@@ -31,20 +31,24 @@ async def optimistic_dispatch(messages: list[Message]):
 
     for message in messages:
         try:
-            role = await Role.find_one({
-                "name": message.target_role,
-                "org_id": message.org_id,
-            })
+            role = await Role.find_one(
+                {
+                    "name": message.target_role,
+                    "org_id": message.org_id,
+                }
+            )
             if not role:
                 continue
 
             # Check for active associates on this role
-            associates = await Actor.find({
-                "type": "associate",
-                "role_ids": role.id,
-                "status": "active",
-                "org_id": message.org_id,
-            }).to_list(length=1)
+            associates = await Actor.find(
+                {
+                    "type": "associate",
+                    "role_ids": role.id,
+                    "status": "active",
+                    "org_id": message.org_id,
+                }
+            ).to_list(length=1)
 
             if associates:
                 # Associate available — ProcessMessageWorkflow

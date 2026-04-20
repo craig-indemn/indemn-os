@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 # --- Shared mixin for common behavior ---
 
+
 class _EntityMixin:
     """Shared behavior for both kernel and domain entities."""
 
@@ -33,12 +34,14 @@ class _EntityMixin:
     def transition_to(self, target_state: str, reason: Optional[str] = None):
         """Validate and set state transition. Does NOT save."""
         from kernel.entity.state_machine import validate_and_apply_transition
+
         validate_and_apply_transition(self, target_state, reason)
 
     async def save_tracked(self, actor_id: str = None, **kwargs):
         """The ONLY save path. Returns list of created messages."""
         from kernel.context import current_actor_id
         from kernel.entity.save import save_tracked_impl
+
         _actor_id = actor_id or current_actor_id.get()
         return await save_tracked_impl(self, _actor_id, **kwargs)
 
@@ -48,6 +51,7 @@ class _EntityMixin:
 
 
 # --- Kernel entities: Beanie Document ---
+
 
 class KernelBaseEntity(_EntityMixin, Document):
     """Base for the 7 kernel entities. Uses Beanie for full ODM support."""
@@ -71,6 +75,7 @@ class KernelBaseEntity(_EntityMixin, Document):
     def find_scoped(cls, filter_doc: dict = None, **kwargs):
         """Find with automatic org_id injection. Returns Beanie query (not async)."""
         from kernel.context import current_org_id
+
         filter_doc = filter_doc or {}
         org_id = current_org_id.get()
         if org_id:
@@ -81,6 +86,7 @@ class KernelBaseEntity(_EntityMixin, Document):
     async def get_scoped(cls, entity_id, **kwargs):
         """Get by ID with org_id verification."""
         from kernel.context import current_org_id
+
         entity = await cls.get(entity_id, **kwargs)
         if entity and current_org_id.get():
             if entity.org_id != current_org_id.get():
@@ -91,6 +97,7 @@ class KernelBaseEntity(_EntityMixin, Document):
 
 
 # --- Domain entities: Pydantic BaseModel + Motor ---
+
 
 class DomainBaseEntity(_EntityMixin, BaseModel):
     """Base for dynamic domain entities. Uses Pydantic + Motor directly.
@@ -121,6 +128,7 @@ class DomainBaseEntity(_EntityMixin, BaseModel):
     def find_scoped(cls, filter_doc: dict = None, **kwargs):
         """Find with automatic org_id injection. Returns a MotorCursor-like wrapper."""
         from kernel.context import current_org_id
+
         filter_doc = filter_doc or {}
         org_id = current_org_id.get()
         if org_id:
@@ -153,6 +161,7 @@ class DomainBaseEntity(_EntityMixin, BaseModel):
     async def get_scoped(cls, entity_id, **kwargs):
         """Get by ID with org_id verification."""
         from kernel.context import current_org_id
+
         entity = await cls.get(entity_id, **kwargs)
         if entity and current_org_id.get():
             if entity.org_id != current_org_id.get():

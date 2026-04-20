@@ -41,8 +41,10 @@ def create_entity_class(definition: EntityDefinition) -> type[DomainBaseEntity]:
             python_type = str
         if not field_def.required:
             python_type = Optional[python_type]
-        default = field_def.default if field_def.default is not None else (
-            None if not field_def.required else ...
+        default = (
+            field_def.default
+            if field_def.default is not None
+            else (None if not field_def.required else ...)
         )
         field_definitions[field_name] = (python_type, default)
 
@@ -59,9 +61,7 @@ def create_entity_class(definition: EntityDefinition) -> type[DomainBaseEntity]:
 
     # Add enum validators for fields with enum_values
     enum_fields = {
-        fname: fdef.enum_values
-        for fname, fdef in definition.fields.items()
-        if fdef.enum_values
+        fname: fdef.enum_values for fname, fdef in definition.fields.items() if fdef.enum_values
     }
     if enum_fields:
         original_init = DynamicEntity.__init__
@@ -70,9 +70,7 @@ def create_entity_class(definition: EntityDefinition) -> type[DomainBaseEntity]:
             for fname, allowed in enum_fields.items():
                 val = data.get(fname)
                 if val is not None and val not in allowed:
-                    raise ValueError(
-                        f"Field '{fname}' must be one of {allowed}, got '{val}'"
-                    )
+                    raise ValueError(f"Field '{fname}' must be one of {allowed}, got '{val}'")
             original_init(self, **data)
 
         DynamicEntity.__init__ = _validating_init

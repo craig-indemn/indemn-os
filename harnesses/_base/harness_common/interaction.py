@@ -25,11 +25,13 @@ async def create_interaction(
         data["deployment_id"] = deployment_id
 
     # Use the CLI to create — goes through the auto-generated CRUD endpoint
-    import json
     result = indemn(
-        "interaction", "create",
-        "--channel-type", channel_type,
-        "--associate", associate_id,
+        "interaction",
+        "create",
+        "--channel-type",
+        channel_type,
+        "--associate",
+        associate_id,
         *(["--deployment", deployment_id] if deployment_id else []),
     )
     log.info("Created Interaction: %s", result.get("_id"))

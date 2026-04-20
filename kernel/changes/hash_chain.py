@@ -78,8 +78,13 @@ async def get_previous_hash(org_id, session=None) -> str:
     """Get the hash of the most recent change record for this org."""
     from kernel.changes.collection import ChangeRecord
 
-    last = await ChangeRecord.find(
-        {"org_id": org_id},
-        session=session,
-    ).sort("-timestamp").limit(1).to_list()
+    last = (
+        await ChangeRecord.find(
+            {"org_id": org_id},
+            session=session,
+        )
+        .sort("-timestamp")
+        .limit(1)
+        .to_list()
+    )
     return last[0].current_hash if last else None

@@ -43,16 +43,16 @@ async def transfer_interaction(
 
     # 1. Close old actor's Attention [G-49]
     if old_handler:
-        old_attentions = await Attention.find({
-            "actor_id": ObjectId(str(old_handler)),
-            "target_entity.id": ObjectId(interaction_id),
-            "status": "active",
-        }).to_list()
+        old_attentions = await Attention.find(
+            {
+                "actor_id": ObjectId(str(old_handler)),
+                "target_entity.id": ObjectId(interaction_id),
+                "status": "active",
+            }
+        ).to_list()
         for att in old_attentions:
             att.transition_to("closed")
-            await att.save_tracked(
-                actor_id=str(actor.id), method="handoff_close"
-            )
+            await att.save_tracked(actor_id=str(actor.id), method="handoff_close")
 
     # 2. Update Interaction handler
     if to_actor:

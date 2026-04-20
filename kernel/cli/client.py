@@ -79,8 +79,14 @@ class CLIClient:
 
 
 _INFRASTRUCTURE_FIELDS = {
-    "_id", "id", "org_id", "created_at", "updated_at", "created_by",
-    "version", "revision_id",
+    "_id",
+    "id",
+    "org_id",
+    "created_at",
+    "updated_at",
+    "created_by",
+    "version",
+    "revision_id",
 }
 
 

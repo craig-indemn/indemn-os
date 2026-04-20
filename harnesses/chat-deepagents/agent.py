@@ -7,8 +7,8 @@ Chat harness uses all 5 middleware (including HITL for real-time human approval)
 import os
 
 from deepagents import create_deep_agent
-from langchain.chat_models import init_chat_model
 from harness_common.backend import build_backend
+from langchain.chat_models import init_chat_model
 
 
 def build_agent(associate: dict, skills: list[str], llm_config: dict, checkpointer=None):

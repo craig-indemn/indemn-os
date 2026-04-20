@@ -157,19 +157,21 @@ async def get_entity_detail_metadata(entity_name: str, actor=Depends(get_current
         defn = await EntityDefinition.find_one({"name": entity_name})
         if defn:
             for fname, fdef in defn.fields.items():
-                fields.append({
-                    "name": fname,
-                    "type": fdef.type,
-                    "required": fdef.required,
-                    "default": fdef.default,
-                    "enum_values": fdef.enum_values,
-                    "description": fdef.description,
-                    "is_state_field": fdef.is_state_field,
-                    "is_relationship": fdef.is_relationship,
-                    "relationship_target": fdef.relationship_target,
-                    "indexed": fdef.indexed,
-                    "unique": fdef.unique,
-                })
+                fields.append(
+                    {
+                        "name": fname,
+                        "type": fdef.type,
+                        "required": fdef.required,
+                        "default": fdef.default,
+                        "enum_values": fdef.enum_values,
+                        "description": fdef.description,
+                        "is_state_field": fdef.is_state_field,
+                        "is_relationship": fdef.is_relationship,
+                        "relationship_target": fdef.relationship_target,
+                        "indexed": fdef.indexed,
+                        "unique": fdef.unique,
+                    }
+                )
         else:
             fields = _get_field_metadata(cls, entity_name)
     else:
@@ -182,13 +184,14 @@ async def get_entity_detail_metadata(entity_name: str, actor=Depends(get_current
     capabilities = []
     for cap in getattr(cls, "_activated_capabilities", []):
         cap_name = cap.capability if hasattr(cap, "capability") else cap.get("capability", "")
-        capabilities.append({
-            "name": cap_name,
-            "cli_command": (
-                f"indemn {entity_name.lower()} "
-                f"{cap_name.replace('_', '-')} <id> --auto"
-            ),
-        })
+        capabilities.append(
+            {
+                "name": cap_name,
+                "cli_command": (
+                    f"indemn {entity_name.lower()} {cap_name.replace('_', '-')} <id> --auto"
+                ),
+            }
+        )
 
     # @exposed methods (kernel entities only)
     exposed_methods = []
@@ -197,13 +200,14 @@ async def get_entity_detail_metadata(entity_name: str, actor=Depends(get_current
             continue
         attr = getattr(cls, attr_name, None)
         if attr and getattr(attr, "_exposed", False):
-            exposed_methods.append({
-                "name": attr._exposed_name,
-                "cli_command": (
-                    f"indemn {entity_name.lower()} "
-                    f"{attr._exposed_name.replace('_', '-')} <id>"
-                ),
-            })
+            exposed_methods.append(
+                {
+                    "name": attr._exposed_name,
+                    "cli_command": (
+                        f"indemn {entity_name.lower()} {attr._exposed_name.replace('_', '-')} <id>"
+                    ),
+                }
+            )
 
     # Permissions for the current actor
     permissions = {

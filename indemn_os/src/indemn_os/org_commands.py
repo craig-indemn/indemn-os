@@ -28,10 +28,7 @@ def clone_org(
             "target_org_name": as_name,
         },
     )
-    typer.echo(
-        f"Cloned {source} → {result['target_org_slug']}"
-        f" ({result['items_copied']} items)"
-    )
+    typer.echo(f"Cloned {source} → {result['target_org_slug']} ({result['items_copied']} items)")
 
 
 @org_app.command("diff")
@@ -43,9 +40,7 @@ def diff_orgs(org_a: str, org_b: str):
         params={"org_a": org_a, "org_b": org_b},
     )
     for diff in result.get("differences", []):
-        typer.echo(
-            f"  {diff['type']:20s} {diff['name']:30s} {diff['change']}"
-        )
+        typer.echo(f"  {diff['type']:20s} {diff['name']:30s} {diff['change']}")
     typer.echo(f"\n{len(result.get('differences', []))} differences found")
 
 
@@ -175,10 +170,7 @@ def import_org(
         "/api/_platform/org/import",
         json={"target_org_name": as_name, "config": config},
     )
-    typer.echo(
-        f"Imported into {result['org_slug']}"
-        f" ({result['items_imported']} items)"
-    )
+    typer.echo(f"Imported into {result['org_slug']} ({result['items_imported']} items)")
 
 
 @org_app.command("deploy")

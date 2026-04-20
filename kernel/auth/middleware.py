@@ -10,7 +10,13 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from kernel.auth.jwt import verify_access_token
-from kernel.context import current_actor_id, current_causation_message_id, current_correlation_id, current_depth, current_org_id
+from kernel.context import (
+    current_actor_id,
+    current_causation_message_id,
+    current_correlation_id,
+    current_depth,
+    current_org_id,
+)
 from kernel.observability.tracing import create_span
 from kernel_entities.actor import Actor
 from kernel_entities.role import Role
@@ -42,9 +48,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         auth = request.headers.get("authorization", "")
         if not auth.startswith("Bearer "):
-            return JSONResponse(
-                status_code=401, content={"error": "Missing auth token"}
-            )
+            return JSONResponse(status_code=401, content={"error": "Missing auth token"})
 
         token = auth.split(" ", 1)[1]
 
@@ -54,17 +58,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
             actor = await authenticate_by_token(token)
             if not actor:
-                return JSONResponse(
-                    status_code=401, content={"error": "Invalid service token"}
-                )
+                return JSONResponse(status_code=401, content={"error": "Invalid service token"})
             payload = {"actor_id": str(actor.id), "org_id": str(actor.org_id)}
         else:
             try:
                 payload = verify_access_token(token)
             except Exception:
-                return JSONResponse(
-                    status_code=401, content={"error": "Invalid token"}
-                )
+                return JSONResponse(status_code=401, content={"error": "Invalid token"})
 
             actor = await Actor.get(payload["actor_id"])
             if not actor or actor.status != "active":
@@ -121,9 +121,7 @@ async def _check_claims_freshness(actor, jwt_payload: dict, request: Request):
     roles = await Role.find({"_id": {"$in": actor.role_ids}}).to_list()
     role_names = [r.name for r in roles]
 
-    new_token, new_jti = create_access_token(
-        str(actor.id), str(actor.org_id), role_names
-    )
+    new_token, new_jti = create_access_token(str(actor.id), str(actor.org_id), role_names)
 
     session.claims_stale = False
     session.access_token_jti = new_jti

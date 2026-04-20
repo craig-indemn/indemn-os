@@ -7,7 +7,7 @@ import pytest
 from bson import ObjectId
 
 from kernel.context import current_org_id
-from kernel_entities import Actor, Organization, Role
+from kernel_entities import Actor, Organization
 
 
 @pytest.mark.asyncio
@@ -16,18 +16,28 @@ async def test_find_scoped_returns_only_same_org(db, org_id):
     # Create org B
     org_b_id = ObjectId()
     org_b = Organization(
-        id=org_b_id, org_id=org_b_id, name="Org B", slug="org-b", status="active",
+        id=org_b_id,
+        org_id=org_b_id,
+        name="Org B",
+        slug="org-b",
+        status="active",
     )
     await org_b.insert()
 
     # Create actors in each org
     actor_a = Actor(
-        org_id=org_id, name="Actor A", type="human", status="active",
+        org_id=org_id,
+        name="Actor A",
+        type="human",
+        status="active",
     )
     await actor_a.insert()
 
     actor_b = Actor(
-        org_id=org_b_id, name="Actor B", type="human", status="active",
+        org_id=org_b_id,
+        name="Actor B",
+        type="human",
+        status="active",
     )
     await actor_b.insert()
 
@@ -52,12 +62,19 @@ async def test_get_scoped_denies_cross_org_access(db, org_id):
     # Create org B and an actor in it
     org_b_id = ObjectId()
     org_b = Organization(
-        id=org_b_id, org_id=org_b_id, name="Org B2", slug="org-b2", status="active",
+        id=org_b_id,
+        org_id=org_b_id,
+        name="Org B2",
+        slug="org-b2",
+        status="active",
     )
     await org_b.insert()
 
     actor_in_b = Actor(
-        org_id=org_b_id, name="Secret Actor", type="human", status="active",
+        org_id=org_b_id,
+        name="Secret Actor",
+        type="human",
+        status="active",
     )
     await actor_in_b.insert()
 

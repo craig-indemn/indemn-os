@@ -101,7 +101,10 @@ async def test_stale_check_on_entity(db, org_id, actor):
 
     # Create entity that meets conditions
     task = TaskCls(
-        org_id=org_id, status="open", is_overdue=False, followup_count=3,
+        org_id=org_id,
+        status="open",
+        is_overdue=False,
+        followup_count=3,
     )
     await task.save_tracked(actor_id=str(actor.id), method="create")
 
@@ -114,7 +117,10 @@ async def test_stale_check_on_entity(db, org_id, actor):
 
     # Create entity that does NOT meet conditions
     task2 = TaskCls(
-        org_id=org_id, status="open", is_overdue=False, followup_count=0,
+        org_id=org_id,
+        status="open",
+        is_overdue=False,
+        followup_count=0,
     )
     await task2.save_tracked(actor_id=str(actor.id), method="create")
 

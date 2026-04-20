@@ -25,9 +25,7 @@ async def test_skill_create_and_retrieve(db, org_id, actor):
     await skill.insert()
 
     # Retrieve by name
-    found = await Skill.find_one(
-        {"name": "meeting-extraction", "org_id": org_id}
-    )
+    found = await Skill.find_one({"name": "meeting-extraction", "org_id": org_id})
     assert found is not None
     assert found.content == content
     assert found.type == "associate"
@@ -84,9 +82,7 @@ async def test_skill_deprecation(db, org_id, actor):
     await skill.save()
 
     # Active-only query should NOT find it
-    active = await Skill.find(
-        {"org_id": org_id, "status": "active"}
-    ).to_list()
+    active = await Skill.find({"org_id": org_id, "status": "active"}).to_list()
     assert all(s.name != "old-skill" for s in active)
 
 
@@ -105,9 +101,7 @@ async def test_skill_org_isolation(db, org_id, actor):
     await skill.insert()
 
     other_org = ObjectId()
-    found = await Skill.find_one(
-        {"name": "org-specific", "org_id": other_org}
-    )
+    found = await Skill.find_one({"name": "org-specific", "org_id": other_org})
     assert found is None
 
 

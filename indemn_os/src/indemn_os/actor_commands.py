@@ -20,10 +20,14 @@ def create_actor(
     skills: str = typer.Option(None, "--skills", help="JSON array of skill names"),
     mode: str = typer.Option(None, "--mode", help="deterministic, reasoning, or hybrid"),
     trigger_schedule: str = typer.Option(
-        None, "--trigger-schedule", help="Cron expression",
+        None,
+        "--trigger-schedule",
+        help="Cron expression",
     ),
     owner_actor: str = typer.Option(
-        None, "--owner-actor", help="Owner email (resolved to ID)",
+        None,
+        "--owner-actor",
+        help="Owner email (resolved to ID)",
     ),
 ):
     """Create an actor with ergonomic flags.
@@ -63,7 +67,8 @@ def create_actor(
     if owner_actor:
         try:
             actors_resp = client.get(
-                "/api/actors/", params={"limit": 100},
+                "/api/actors/",
+                params={"limit": 100},
             )
             for a in actors_resp:
                 if a.get("email") == owner_actor:
@@ -72,11 +77,13 @@ def create_actor(
                     break
             else:
                 typer.echo(
-                    f"Warning: actor '{owner_actor}' not found", err=True,
+                    f"Warning: actor '{owner_actor}' not found",
+                    err=True,
                 )
         except Exception:
             typer.echo(
-                f"Warning: could not resolve owner '{owner_actor}'", err=True,
+                f"Warning: could not resolve owner '{owner_actor}'",
+                err=True,
             )
 
     result = client.post("/api/actors/", json=data)
@@ -135,7 +142,9 @@ def add_role(
 def add_auth(
     email: str,
     method: str = typer.Option(
-        ..., "--method", help="Auth method: password, sso, magic_link",
+        ...,
+        "--method",
+        help="Auth method: password, sso, magic_link",
     ),
 ):
     """Add an authentication method to an actor."""

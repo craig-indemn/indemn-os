@@ -6,8 +6,8 @@ HITL middleware excluded for async — handoffs use message emission.
 """
 
 from deepagents import create_deep_agent
-from langchain.chat_models import init_chat_model
 from harness_common.backend import build_backend
+from langchain.chat_models import init_chat_model
 
 
 def build_agent(associate: dict, skills: list[str], llm_config: dict):

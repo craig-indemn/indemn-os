@@ -25,13 +25,15 @@ async def resolve_integration(
 
     # Step 1: Actor's own personal integration
     if not require_org_only:
-        personal = await Integration.find_one({
-            "owner_type": "actor",
-            "owner_id": _actor_id,
-            "system_type": system_type,
-            "status": "active",
-            "org_id": _org_id,
-        })
+        personal = await Integration.find_one(
+            {
+                "owner_type": "actor",
+                "owner_id": _actor_id,
+                "system_type": system_type,
+                "status": "active",
+                "org_id": _org_id,
+            }
+        )
         if personal:
             return personal
 
@@ -40,13 +42,15 @@ async def resolve_integration(
     if not require_org_only:
         actor = await Actor.get(_actor_id)
         if actor and actor.owner_actor_id:
-            owner_integration = await Integration.find_one({
-                "owner_type": "actor",
-                "owner_id": actor.owner_actor_id,
-                "system_type": system_type,
-                "status": "active",
-                "org_id": _org_id,
-            })
+            owner_integration = await Integration.find_one(
+                {
+                    "owner_type": "actor",
+                    "owner_id": actor.owner_actor_id,
+                    "system_type": system_type,
+                    "status": "active",
+                    "org_id": _org_id,
+                }
+            )
             if owner_integration:
                 return owner_integration
 
@@ -57,13 +61,15 @@ async def resolve_integration(
         roles = await Role.find({"_id": {"$in": actor.role_ids}}).to_list()
         role_names = [r.name for r in roles]
 
-        org_integration = await Integration.find_one({
-            "owner_type": "org",
-            "org_id": _org_id,
-            "system_type": system_type,
-            "status": "active",
-            "access.roles": {"$in": role_names},
-        })
+        org_integration = await Integration.find_one(
+            {
+                "owner_type": "org",
+                "org_id": _org_id,
+                "system_type": system_type,
+                "status": "active",
+                "access.roles": {"$in": role_names},
+            }
+        )
         if org_integration:
             return org_integration
 

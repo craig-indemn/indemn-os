@@ -30,9 +30,7 @@ def list_rules(
 @rule_app.command("create")
 def create_rule(
     entity: str = typer.Option(..., "--entity", help="Entity type (e.g., Email)"),
-    capability: str = typer.Option(
-        ..., "--capability", help="Capability name"
-    ),
+    capability: str = typer.Option(..., "--capability", help="Capability name"),
     name: str = typer.Option(None, "--name", help="Human-readable rule name"),
     when: str = typer.Option(..., "--when", help="JSON conditions"),
     action: str = typer.Option(..., "--action", help="set_fields or force_reasoning"),

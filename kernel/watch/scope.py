@@ -14,9 +14,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 
 
-async def resolve_scope(
-    scope: dict, entity, session
-) -> ObjectId | list[ObjectId] | None:
+async def resolve_scope(scope: dict, entity, session) -> ObjectId | list[ObjectId] | None:
     """Resolve a watch scope to target actor(s).
 
     Returns actor ObjectId, list of ObjectIds, or None (message not created).
@@ -55,7 +53,8 @@ async def _resolve_field_path(scope: dict, entity, session) -> ObjectId | None:
         if not related_id:
             return None
         entity_cls = _resolve_entity_type_for_field(
-            type(entity).__name__, field_name,
+            type(entity).__name__,
+            field_name,
         )
         if not entity_cls:
             return None
@@ -69,9 +68,7 @@ async def _resolve_field_path(scope: dict, entity, session) -> ObjectId | None:
     return ObjectId(actor_id) if actor_id else None
 
 
-async def _resolve_active_context(
-    scope: dict, entity, session
-) -> ObjectId | list[ObjectId] | None:
+async def _resolve_active_context(scope: dict, entity, session) -> ObjectId | list[ObjectId] | None:
     """Find actors with Attention records covering this entity. [G-48]
 
     Looks up active Attention records where the target_entity or
@@ -90,14 +87,16 @@ async def _resolve_active_context(
 
     # Query Attention for active records matching this entity
     now = datetime.now(timezone.utc)
-    attentions = await Attention.find({
-        "status": "active",
-        "expires_at": {"$gt": now},
-        "$or": [
-            {"target_entity.id": related_id},
-            {"related_entities.id": related_id},
-        ],
-    }).to_list()
+    attentions = await Attention.find(
+        {
+            "status": "active",
+            "expires_at": {"$gt": now},
+            "$or": [
+                {"target_entity.id": related_id},
+                {"related_entities.id": related_id},
+            ],
+        }
+    ).to_list()
 
     if not attentions:
         return None

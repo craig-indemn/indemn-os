@@ -7,15 +7,12 @@ Acceptance tests:
 """
 
 import pytest
-from bson import ObjectId
 
 from kernel.entity.definition import EntityDefinition, FieldDefinition
 from kernel.entity.factory import create_entity_class
 from kernel.message.schema import Message
-from kernel.watch.cache import _cache, _cache_loaded_at, load_watch_cache
+from kernel.watch.cache import load_watch_cache
 from kernel_entities.role import Role, WatchDefinition
-
-import time
 
 
 @pytest.mark.asyncio
@@ -29,7 +26,9 @@ async def test_watch_fires_on_entity_creation(db, org_id, actor):
         fields={
             "title": FieldDefinition(type="str", required=True),
             "status": FieldDefinition(
-                type="str", is_state_field=True, default="new",
+                type="str",
+                is_state_field=True,
+                default="new",
                 enum_values=["new", "done"],
             ),
         },
@@ -59,9 +58,7 @@ async def test_watch_fires_on_entity_creation(db, org_id, actor):
     await item.save_tracked(actor_id=str(actor.id), method="create")
 
     # Check for message in queue
-    messages = await Message.find(
-        {"entity_type": "WatchTestItem", "entity_id": item.id}
-    ).to_list()
+    messages = await Message.find({"entity_type": "WatchTestItem", "entity_id": item.id}).to_list()
     assert len(messages) == 1
     msg = messages[0]
     assert msg.event_type == "created"
@@ -79,7 +76,9 @@ async def test_conditional_watch(db, org_id, actor):
         fields={
             "priority": FieldDefinition(type="str", default="normal"),
             "status": FieldDefinition(
-                type="str", is_state_field=True, default="new",
+                type="str",
+                is_state_field=True,
+                default="new",
                 enum_values=["new", "done"],
             ),
         },
@@ -131,7 +130,9 @@ async def test_selective_emission(db, org_id, actor):
             "name": FieldDefinition(type="str"),
             "notes": FieldDefinition(type="str"),
             "status": FieldDefinition(
-                type="str", is_state_field=True, default="draft",
+                type="str",
+                is_state_field=True,
+                default="draft",
                 enum_values=["draft", "active", "closed"],
             ),
         },
@@ -159,9 +160,7 @@ async def test_selective_emission(db, org_id, actor):
     # Creation → should emit
     item = ItemCls(org_id=org_id, name="Test", status="draft")
     await item.save_tracked(actor_id=str(actor.id), method="create")
-    create_msgs = await Message.find(
-        {"entity_id": item.id, "event_type": "created"}
-    ).to_list()
+    create_msgs = await Message.find({"entity_id": item.id, "event_type": "created"}).to_list()
     assert len(create_msgs) == 1
 
     # Regular field update (no method, no transition) → should NOT emit

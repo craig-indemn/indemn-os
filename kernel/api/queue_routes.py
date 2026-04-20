@@ -4,7 +4,6 @@ Provides controlled access to the message queue without exposing
 full CRUD on the Message collection.
 """
 
-
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -21,21 +20,25 @@ queue_router = APIRouter(tags=["queue"])
 async def queue_stats(actor=Depends(get_current_actor)):
     """Aggregate queue statistics by role and status."""
     pipeline = [
-        {"$group": {
-            "_id": {"target_role": "$target_role", "status": "$status"},
-            "count": {"$sum": 1},
-        }},
+        {
+            "$group": {
+                "_id": {"target_role": "$target_role", "status": "$status"},
+                "count": {"$sum": 1},
+            }
+        },
         {"$sort": {"_id.target_role": 1, "_id.status": 1}},
     ]
     coll = Message.get_motor_collection()
     results = await coll.aggregate(pipeline).to_list(length=100)
     stats = []
     for r in results:
-        stats.append({
-            "role": r["_id"]["target_role"],
-            "status": r["_id"]["status"],
-            "count": r["count"],
-        })
+        stats.append(
+            {
+                "role": r["_id"]["target_role"],
+                "status": r["_id"]["status"],
+                "count": r["count"],
+            }
+        )
     return stats
 
 
@@ -53,9 +56,12 @@ async def list_messages(
     if role:
         filter_doc["target_role"] = role
     filter_doc["org_id"] = current_org_id.get()
-    messages = await Message.find(filter_doc).sort(
-        [("priority", -1), ("created_at", 1)]
-    ).limit(limit).to_list()
+    messages = (
+        await Message.find(filter_doc)
+        .sort([("priority", -1), ("created_at", 1)])
+        .limit(limit)
+        .to_list()
+    )
     return [to_dict(m) for m in messages]
 
 
@@ -127,10 +133,12 @@ async def claim_message_by_id(
 
     await Message.get_motor_collection().update_one(
         {"_id": message.id, "status": "pending"},
-        {"$set": {
-            "status": "processing",
-            "claimed_by": str(actor.id),
-        }},
+        {
+            "$set": {
+                "status": "processing",
+                "claimed_by": str(actor.id),
+            }
+        },
     )
     return {"status": "claimed", "message_id": message_id}
 

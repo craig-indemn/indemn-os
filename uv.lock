@@ -555,6 +555,7 @@ dependencies = [
     { name = "httpx" },
     { name = "orjson" },
     { name = "pydantic" },
+    { name = "pyjwt" },
     { name = "typer" },
 ]
 
@@ -563,6 +564,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "orjson", specifier = ">=3.10" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "pyjwt", specifier = ">=2.8" },
     { name = "typer", specifier = ">=0.12" },
 ]
 

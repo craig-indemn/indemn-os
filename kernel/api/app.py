@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from kernel.api.admin_routes import admin_router
+
 # assistant_router DELETED (G2.3) — assistant is a chat-harness instance, not kernel endpoint
 from kernel.api.auth_routes import auth_router
 from kernel.api.bootstrap import bootstrap_router
@@ -86,8 +87,14 @@ def create_app() -> FastAPI:
 
         # Register routes for entity types (skip infrastructure documents)
         _INFRASTRUCTURE = {
-            "EntityDefinition", "Skill", "Rule", "RuleGroup", "Lookup",
-            "Message", "MessageLog", "ChangeRecord",
+            "EntityDefinition",
+            "Skill",
+            "Rule",
+            "RuleGroup",
+            "Lookup",
+            "Message",
+            "MessageLog",
+            "ChangeRecord",
         }
         for name, cls in ENTITY_REGISTRY.items():
             if name not in _INFRASTRUCTURE:

@@ -87,19 +87,23 @@ async def list_auth_providers(org_slug: str):
 
     providers = [{"type": "password", "name": "Password"}]
 
-    sso_integrations = await Integration.find({
-        "org_id": org.id,
-        "system_type": "identity_provider",
-        "status": "active",
-    }).to_list()
+    sso_integrations = await Integration.find(
+        {
+            "org_id": org.id,
+            "system_type": "identity_provider",
+            "status": "active",
+        }
+    ).to_list()
 
     for integration in sso_integrations:
-        providers.append({
-            "type": "sso",
-            "name": integration.name,
-            "integration_id": str(integration.id),
-            "provider": integration.provider,
-        })
+        providers.append(
+            {
+                "type": "sso",
+                "name": integration.name,
+                "integration_id": str(integration.id),
+                "provider": integration.provider,
+            }
+        )
 
     return {"org_id": str(org.id), "providers": providers}
 
@@ -127,11 +131,13 @@ async def login(data: LoginRequest, request: Request):
     if await check_rate_limit(ip_address, data.email, org.id):
         raise HTTPException(429, "Too many login attempts. Try again later.")
 
-    actor = await Actor.find_one({
-        "email": data.email,
-        "org_id": org.id,
-        "status": "active",
-    })
+    actor = await Actor.find_one(
+        {
+            "email": data.email,
+            "org_id": org.id,
+            "status": "active",
+        }
+    )
 
     if not actor:
         await record_failed_attempt(ip_address, data.email)
@@ -170,9 +176,7 @@ async def login(data: LoginRequest, request: Request):
             "partial_token": partial_token,
         }
 
-    await write_auth_event(
-        actor, "auth.login_success", {"method": "password", "ip": ip_address}
-    )
+    await write_auth_event(actor, "auth.login_success", {"method": "password", "ip": ip_address})
     return {
         "access_token": token,
         "refresh_token": refresh_token,
@@ -219,11 +223,13 @@ async def sso_callback(integration_id: str, code: str, state: str = None):
     adapter = await get_adapter_for_integration(integration)
     user_info = await adapter.auth_callback(code, state)
 
-    actor = await Actor.find_one({
-        "email": user_info["email"],
-        "org_id": integration.org_id,
-        "status": "active",
-    })
+    actor = await Actor.find_one(
+        {
+            "email": user_info["email"],
+            "org_id": integration.org_id,
+            "status": "active",
+        }
+    )
     if not actor:
         raise HTTPException(403, "No active actor found for this email")
 
@@ -238,9 +244,7 @@ async def sso_callback(integration_id: str, code: str, state: str = None):
         partial_token = create_partial_token(actor, session)
         return {"requires_mfa": True, "mfa_type": "totp", "partial_token": partial_token}
 
-    await write_auth_event(
-        actor, "auth.login_success", {"method": f"sso:{integration.provider}"}
-    )
+    await write_auth_event(actor, "auth.login_success", {"method": f"sso:{integration.provider}"})
     return {
         "access_token": token,
         "refresh_token": refresh_token,
@@ -432,9 +436,7 @@ async def create_platform_admin_session(
     # Notify target org (if configured) [G-37]
     await _notify_platform_admin_access(target_org, actor, data.work_type)
 
-    token, new_jti = create_access_token(
-        str(actor.id), data.target_org_id, ["platform_admin"]
-    )
+    token, new_jti = create_access_token(str(actor.id), data.target_org_id, ["platform_admin"])
     session.access_token_jti = new_jti
     await session.save()
 
@@ -487,10 +489,12 @@ async def complete_password_reset(data: PasswordResetCompleteRequest):
     if password_method:
         password_method["password_hash"] = hash_password(data.new_password)
     else:
-        actor.authentication_methods.append({
-            "type": "password",
-            "password_hash": hash_password(data.new_password),
-        })
+        actor.authentication_methods.append(
+            {
+                "type": "password",
+                "password_hash": hash_password(data.new_password),
+            }
+        )
     await actor.save()
 
     # Revoke all sessions [G-38]
@@ -515,6 +519,7 @@ async def logout(actor=Depends(get_current_actor), request: Request = None):
     if auth.startswith("Bearer "):
         token = auth.split(" ", 1)[1]
         from kernel.auth.jwt import verify_access_token
+
         try:
             payload = verify_access_token(token)
             jti = payload.get("jti")
@@ -539,10 +544,12 @@ async def refresh_claims(actor=Depends(get_current_actor), request: Request = No
     from kernel_entities.role import Role
     from kernel_entities.session import Session
 
-    session = await Session.find_one({
-        "actor_id": actor.id,
-        "status": "active",
-    })
+    session = await Session.find_one(
+        {
+            "actor_id": actor.id,
+            "status": "active",
+        }
+    )
     if not session:
         raise HTTPException(401, "No active session")
 
@@ -575,10 +582,12 @@ async def refresh_token(data: RefreshRequest):
     from kernel_entities.session import Session
 
     refresh_hash = hashlib.sha256(data.refresh_token.encode()).hexdigest()
-    session = await Session.find_one({
-        "refresh_token_ref": refresh_hash,
-        "status": "active",
-    })
+    session = await Session.find_one(
+        {
+            "refresh_token_ref": refresh_hash,
+            "status": "active",
+        }
+    )
     if not session:
         raise HTTPException(401, "Invalid refresh token")
 
@@ -587,7 +596,8 @@ async def refresh_token(data: RefreshRequest):
         raise HTTPException(401, "Actor not found")
 
     new_session, new_access, new_refresh = await create_session(
-        actor, auth_method=session.auth_method_used,
+        actor,
+        auth_method=session.auth_method_used,
     )
 
     # Revoke old session (30s overlap — old token still valid for 30s)
@@ -599,6 +609,7 @@ async def refresh_token(data: RefreshRequest):
             await revoke_session(old_session_id)
         except Exception:
             import logging
+
             logging.getLogger(__name__).warning(
                 "Failed to revoke old session %s after refresh overlap", old_session_id
             )
@@ -629,10 +640,12 @@ async def setup_password(data: SetupPasswordRequest):
         raise HTTPException(404, "Actor not found")
 
     # Set password
-    actor.authentication_methods.append({
-        "type": "password",
-        "password_hash": hash_password(data.new_password),
-    })
+    actor.authentication_methods.append(
+        {
+            "type": "password",
+            "password_hash": hash_password(data.new_password),
+        }
+    )
 
     # Activate if provisioned
     if actor.status == "provisioned":
@@ -673,10 +686,12 @@ async def tier3_signup(data: SignupRequest):
         email=data.email,
         type="tier3_developer",
         status="provisioned",
-        authentication_methods=[{
-            "type": "password",
-            "password_hash": hash_password(data.password),
-        }],
+        authentication_methods=[
+            {
+                "type": "password",
+                "password_hash": hash_password(data.password),
+            }
+        ],
     )
     await admin.insert()
 
@@ -690,11 +705,13 @@ async def tier3_signup(data: SignupRequest):
 
     # Generate API key
     api_key = generate_service_token()
-    admin.authentication_methods.append({
-        "type": "token",
-        "usage": "tier3_api_key",
-        "token_hash": hash_token(api_key),
-    })
+    admin.authentication_methods.append(
+        {
+            "type": "token",
+            "usage": "tier3_api_key",
+            "token_hash": hash_token(api_key),
+        }
+    )
     await admin.save()
 
     # Send verification email (if email Integration exists on _platform org)
@@ -733,13 +750,7 @@ async def list_auth_events(
     if event_type:
         query["change_type"] = event_type
 
-    records = (
-        await ChangeRecord.find(query)
-        .sort("-timestamp")
-        .skip(offset)
-        .limit(limit)
-        .to_list()
-    )
+    records = await ChangeRecord.find(query).sort("-timestamp").skip(offset).limit(limit).to_list()
 
     return [
         {
@@ -817,11 +828,13 @@ async def _send_verification_email_if_possible(actor) -> str | None:
         logger.info("No _platform org — email verification deferred for %s", actor.email)
         return None
 
-    email_integration = await Integration.find_one({
-        "org_id": platform_org.id,
-        "system_type": "email",
-        "status": "active",
-    })
+    email_integration = await Integration.find_one(
+        {
+            "org_id": platform_org.id,
+            "system_type": "email",
+            "status": "active",
+        }
+    )
     if not email_integration:
         logger.info("No email Integration on _platform — verification deferred for %s", actor.email)
         return None

@@ -92,9 +92,7 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                 depth=depth,
                 status="circuit_broken",
             ).insert()
-            logger.warning(
-                "Cascade depth %d exceeded for %s", depth, type(entity).__name__
-            )
+            logger.warning("Cascade depth %d exceeded for %s", depth, type(entity).__name__)
             return []
 
         # Kernel entity cascade guard

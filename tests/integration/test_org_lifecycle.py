@@ -190,8 +190,11 @@ async def test_diff_detects_changes(db, org_id, actor):
     # Create a second org
     org2_id = ObjectId()
     org2 = Organization(
-        id=org2_id, org_id=org2_id, name="Diff Org 2",
-        slug="diff-org-2", status="active",
+        id=org2_id,
+        org_id=org2_id,
+        name="Diff Org 2",
+        slug="diff-org-2",
+        status="active",
     )
     await org2.insert()
 
@@ -237,8 +240,11 @@ async def test_deploy_dry_run(db, org_id, actor):
     # Create target org
     target_id = ObjectId()
     target = Organization(
-        id=target_id, org_id=target_id, name="Deploy Target",
-        slug="deploy-target", status="active",
+        id=target_id,
+        org_id=target_id,
+        name="Deploy Target",
+        slug="deploy-target",
+        status="active",
     )
     await target.insert()
 
@@ -262,8 +268,11 @@ async def test_deploy_apply(db, org_id, actor):
     # Create target org
     target_id = ObjectId()
     target = Organization(
-        id=target_id, org_id=target_id, name="Deploy Apply Target",
-        slug="deploy-apply-target", status="active",
+        id=target_id,
+        org_id=target_id,
+        name="Deploy Apply Target",
+        slug="deploy-apply-target",
+        status="active",
     )
     await target.insert()
 

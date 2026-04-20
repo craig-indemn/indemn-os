@@ -43,9 +43,7 @@ async def stream_events(
 
         pipeline = [{"$match": match_conditions}]
 
-        async with db["message_queue"].watch(
-            pipeline, full_document="updateLookup"
-        ) as stream:
+        async with db["message_queue"].watch(pipeline, full_document="updateLookup") as stream:
             async for change in stream:
                 doc = change.get("fullDocument")
                 if not doc:
@@ -56,15 +54,20 @@ async def stream_events(
                     if not await _is_related_to_interaction(doc, interaction):
                         continue
 
-                yield orjson.dumps({
-                    "id": str(doc.get("_id")),
-                    "entity_type": doc.get("entity_type"),
-                    "entity_id": str(doc.get("entity_id", "")),
-                    "event_type": doc.get("event_type"),
-                    "target_role": doc.get("target_role"),
-                    "correlation_id": doc.get("correlation_id"),
-                    "event_metadata": doc.get("event_metadata", {}),
-                }).decode() + "\n"
+                yield (
+                    orjson.dumps(
+                        {
+                            "id": str(doc.get("_id")),
+                            "entity_type": doc.get("entity_type"),
+                            "entity_id": str(doc.get("entity_id", "")),
+                            "event_type": doc.get("event_type"),
+                            "target_role": doc.get("target_role"),
+                            "correlation_id": doc.get("correlation_id"),
+                            "event_metadata": doc.get("event_metadata", {}),
+                        }
+                    ).decode()
+                    + "\n"
+                )
 
     return StreamingResponse(
         event_generator(),

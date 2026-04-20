@@ -1,7 +1,6 @@
 """Tests for adapter base class, registry, and error hierarchy."""
 
 import pytest
-from decimal import Decimal
 
 from kernel.integration.adapter import (
     Adapter,
@@ -44,6 +43,7 @@ class TestAdapterBase:
         adapter = DummyAdapter(config={}, credentials={})
         with pytest.raises(NotImplementedError):
             import asyncio
+
             asyncio.get_event_loop().run_until_complete(adapter.fetch())
 
     def test_needs_token_refresh_default_false(self):

@@ -5,7 +5,6 @@ and creates messages for matching watches. Runs inside the save_tracked()
 transaction.
 """
 
-
 from kernel.message.mongodb_bus import MongoDBMessageBus
 from kernel.message.schema import Message
 from kernel.observability.tracing import create_span
@@ -61,10 +60,12 @@ async def evaluate_watches_and_emit(
             context = await _build_context(entity, watch.context_depth, session)
 
             # Create message [OTEL span per vision § 14]
-            with create_span("message.create",
-                             entity_type=entity_type_name,
-                             target_role=role_name,
-                             event_type=event_type):
+            with create_span(
+                "message.create",
+                entity_type=entity_type_name,
+                target_role=role_name,
+                event_type=event_type,
+            ):
                 pass  # span wraps message creation for tracing
 
             message = Message(

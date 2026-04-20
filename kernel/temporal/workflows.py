@@ -14,17 +14,17 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from indemn_os.types import AgentExecutionInput
+
     from kernel.temporal.activities import (
         claim_message,
         complete_message,
         fail_message,
         load_actor,
-        load_entity_context,
         preview_bulk_operation,
         process_bulk_batch,
         process_human_decision,
     )
-    from indemn_os.types import AgentExecutionInput
 
 
 @workflow.defn

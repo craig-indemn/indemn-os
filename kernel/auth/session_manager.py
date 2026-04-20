@@ -30,6 +30,7 @@ async def create_session(
     expire_mins = expire_minutes or settings.jwt_access_token_expire_minutes
     # Get role names for JWT claims
     from kernel_entities.role import Role
+
     roles = await Role.find({"_id": {"$in": actor.role_ids}}).to_list()
     role_names = [r.name for r in roles]
 
@@ -66,9 +67,7 @@ async def revoke_session(session_id: ObjectId):
 
 async def revoke_all_sessions(actor_id: ObjectId):
     """Revoke all active sessions for an actor (e.g., on password reset)."""
-    sessions = await Session.find(
-        {"actor_id": actor_id, "status": "active"}
-    ).to_list()
+    sessions = await Session.find({"actor_id": actor_id, "status": "active"}).to_list()
     for session in sessions:
         session.transition_to("revoked")
         await session.save_tracked(actor_id="system:revocation", method="revoke_all")

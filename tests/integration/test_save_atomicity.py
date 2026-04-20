@@ -15,7 +15,6 @@ that class of regression from happening silently.
 from unittest.mock import patch
 
 import pytest
-from bson import ObjectId
 
 from kernel.changes.collection import ChangeRecord
 from kernel.message.schema import Message
@@ -154,6 +153,5 @@ async def test_version_restored_on_failure(db, org_id, actor):
 
     # Version must be restored to its pre-save value
     assert new_actor.version == initial_version, (
-        f"Version not restored after failure. "
-        f"Expected {initial_version}, got {new_actor.version}"
+        f"Version not restored after failure. Expected {initial_version}, got {new_actor.version}"
     )

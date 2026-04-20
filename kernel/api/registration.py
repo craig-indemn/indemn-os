@@ -30,6 +30,7 @@ def _coerce_objectid_fields(entity_cls, data: dict) -> dict:
     ObjectId-typed fields (including Optional[ObjectId] and list[ObjectId]).
     """
     import typing
+
     from bson import ObjectId as OId
 
     for field_name, field_info in entity_cls.model_fields.items():
@@ -48,10 +49,7 @@ def _coerce_objectid_fields(entity_cls, data: dict) -> dict:
             if isinstance(data[field_name], str):
                 data[field_name] = OId(data[field_name])
         elif origin is list and args and args[0] is OId:
-            data[field_name] = [
-                OId(v) if isinstance(v, str) else v
-                for v in data[field_name]
-            ]
+            data[field_name] = [OId(v) if isinstance(v, str) else v for v in data[field_name]]
     return data
 
 
@@ -78,6 +76,7 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         if search:
             # Search by name or title field (case-insensitive regex)
             import re
+
             pattern = re.escape(search)
             filter_doc["$or"] = [
                 {"name": {"$regex": pattern, "$options": "i"}},
@@ -201,9 +200,7 @@ def _register_exposed_route(router, entity_cls, entity_name, method_name, method
     """Register an @exposed method as POST /api/{entities}/{id}/{method_name}"""
 
     @router.post(f"/{{entity_id}}/{method_name.replace('_', '-')}")
-    async def exposed_method(
-        entity_id: str, data: dict = {}, actor=Depends(get_current_actor)
-    ):
+    async def exposed_method(entity_id: str, data: dict = {}, actor=Depends(get_current_actor)):
         check_permission(actor, entity_name, "write")
         entity = await entity_cls.get_scoped(entity_id)
         if not entity:
@@ -231,9 +228,7 @@ def _register_capability_route(router, entity_cls, entity_name, cap_name, activa
 
             capability_fn = get_capability(cap_name)
             config = (
-                activation.config
-                if hasattr(activation, "config")
-                else activation.get("config", {})
+                activation.config if hasattr(activation, "config") else activation.get("config", {})
             )
             result = await capability_fn(entity, config, entity.org_id)
             # If not needs_reasoning, apply the result and save

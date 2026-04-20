@@ -50,9 +50,11 @@ async def check_rate_limit(ip_address: str, email: str, org_id) -> bool:
         # Apply new lockout
         await collection.update_one(
             {"_id": key},
-            {"$set": {
-                "locked_until": datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_MINUTES),
-            }},
+            {
+                "$set": {
+                    "locked_until": datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_MINUTES),
+                }
+            },
             upsert=True,
         )
         # Audit the lockout

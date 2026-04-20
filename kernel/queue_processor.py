@@ -89,10 +89,12 @@ async def dispatch_associate_workflows():
 
     # Find pending messages older than the dispatch threshold
     threshold = datetime.now(timezone.utc) - timedelta(seconds=10)
-    messages = await Message.find({
-        "status": "pending",
-        "created_at": {"$lt": threshold},
-    }).to_list(length=100)
+    messages = await Message.find(
+        {
+            "status": "pending",
+            "created_at": {"$lt": threshold},
+        }
+    ).to_list(length=100)
 
     if not messages:
         return
@@ -100,20 +102,24 @@ async def dispatch_associate_workflows():
     for message in messages:
         try:
             # Look up role by name + org [G-66]
-            role = await Role.find_one({
-                "name": message.target_role,
-                "org_id": message.org_id,
-            })
+            role = await Role.find_one(
+                {
+                    "name": message.target_role,
+                    "org_id": message.org_id,
+                }
+            )
             if not role:
                 continue
 
             # Check if this role has active associate actors
-            associates = await Actor.find({
-                "type": "associate",
-                "role_ids": role.id,
-                "status": "active",
-                "org_id": message.org_id,
-            }).to_list()
+            associates = await Actor.find(
+                {
+                    "type": "associate",
+                    "role_ids": role.id,
+                    "status": "active",
+                    "org_id": message.org_id,
+                }
+            ).to_list()
 
             try:
                 from temporalio.client import WorkflowAlreadyStartedError
@@ -153,11 +159,13 @@ async def check_scheduled_associates():
     from kernel_entities.actor import Actor
     from kernel_entities.role import Role
 
-    associates = await Actor.find({
-        "type": "associate",
-        "status": "active",
-        "trigger_schedule": {"$exists": True, "$ne": None},
-    }).to_list()
+    associates = await Actor.find(
+        {
+            "type": "associate",
+            "status": "active",
+            "trigger_schedule": {"$exists": True, "$ne": None},
+        }
+    ).to_list()
 
     now = datetime.now(timezone.utc)
 
@@ -167,11 +175,13 @@ async def check_scheduled_associates():
             next_fire = cron.get_next(datetime)
             if next_fire <= now:
                 # Check if we already created a message for this firing
-                existing = await Message.find_one({
-                    "entity_type": "_scheduled",
-                    "entity_id": associate.id,
-                    "created_at": {"$gte": now - timedelta(minutes=1)},
-                })
+                existing = await Message.find_one(
+                    {
+                        "entity_type": "_scheduled",
+                        "entity_id": associate.id,
+                        "created_at": {"$gte": now - timedelta(minutes=1)},
+                    }
+                )
                 if existing:
                     continue
 
@@ -212,10 +222,12 @@ async def cleanup_expired_attentions():
     from kernel_entities.attention import Attention
 
     now = datetime.now(timezone.utc)
-    expired = await Attention.find({
-        "status": "active",
-        "expires_at": {"$lt": now},
-    }).to_list()
+    expired = await Attention.find(
+        {
+            "status": "active",
+            "expires_at": {"$lt": now},
+        }
+    ).to_list()
 
     for attention in expired:
         attention.transition_to("expired")
@@ -237,11 +249,13 @@ async def handle_zombie_sessions():
     from kernel_entities.attention import Attention
 
     now = datetime.now(timezone.utc)
-    recently_expired = await Attention.find({
-        "status": "expired",
-        "purpose": "real_time_session",
-        "expires_at": {"$gte": now - timedelta(minutes=5)},
-    }).to_list()
+    recently_expired = await Attention.find(
+        {
+            "status": "expired",
+            "purpose": "real_time_session",
+            "expires_at": {"$gte": now - timedelta(minutes=5)},
+        }
+    ).to_list()
 
     for attention in recently_expired:
         target = attention.target_entity
@@ -273,7 +287,8 @@ async def handle_zombie_sessions():
                 )
                 logger.warning(
                     "Zombie recovery: %s %s transitioned to abandoned",
-                    entity_type, entity_id,
+                    entity_type,
+                    entity_id,
                 )
             except Exception as exc:
                 logger.error("Zombie recovery failed for %s %s: %s", entity_type, entity_id, exc)

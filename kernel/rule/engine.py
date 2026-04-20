@@ -11,9 +11,7 @@ from kernel.rule.schema import Rule, RuleGroup
 from kernel.watch.evaluator import evaluate_condition
 
 
-async def evaluate_rules(
-    org_id, entity_type: str, capability: str, entity_data: dict
-) -> dict:
+async def evaluate_rules(org_id, entity_type: str, capability: str, entity_data: dict) -> dict:
     """Evaluate all active rules for this org + entity type + capability.
     Returns the evaluation result with full context for debugging.
 
@@ -53,10 +51,7 @@ async def evaluate_rules(
             ).to_list()
             active_group_ids = {g.id for g in active_groups}
             # Keep rules that are ungrouped OR in an active group
-            rules = [
-                r for r in rules
-                if r.group_id is None or r.group_id in active_group_ids
-            ]
+            rules = [r for r in rules if r.group_id is None or r.group_id in active_group_ids]
 
         if not rules:
             return {

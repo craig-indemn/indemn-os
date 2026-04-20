@@ -30,9 +30,7 @@ class Lookup(Document):
         indexes = [[("org_id", 1), ("name", 1)]]
 
 
-async def resolve_lookup_references(
-    sets: dict, org_id: str, entity_data: dict
-) -> dict:
+async def resolve_lookup_references(sets: dict, org_id: str, entity_data: dict) -> dict:
     """Resolve lookup references in rule action values.
 
     Example: {"lob": {"lookup": "usli-prefix-lob", "from_field": "quote_prefix"}}

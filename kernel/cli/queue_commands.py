@@ -19,14 +19,10 @@ def queue_stats(role: str = None, fmt: str = typer.Option("json", "--format")):
 
 
 @queue_app.command("dead-letter")
-def dead_letter_list(
-    limit: int = 20, fmt: str = typer.Option("json", "--format")
-):
+def dead_letter_list(limit: int = 20, fmt: str = typer.Option("json", "--format")):
     """List dead-letter messages."""
     client = CLIClient()
-    result = client.get(
-        "/api/message_queues", params={"status": "dead_letter", "limit": limit}
-    )
+    result = client.get("/api/message_queues", params={"status": "dead_letter", "limit": limit})
     render(result, fmt)
 
 

@@ -42,8 +42,9 @@ def platform_health():
 
 @platform_app.command("upgrade")
 def platform_upgrade(
-    dry_run: bool = typer.Option(True, "--dry-run/--apply",
-                                 help="Preview changes (default) or apply them"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--apply", help="Preview changes (default) or apply them"
+    ),
     json_output: bool = typer.Option(False, "--json"),
 ):
     """Upgrade platform — migrate entity definitions to current kernel schema.

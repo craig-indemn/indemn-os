@@ -27,9 +27,7 @@ async def test_password_auth_roundtrip(db, org_id, actor):
 @pytest.mark.asyncio
 async def test_jwt_roundtrip(db, org_id, actor):
     """#9: Create JWT → verify → get claims back."""
-    token, jti = create_access_token(
-        str(actor.id), str(org_id), ["admin"]
-    )
+    token, jti = create_access_token(str(actor.id), str(org_id), ["admin"])
     payload = verify_access_token(token)
     assert payload["actor_id"] == str(actor.id)
     assert payload["org_id"] == str(org_id)
@@ -56,7 +54,10 @@ async def test_permission_enforcement(db, org_id):
     await readonly_role.insert()
 
     readonly_actor = Actor(
-        org_id=org_id, name="Reader", type="human", status="active",
+        org_id=org_id,
+        name="Reader",
+        type="human",
+        status="active",
         role_ids=[readonly_role.id],
     )
     await readonly_actor.insert()
@@ -84,22 +85,27 @@ async def test_bootstrap_creates_org_and_admin(db):
     # Simulate bootstrap
     org_id = ObjectId()
     org = Organization(
-        id=org_id, org_id=org_id, name="Bootstrap Test",
-        slug="_platform_test", status="active",
+        id=org_id,
+        org_id=org_id,
+        name="Bootstrap Test",
+        slug="_platform_test",
+        status="active",
     )
     await org.insert()
 
     admin = Actor(
-        org_id=org_id, name="Admin", email="admin@test.com",
-        type="human", status="active",
-        authentication_methods=[
-            {"type": "password", "password_hash": hash_password("admin123")}
-        ],
+        org_id=org_id,
+        name="Admin",
+        email="admin@test.com",
+        type="human",
+        status="active",
+        authentication_methods=[{"type": "password", "password_hash": hash_password("admin123")}],
     )
     await admin.insert()
 
     role = Role(
-        org_id=org_id, name="platform_admin",
+        org_id=org_id,
+        name="platform_admin",
         permissions={"read": ["*"], "write": ["*"]},
     )
     await role.insert()

@@ -36,26 +36,28 @@ async def get_skill(skill_id: str, actor=Depends(get_current_actor)):
     """Get a skill by ID."""
     from bson import ObjectId
 
-    skill = await Skill.find_one(
-        {"_id": ObjectId(skill_id), "org_id": current_org_id.get()}
-    )
+    skill = await Skill.find_one({"_id": ObjectId(skill_id), "org_id": current_org_id.get()})
     if not skill:
         raise HTTPException(404, "Skill not found")
     if not verify_content_hash(skill.content, skill.content_hash):
-        raise HTTPException(status_code=409, detail=f"Skill '{skill.name}' content hash mismatch — possible tampering")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Skill '{skill.name}' content hash mismatch",
+        )
     return to_dict(skill)
 
 
 @skill_router.get("/by-name/{name}")
 async def get_skill_by_name(name: str, actor=Depends(get_current_actor)):
     """Get a skill by name."""
-    skill = await Skill.find_one(
-        {"name": name, "org_id": current_org_id.get(), "status": "active"}
-    )
+    skill = await Skill.find_one({"name": name, "org_id": current_org_id.get(), "status": "active"})
     if not skill:
         raise HTTPException(404, f"Skill '{name}' not found")
     if not verify_content_hash(skill.content, skill.content_hash):
-        raise HTTPException(status_code=409, detail=f"Skill '{skill.name}' content hash mismatch — possible tampering")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Skill '{skill.name}' content hash mismatch",
+        )
     return to_dict(skill)
 
 
@@ -100,9 +102,7 @@ async def update_skill(skill_id: str, data: dict, actor=Depends(get_current_acto
     check_permission(actor, "Skill", "write")
     from bson import ObjectId
 
-    skill = await Skill.find_one(
-        {"_id": ObjectId(skill_id), "org_id": current_org_id.get()}
-    )
+    skill = await Skill.find_one({"_id": ObjectId(skill_id), "org_id": current_org_id.get()})
     if not skill:
         raise HTTPException(404, "Skill not found")
 
@@ -129,9 +129,7 @@ async def submit_skill_for_review(skill_id: str, actor=Depends(get_current_actor
     """Submit a skill update for review. Transitions status to pending_review."""
     from bson import ObjectId
 
-    skill = await Skill.find_one(
-        {"_id": ObjectId(skill_id), "org_id": current_org_id.get()}
-    )
+    skill = await Skill.find_one({"_id": ObjectId(skill_id), "org_id": current_org_id.get()})
     if not skill:
         raise HTTPException(404)
     skill.status = "pending_review"
@@ -145,9 +143,7 @@ async def approve_skill(skill_id: str, actor=Depends(get_current_actor)):
     check_permission(actor, "Skill", "write")
     from bson import ObjectId
 
-    skill = await Skill.find_one(
-        {"_id": ObjectId(skill_id), "org_id": current_org_id.get()}
-    )
+    skill = await Skill.find_one({"_id": ObjectId(skill_id), "org_id": current_org_id.get()})
     if not skill or skill.status != "pending_review":
         raise HTTPException(400, "Skill not pending review")
     skill.status = "active"
@@ -161,9 +157,7 @@ async def deprecate_skill(skill_id: str, actor=Depends(get_current_actor)):
     check_permission(actor, "Skill", "write")
     from bson import ObjectId
 
-    skill = await Skill.find_one(
-        {"_id": ObjectId(skill_id), "org_id": current_org_id.get()}
-    )
+    skill = await Skill.find_one({"_id": ObjectId(skill_id), "org_id": current_org_id.get()})
     if not skill:
         raise HTTPException(404)
     skill.status = "deprecated"

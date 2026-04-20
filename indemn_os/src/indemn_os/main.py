@@ -17,13 +17,14 @@ def main():
     # Register static commands (always available)
     from indemn_os.actor_commands import actor_app
     from indemn_os.attention_commands import attention_app
-    from indemn_os.auth_commands import auth_app
     from indemn_os.audit_commands import audit_app
+    from indemn_os.auth_commands import auth_app
     from indemn_os.bulk_monitor import bulk_app
     from indemn_os.entity_commands import entity_app
     from indemn_os.events_commands import events_app
-    from indemn_os.interaction_commands import interaction_app
+    from indemn_os.init_commands import init_app
     from indemn_os.integration_commands import integration_app
+    from indemn_os.interaction_commands import interaction_app
     from indemn_os.lookup_commands import lookup_app
     from indemn_os.org_commands import org_app
     from indemn_os.platform_commands import platform_app
@@ -33,7 +34,6 @@ def main():
     from indemn_os.rule_commands import rule_app
     from indemn_os.runtime_commands import runtime_app
     from indemn_os.skill_commands import skill_app
-    from indemn_os.init_commands import init_app
     from indemn_os.trace_commands import trace_app
 
     app.add_typer(init_app, name="init")
@@ -67,15 +67,27 @@ def main():
     ):
         """Deploy configuration (alias for org deploy)."""
         from indemn_os.org_commands import deploy_org
+
         deploy_org(from_org=from_org, to_org=to_org, dry_run=dry_run, apply=apply)
 
     # Entities with dedicated static CLI apps — skip dynamic registration.
     # Infrastructure entities (Rule, Skill, Lookup, etc.) are also excluded
     # because they have custom routes, not auto-generated CRUD.
     _STATIC_CLI_ENTITIES = {
-        "Role", "Actor", "Integration", "Runtime", "Interaction", "Attention",
-        "Rule", "RuleGroup", "Skill", "Lookup",
-        "EntityDefinition", "Message", "MessageLog", "ChangeRecord",
+        "Role",
+        "Actor",
+        "Integration",
+        "Runtime",
+        "Interaction",
+        "Attention",
+        "Rule",
+        "RuleGroup",
+        "Skill",
+        "Lookup",
+        "EntityDefinition",
+        "Message",
+        "MessageLog",
+        "ChangeRecord",
     }
 
     # Fetch entity metadata and register dynamic commands.
@@ -201,6 +213,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
 
     # Register bulk commands for this entity type
     from indemn_os.bulk_commands import register_bulk_commands
+
     register_bulk_commands(name, entity_app)
 
     parent.add_typer(entity_app, name=slug)

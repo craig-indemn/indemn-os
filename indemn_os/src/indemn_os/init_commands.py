@@ -4,7 +4,6 @@ Creates .claude/ directory with CLAUDE.md and domain-modeling skill so any
 Claude Code session in this project knows how to build on the Indemn OS.
 """
 
-import os
 from pathlib import Path
 
 import typer
@@ -15,9 +14,11 @@ init_app = typer.Typer(name="init", help="Initialize project for OS development"
 # Template content — embedded so it ships with the CLI package
 # ---------------------------------------------------------------------------
 
-CLAUDE_MD = '''# Building on the Indemn OS
+CLAUDE_MD = """# Building on the Indemn OS
 
-This project builds on the Indemn Operating System. The OS auto-generates API, CLI, UI, and documentation from entity definitions. AI agents are a channel into the platform — they use the CLI like any other client.
+This project builds on the Indemn Operating System.
+The OS auto-generates API, CLI, UI, and documentation from entity definitions.
+AI agents are a channel into the platform — they use the CLI like any other client.
 
 ## Quick Start
 
@@ -55,11 +56,15 @@ indemn submission transition <id> --to triaging
 
 ## Field Types
 
-`str`, `int`, `float`, `decimal`, `bool`, `datetime`, `date`, `objectid`, `list`, `dict`
+`str`, `int`, `float`, `decimal`, `bool`, `datetime`, `date`,
+`objectid`, `list`, `dict`
 
-**Field options:** `required`, `default`, `unique`, `indexed`, `enum_values`, `is_state_field`, `is_relationship`, `relationship_target`
+**Field options:** `required`, `default`, `unique`, `indexed`,
+`enum_values`, `is_state_field`, `is_relationship`,
+`relationship_target`
 
-**Relationships:** Use `objectid` with `is_relationship: true` and `relationship_target: "EntityName"`.
+**Relationships:** Use `objectid` with `is_relationship: true`
+and `relationship_target: "EntityName"`.
 
 ## Entity Design — What to Model vs What the Kernel Handles
 
@@ -84,16 +89,19 @@ Apply these to determine what should be its own entity:
 1. **Identity** — Does it have a unique identity that matters? Would you refer to it by name or ID?
 2. **Lifecycle** — Does it have meaningful states that change over time?
 3. **Independence** — Can it exist on its own, not purely as a property of another entity?
-4. **Not kernel mechanism** — Is this business data, not something the kernel already provides?
+4. **Not kernel mechanism** — Is this business data,
+   not something the kernel already provides?
 5. **CLI test** — Would someone want to `indemn <thing> list/create/get`?
 6. **Watchable** — Would changes to this thing need to flow to people via watches?
 7. **Multiplicity** — Can there be many of these per parent?
 
-If it passes all 7: make it an entity. If it fails the CLI test or multiplicity test: it's probably a field on another entity.
+If it passes all 7: make it an entity. If it fails the CLI
+test or multiplicity test: it's probably a field on another entity.
 
 ## Watches (the wiring mechanism)
 
-Watches live on Roles. When an entity change matches a watch, a message is created for actors in that role.
+Watches live on Roles. When an entity change matches a watch,
+a message is created for actors in that role.
 
 ```bash
 indemn role create --data '{
@@ -108,7 +116,8 @@ indemn role create --data '{
 ```
 
 **Events:** created, transitioned, method_invoked, fields_changed, deleted
-**Operators:** equals, not_equals, contains, gt, gte, lt, lte, in, not_in, matches, exists, older_than, within
+**Operators:** equals, not_equals, contains, gt, gte, lt, lte,
+in, not_in, matches, exists, older_than, within
 **Composition:** `{"all": [...]}`, `{"any": [...]}`, `{"not": {...}}`
 
 ## Rules (deterministic automation)
@@ -151,11 +160,14 @@ ALL entity saves go through `save_tracked()` — one MongoDB transaction:
 entity write + changes record + watch evaluation + message creation.
 
 Only creation + state transitions + @exposed methods generate messages. NOT every field change.
-'''
+"""
 
-DOMAIN_MODELING_SKILL = '''---
+DOMAIN_MODELING_SKILL = """---
 name: domain-modeling
-description: Build a domain on the Indemn OS — entity design, roles, watches, rules, skills, integrations. Use when creating a new business domain, defining entities, or onboarding a customer.
+description: >-
+  Build a domain on the Indemn OS — entity design, roles,
+  watches, rules, skills, integrations. Use when creating a
+  new business domain, defining entities, or onboarding.
 ---
 
 # Domain Modeling on the Indemn OS
@@ -163,7 +175,10 @@ description: Build a domain on the Indemn OS — entity design, roles, watches, 
 ## The Process
 
 ### 1. Understand the Business
-Talk to the people who do the work. Understand the narrative, workflows, pain points, and what systems they use today. Capture the objectives — what the system needs to DO should inform what entities you need.
+Talk to the people who do the work. Understand the narrative,
+workflows, pain points, and what systems they use today.
+Capture the objectives — what the system needs to DO should
+inform what entities you need.
 
 ### 2. Identify Entities
 Apply the 7-test criteria to every candidate:
@@ -225,7 +240,9 @@ Create a staging org (`indemn org clone`). Load realistic data. Validate end-to-
 ### 8. Deploy and Tune
 Production org. Monitor. Add rules for patterns the LLM keeps handling deterministically.
 
-The `--auto` pattern: try rules first, LLM fallback if no match. Over time, rules replace LLM for repeated patterns → cost goes down, speed goes up.
+The `--auto` pattern: try rules first, LLM fallback if no
+match. Over time, rules replace LLM for repeated patterns —
+cost goes down, speed goes up.
 
 ## Setup Script Pattern
 
@@ -250,8 +267,8 @@ data/setup/
 | boolean | `bool` | `{"type": "bool"}` |
 | date | `date` | `{"type": "date"}` |
 | datetime | `datetime` | `{"type": "datetime"}` |
-| reference to entity | `objectid` | `{"type": "objectid", "is_relationship": true, "relationship_target": "Company"}` |
-| reference to actor | `objectid` | `{"type": "objectid", "is_relationship": true, "relationship_target": "Actor"}` |
+| reference to entity | `objectid` | `{"type": "objectid", "is_relationship": true, ...}` |
+| reference to actor | `objectid` | `{"type": "objectid", "is_relationship": true, ...}` |
 | list of strings | `list` | `{"type": "list"}` |
 | enum | `str` | `{"type": "str", "enum_values": ["A", "B", "C"]}` |
 | free-form JSON | `dict` | `{"type": "dict"}` |
@@ -270,7 +287,7 @@ data/setup/
   ...
 }
 ```
-'''
+"""
 
 
 @init_app.callback(invoke_without_command=True)

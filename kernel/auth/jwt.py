@@ -23,9 +23,7 @@ _revocation_cache: dict[str, float] = {}  # jti -> revoked_at timestamp
 _CACHE_TTL = 900  # 15 minutes (matches max access token lifetime)
 
 
-def create_access_token(
-    actor_id: str, org_id: str, roles: list[str]
-) -> tuple[str, str]:
+def create_access_token(actor_id: str, org_id: str, roles: list[str]) -> tuple[str, str]:
     """Create a JWT access token. Returns (token, jti)."""
     jti = str(uuid4())
     payload = {
@@ -43,9 +41,7 @@ def create_access_token(
 
 def verify_access_token(token: str) -> dict:
     """Verify and decode a JWT access token with revocation check."""
-    payload = jwt.decode(
-        token, settings.jwt_signing_key, algorithms=[settings.jwt_algorithm]
-    )
+    payload = jwt.decode(token, settings.jwt_signing_key, algorithms=[settings.jwt_algorithm])
 
     # Check revocation cache [G-42]
     jti = payload.get("jti")
@@ -77,9 +73,7 @@ def create_partial_token(actor, session) -> str:
 
 def verify_partial_token(token: str) -> dict:
     """Verify a partial token (MFA challenge only)."""
-    payload = jwt.decode(
-        token, settings.jwt_signing_key, algorithms=[settings.jwt_algorithm]
-    )
+    payload = jwt.decode(token, settings.jwt_signing_key, algorithms=[settings.jwt_algorithm])
     if payload.get("purpose") != "mfa_challenge":
         raise jwt.InvalidTokenError("Not a partial token")
     return payload
@@ -100,9 +94,7 @@ def generate_magic_link_token(actor, purpose: str, expires_hours: int = 4) -> st
 
 def verify_magic_link_token(token: str, purpose: str) -> dict:
     """Verify a magic link token matches the expected purpose."""
-    payload = jwt.decode(
-        token, settings.jwt_signing_key, algorithms=[settings.jwt_algorithm]
-    )
+    payload = jwt.decode(token, settings.jwt_signing_key, algorithms=[settings.jwt_algorithm])
     if payload.get("purpose") != purpose:
         raise jwt.InvalidTokenError(f"Token purpose mismatch: expected {purpose}")
     return payload
@@ -116,10 +108,12 @@ async def bootstrap_revocation_cache() -> None:
     from kernel_entities.session import Session
 
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=_CACHE_TTL)
-    revoked = await Session.find({
-        "status": "revoked",
-        "updated_at": {"$gte": cutoff},
-    }).to_list()
+    revoked = await Session.find(
+        {
+            "status": "revoked",
+            "updated_at": {"$gte": cutoff},
+        }
+    ).to_list()
 
     for session in revoked:
         if session.access_token_jti:

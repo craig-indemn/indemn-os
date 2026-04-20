@@ -37,7 +37,11 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
     cmd = ["indemn", *args]
 
     result = subprocess.run(
-        cmd, env=env, capture_output=True, timeout=timeout, check=False,
+        cmd,
+        env=env,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
     )
     if result.returncode != 0:
         raise CLIError(f"CLI failed ({result.returncode}): {result.stderr.decode()[:500]}")

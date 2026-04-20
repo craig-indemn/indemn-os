@@ -50,15 +50,17 @@ def create_runtime(
         json={"runtime_id": runtime_id},
     )
 
-    render({
-        "runtime_id": runtime_id,
-        "task_queue": f"runtime-{runtime_id}",
-        "service_token": token_result["service_token"],
-        "actor_id": token_result["actor_id"],
-        "name": name,
-        "kind": kind,
-        "note": "Store service_token securely. It will not be shown again.",
-    })
+    render(
+        {
+            "runtime_id": runtime_id,
+            "task_queue": f"runtime-{runtime_id}",
+            "service_token": token_result["service_token"],
+            "actor_id": token_result["actor_id"],
+            "name": name,
+            "kind": kind,
+            "note": "Store service_token securely. It will not be shown again.",
+        }
+    )
 
 
 @runtime_app.command("register-instance")

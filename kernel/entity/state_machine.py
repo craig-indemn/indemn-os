@@ -23,9 +23,7 @@ class TransitionValidationError(Exception):
     pass
 
 
-def validate_and_apply_transition(
-    entity: "BaseEntity", target_state: str, reason: str = None
-):
+def validate_and_apply_transition(entity: "BaseEntity", target_state: str, reason: str = None):
     """Validate transition, run pre-transition hooks, apply state change.
     Does NOT save — caller must call save_tracked()."""
     sm = entity._state_machine

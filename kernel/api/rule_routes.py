@@ -39,9 +39,7 @@ async def get_rule(rule_id: str, actor=Depends(get_current_actor)):
     """Get a rule by ID."""
     from bson import ObjectId
 
-    rule = await Rule.find_one(
-        {"_id": ObjectId(rule_id), "org_id": current_org_id.get()}
-    )
+    rule = await Rule.find_one({"_id": ObjectId(rule_id), "org_id": current_org_id.get()})
     if not rule:
         raise HTTPException(404, "Rule not found")
     return to_dict(rule)
@@ -96,14 +94,19 @@ async def update_rule(rule_id: str, data: dict, actor=Depends(get_current_actor)
     check_permission(actor, "Rule", "write")
     from bson import ObjectId
 
-    rule = await Rule.find_one(
-        {"_id": ObjectId(rule_id), "org_id": current_org_id.get()}
-    )
+    rule = await Rule.find_one({"_id": ObjectId(rule_id), "org_id": current_org_id.get()})
     if not rule:
         raise HTTPException(404, "Rule not found")
 
-    for field in ("name", "conditions", "action", "sets", "forces_reasoning_reason",
-                  "priority", "status"):
+    for field in (
+        "name",
+        "conditions",
+        "action",
+        "sets",
+        "forces_reasoning_reason",
+        "priority",
+        "status",
+    ):
         if field in data:
             setattr(rule, field, data[field])
 
@@ -117,9 +120,7 @@ async def archive_rule(rule_id: str, actor=Depends(get_current_actor)):
     check_permission(actor, "Rule", "write")
     from bson import ObjectId
 
-    rule = await Rule.find_one(
-        {"_id": ObjectId(rule_id), "org_id": current_org_id.get()}
-    )
+    rule = await Rule.find_one({"_id": ObjectId(rule_id), "org_id": current_org_id.get()})
     if not rule:
         raise HTTPException(404, "Rule not found")
     rule.status = "archived"

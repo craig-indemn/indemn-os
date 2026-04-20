@@ -35,14 +35,10 @@ class OrgScopedCollection:
         return await self._collection.insert_one(doc, *args, **kwargs)
 
     async def update_one(self, filter_doc, update, *args, **kwargs):
-        return await self._collection.update_one(
-            self._inject(filter_doc), update, *args, **kwargs
-        )
+        return await self._collection.update_one(self._inject(filter_doc), update, *args, **kwargs)
 
     async def update_many(self, filter_doc, update, *args, **kwargs):
-        return await self._collection.update_many(
-            self._inject(filter_doc), update, *args, **kwargs
-        )
+        return await self._collection.update_many(self._inject(filter_doc), update, *args, **kwargs)
 
     async def delete_one(self, filter_doc, *args, **kwargs):
         return await self._collection.delete_one(self._inject(filter_doc), *args, **kwargs)

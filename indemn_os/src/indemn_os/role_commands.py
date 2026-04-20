@@ -14,10 +14,14 @@ role_app = typer.Typer(name="role", help="Role management")
 def create_role(
     name: str = typer.Argument(..., help="Role name"),
     permissions: str = typer.Option(
-        "{}", "--permissions", help="JSON permissions dict",
+        "{}",
+        "--permissions",
+        help="JSON permissions dict",
     ),
     watches: str = typer.Option(
-        "[]", "--watches", help="JSON watch definitions array",
+        "[]",
+        "--watches",
+        help="JSON watch definitions array",
     ),
 ):
     """Create a role with permissions and watches.
@@ -42,7 +46,9 @@ def create_role(
 @role_app.command("list")
 def list_roles(
     show_watches: bool = typer.Option(
-        False, "--show-watches", help="Include watch definitions",
+        False,
+        "--show-watches",
+        help="Include watch definitions",
     ),
     fmt: str = typer.Option("json", "--format"),
 ):
@@ -76,7 +82,9 @@ def update_role(role_id: str, data: str = typer.Option(..., "--data")):
 def add_watch(
     role_name: str,
     watch: str = typer.Option(
-        ..., "--watch", help="JSON watch definition",
+        ...,
+        "--watch",
+        help="JSON watch definition",
     ),
 ):
     """Append a watch to an existing role (by name)."""

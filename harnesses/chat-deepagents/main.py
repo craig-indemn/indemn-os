@@ -16,17 +16,17 @@ Session lifecycle per connection:
 """
 
 import asyncio
-import json
 import logging
 import os
+from contextlib import asynccontextmanager
 
 import uvicorn
-from starlette.applications import Starlette
-from starlette.routing import WebSocketRoute
-from starlette.websockets import WebSocket, WebSocketDisconnect
-
-from harness_common.runtime import RUNTIME_ID, register_instance, heartbeat_loop
 from harness.session import ChatSession
+from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route, WebSocketRoute
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ def _setup_gcp_credentials():
     sa_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
     if sa_json:
         import json as json_mod
+
         try:
             data = json_mod.loads(sa_json)
             if "private_key" in data:
@@ -78,8 +79,8 @@ async def _init_checkpointer_at_startup():
         return
 
     try:
-        from motor.motor_asyncio import AsyncIOMotorClient
         from langgraph.checkpoint.mongodb import MongoDBSaver
+        from motor.motor_asyncio import AsyncIOMotorClient
 
         # Use motor for connectivity (works on Railway), then pass its
         # underlying pymongo client to MongoDBSaver (which needs sync client)
@@ -111,7 +112,8 @@ async def websocket_handler(websocket: WebSocket):
         # First message must be connect with auth
         connect_msg = await asyncio.wait_for(websocket.receive_json(), timeout=30)
         if connect_msg.get("type") != "connect":
-            await websocket.send_json({"type": "error", "content": "First message must be type=connect"})
+            err = {"type": "error", "content": "First message must be type=connect"}
+            await websocket.send_json(err)
             await websocket.close()
             return
 
@@ -164,18 +166,13 @@ async def websocket_handler(websocket: WebSocket):
 
 async def health(request):
     """Health check for Railway."""
-    from starlette.responses import JSONResponse
     return JSONResponse({"status": "healthy", "service": "indemn-runtime-chat"})
 
-
-from starlette.routing import Route
 
 routes = [
     Route("/health", health),
     WebSocketRoute("/ws/chat", websocket_handler),
 ]
-
-from contextlib import asynccontextmanager
 
 
 @asynccontextmanager

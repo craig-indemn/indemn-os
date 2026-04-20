@@ -63,7 +63,10 @@ async def create_entity_definition(request: Request, data: dict, actor=Depends(g
 
 @admin_router.put("/api/entitydefinitions/{name}/enable-capability")
 async def enable_capability(
-    request: Request, name: str, data: dict, actor=Depends(get_current_actor),
+    request: Request,
+    name: str,
+    data: dict,
+    actor=Depends(get_current_actor),
 ):
     """Enable a kernel capability on an entity type.
 
@@ -201,7 +204,9 @@ async def migrate_entity(name: str, request: Request, actor=Depends(get_current_
             "dry_run": True,
             "entity": plan.entity_name,
             "affected_count": plan.affected_count,
-            "operations": [str(op) if not isinstance(op, (dict, str)) else op for op in plan.operations],
+            "operations": [
+                str(op) if not isinstance(op, (dict, str)) else op for op in plan.operations
+            ],
             "preview_sample": plan.preview_sample,
         }
 
@@ -337,14 +342,14 @@ async def create_service_token(data: dict, actor=Depends(get_current_actor)):
 
     # Generate service token, store hash on actor
     raw_token = generate_service_token()
-    service_actor.authentication_methods.append({
-        "type": "token",
-        "token_hash": hash_token(raw_token),
-        "usage": "associate_service",
-    })
-    await service_actor.save_tracked(
-        actor_id=str(actor.id), method="create_service_token"
+    service_actor.authentication_methods.append(
+        {
+            "type": "token",
+            "token_hash": hash_token(raw_token),
+            "usage": "associate_service",
+        }
     )
+    await service_actor.save_tracked(actor_id=str(actor.id), method="create_service_token")
 
     # Create a long-lived session (associate_service — no refresh, no expiry rotation)
     session, _jwt, _refresh = await create_session(
@@ -518,11 +523,13 @@ async def report_compare(data: dict, actor=Depends(get_current_actor)):
     for key, old_record in old_by_key.items():
         os_record = os_by_key.get(key)
         if not os_record:
-            comparisons.append({
-                match_field: key,
-                "status": "missing_in_os",
-                "fields": {f: {"old": old_record.get(f)} for f in compare_fields},
-            })
+            comparisons.append(
+                {
+                    match_field: key,
+                    "status": "missing_in_os",
+                    "fields": {f: {"old": old_record.get(f)} for f in compare_fields},
+                }
+            )
             missing_in_os += 1
             continue
 
@@ -548,21 +555,25 @@ async def report_compare(data: dict, actor=Depends(get_current_actor)):
         else:
             mismatched += 1
 
-        comparisons.append({
-            match_field: key,
-            "status": "match" if all_match else "mismatch",
-            "fields": field_matches,
-        })
+        comparisons.append(
+            {
+                match_field: key,
+                "status": "match" if all_match else "mismatch",
+                "fields": field_matches,
+            }
+        )
 
     # Detect entities in OS but not in old system
     extra_in_os = 0
     for key in os_by_key:
         if key not in old_by_key:
             extra_in_os += 1
-            comparisons.append({
-                match_field: key,
-                "status": "extra_in_os",
-            })
+            comparisons.append(
+                {
+                    match_field: key,
+                    "status": "extra_in_os",
+                }
+            )
 
     return {
         "summary": {
@@ -690,11 +701,13 @@ async def platform_upgrade(
             # Version 1: ensure all field definitions have type + default
             for fname, fdef in (defn.fields or {}).items():
                 if isinstance(fdef, dict) and "type" not in fdef:
-                    migration["changes"].append({
-                        "field": fname,
-                        "action": "add_type",
-                        "detail": "Field missing type declaration",
-                    })
+                    migration["changes"].append(
+                        {
+                            "field": fname,
+                            "action": "add_type",
+                            "detail": "Field missing type declaration",
+                        }
+                    )
 
             migrations.append(migration)
 

@@ -27,10 +27,16 @@ async def heartbeat_loop(interval_s: float = 30.0) -> None:
             consecutive_failures = 0
         except Exception as e:
             consecutive_failures += 1
-            log.warning("Heartbeat failed (%d/%d): %s",
-                        consecutive_failures, MAX_CONSECUTIVE_HEARTBEAT_FAILURES, e)
+            log.warning(
+                "Heartbeat failed (%d/%d): %s",
+                consecutive_failures,
+                MAX_CONSECUTIVE_HEARTBEAT_FAILURES,
+                e,
+            )
             if consecutive_failures >= MAX_CONSECUTIVE_HEARTBEAT_FAILURES:
-                log.error("Heartbeat failed %d consecutive times — exiting",
-                          MAX_CONSECUTIVE_HEARTBEAT_FAILURES)
+                log.error(
+                    "Heartbeat failed %d consecutive times — exiting",
+                    MAX_CONSECUTIVE_HEARTBEAT_FAILURES,
+                )
                 raise SystemExit(1)
         await asyncio.sleep(interval_s)

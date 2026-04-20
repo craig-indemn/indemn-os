@@ -55,15 +55,24 @@ def main():
     ):
         """Deploy configuration (alias for org deploy)."""
         from kernel.cli.org_commands import deploy_org
+
         deploy_org(from_org=from_org, to_org=to_org, dry_run=dry_run, apply=apply)
 
     # Entities with dedicated static CLI apps — skip dynamic registration.
     # Infrastructure entities (Rule, Skill, Lookup, etc.) are also excluded
     # because they have custom routes, not auto-generated CRUD.
     _STATIC_CLI_ENTITIES = {
-        "Role", "Actor", "Integration",
-        "Rule", "RuleGroup", "Skill", "Lookup",
-        "EntityDefinition", "Message", "MessageLog", "ChangeRecord",
+        "Role",
+        "Actor",
+        "Integration",
+        "Rule",
+        "RuleGroup",
+        "Skill",
+        "Lookup",
+        "EntityDefinition",
+        "Message",
+        "MessageLog",
+        "ChangeRecord",
     }
 
     # Fetch entity metadata and register dynamic commands.
@@ -179,6 +188,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
 
     # Register bulk commands for this entity type
     from kernel.cli.bulk_commands import register_bulk_commands
+
     register_bulk_commands(name, entity_app)
 
     parent.add_typer(entity_app, name=slug)

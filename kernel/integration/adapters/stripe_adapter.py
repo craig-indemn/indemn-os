@@ -50,7 +50,9 @@ class StripeAdapter(Adapter):
         sig = headers.get("stripe-signature", "")
         try:
             stripe.Webhook.construct_event(
-                body, sig, self.credentials["webhook_secret"],
+                body,
+                sig,
+                self.credentials["webhook_secret"],
             )
             return True
         except stripe.error.SignatureVerificationError:

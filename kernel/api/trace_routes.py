@@ -7,7 +7,6 @@ Per vision § 14: "indemn trace entity {id}" queries all three data stores.
 from bson import ObjectId
 from fastapi import APIRouter, Depends, Query
 
-from kernel.api.serialize import to_dict
 from kernel.auth.middleware import get_current_actor
 from kernel.changes.collection import ChangeRecord
 from kernel.context import current_org_id
@@ -31,54 +30,76 @@ async def trace_entity(
     eid = ObjectId(entity_id)
 
     # Query changes collection
-    changes = await ChangeRecord.find(
-        {"org_id": org_id, "entity_type": entity_type, "entity_id": eid}
-    ).sort("-timestamp").limit(limit).to_list()
+    changes = (
+        await ChangeRecord.find({"org_id": org_id, "entity_type": entity_type, "entity_id": eid})
+        .sort("-timestamp")
+        .limit(limit)
+        .to_list()
+    )
 
     # Query active messages (queue)
-    messages = await Message.find(
-        {"org_id": org_id, "entity_type": entity_type, "entity_id": eid}
-    ).sort("-created_at").limit(limit).to_list()
+    messages = (
+        await Message.find({"org_id": org_id, "entity_type": entity_type, "entity_id": eid})
+        .sort("-created_at")
+        .limit(limit)
+        .to_list()
+    )
 
     # Query completed messages (log)
-    message_logs = await MessageLog.find(
-        {"org_id": org_id, "entity_type": entity_type, "entity_id": eid}
-    ).sort("-completed_at").limit(limit).to_list()
+    message_logs = (
+        await MessageLog.find({"org_id": org_id, "entity_type": entity_type, "entity_id": eid})
+        .sort("-completed_at")
+        .limit(limit)
+        .to_list()
+    )
 
     # Merge into unified timeline
     timeline = []
 
     for c in changes:
-        timeline.append({
-            "source": "changes",
-            "timestamp": c.timestamp.isoformat() if c.timestamp else None,
-            "type": c.change_type,
-            "actor_id": c.actor_id,
-            "correlation_id": c.correlation_id,
-            "method": c.method,
-            "changes": [{"field": fc.field, "old_value": fc.old_value, "new_value": fc.new_value} for fc in c.changes],
-        })
+        timeline.append(
+            {
+                "source": "changes",
+                "timestamp": c.timestamp.isoformat() if c.timestamp else None,
+                "type": c.change_type,
+                "actor_id": c.actor_id,
+                "correlation_id": c.correlation_id,
+                "method": c.method,
+                "changes": [
+                    {
+                        "field": fc.field,
+                        "old_value": fc.old_value,
+                        "new_value": fc.new_value,
+                    }
+                    for fc in c.changes
+                ],
+            }
+        )
 
     for m in messages:
-        timeline.append({
-            "source": "message_queue",
-            "timestamp": m.created_at.isoformat() if m.created_at else None,
-            "type": "message",
-            "status": m.status,
-            "target_role": m.target_role,
-            "claimed_by": str(m.claimed_by) if m.claimed_by else None,
-            "correlation_id": m.correlation_id,
-        })
+        timeline.append(
+            {
+                "source": "message_queue",
+                "timestamp": m.created_at.isoformat() if m.created_at else None,
+                "type": "message",
+                "status": m.status,
+                "target_role": m.target_role,
+                "claimed_by": str(m.claimed_by) if m.claimed_by else None,
+                "correlation_id": m.correlation_id,
+            }
+        )
 
     for ml in message_logs:
-        timeline.append({
-            "source": "message_log",
-            "timestamp": ml.completed_at.isoformat() if ml.completed_at else None,
-            "type": "completed",
-            "handler_id": str(ml.handler_id) if hasattr(ml, "handler_id") else None,
-            "correlation_id": ml.correlation_id,
-            "result_summary": str(ml.result)[:200] if hasattr(ml, "result") else None,
-        })
+        timeline.append(
+            {
+                "source": "message_log",
+                "timestamp": ml.completed_at.isoformat() if ml.completed_at else None,
+                "type": "completed",
+                "handler_id": str(ml.handler_id) if hasattr(ml, "handler_id") else None,
+                "correlation_id": ml.correlation_id,
+                "result_summary": str(ml.result)[:200] if hasattr(ml, "result") else None,
+            }
+        )
 
     # Sort by timestamp, newest first
     timeline.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
@@ -109,18 +130,27 @@ async def trace_cascade(
     org_id = current_org_id.get()
 
     # Query changes with this correlation_id
-    changes = await ChangeRecord.find(
-        {"org_id": org_id, "correlation_id": correlation_id}
-    ).sort("timestamp").limit(limit).to_list()
+    changes = (
+        await ChangeRecord.find({"org_id": org_id, "correlation_id": correlation_id})
+        .sort("timestamp")
+        .limit(limit)
+        .to_list()
+    )
 
     # Query messages with this correlation_id
-    messages = await Message.find(
-        {"org_id": org_id, "correlation_id": correlation_id}
-    ).sort("created_at").limit(limit).to_list()
+    messages = (
+        await Message.find({"org_id": org_id, "correlation_id": correlation_id})
+        .sort("created_at")
+        .limit(limit)
+        .to_list()
+    )
 
-    message_logs = await MessageLog.find(
-        {"org_id": org_id, "correlation_id": correlation_id}
-    ).sort("completed_at").limit(limit).to_list()
+    message_logs = (
+        await MessageLog.find({"org_id": org_id, "correlation_id": correlation_id})
+        .sort("completed_at")
+        .limit(limit)
+        .to_list()
+    )
 
     # Build execution tree (chronological)
     timeline = []
@@ -130,37 +160,43 @@ async def trace_cascade(
         for fc in c.changes:
             change_summary.append(f"{fc.field}: {fc.old_value} → {fc.new_value}")
 
-        timeline.append({
-            "source": "changes",
-            "timestamp": c.timestamp.isoformat() if c.timestamp else None,
-            "entity_type": c.entity_type,
-            "entity_id": str(c.entity_id),
-            "type": c.change_type,
-            "actor_id": c.actor_id,
-            "method": c.method,
-            "summary": "; ".join(change_summary) if change_summary else c.change_type,
-        })
+        timeline.append(
+            {
+                "source": "changes",
+                "timestamp": c.timestamp.isoformat() if c.timestamp else None,
+                "entity_type": c.entity_type,
+                "entity_id": str(c.entity_id),
+                "type": c.change_type,
+                "actor_id": c.actor_id,
+                "method": c.method,
+                "summary": "; ".join(change_summary) if change_summary else c.change_type,
+            }
+        )
 
     for m in messages:
-        timeline.append({
-            "source": "message_queue",
-            "timestamp": m.created_at.isoformat() if m.created_at else None,
-            "entity_type": m.entity_type,
-            "entity_id": str(m.entity_id),
-            "type": f"message:{m.status}",
-            "target_role": m.target_role,
-            "claimed_by": str(m.claimed_by) if m.claimed_by else None,
-        })
+        timeline.append(
+            {
+                "source": "message_queue",
+                "timestamp": m.created_at.isoformat() if m.created_at else None,
+                "entity_type": m.entity_type,
+                "entity_id": str(m.entity_id),
+                "type": f"message:{m.status}",
+                "target_role": m.target_role,
+                "claimed_by": str(m.claimed_by) if m.claimed_by else None,
+            }
+        )
 
     for ml in message_logs:
-        timeline.append({
-            "source": "message_log",
-            "timestamp": ml.completed_at.isoformat() if ml.completed_at else None,
-            "entity_type": ml.entity_type,
-            "entity_id": str(ml.entity_id),
-            "type": "completed",
-            "handler_id": str(ml.handler_id) if hasattr(ml, "handler_id") else None,
-        })
+        timeline.append(
+            {
+                "source": "message_log",
+                "timestamp": ml.completed_at.isoformat() if ml.completed_at else None,
+                "entity_type": ml.entity_type,
+                "entity_id": str(ml.entity_id),
+                "type": "completed",
+                "handler_id": str(ml.handler_id) if hasattr(ml, "handler_id") else None,
+            }
+        )
 
     timeline.sort(key=lambda e: e.get("timestamp") or "")
 

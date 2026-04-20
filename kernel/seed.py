@@ -30,9 +30,7 @@ async def load_seed_data(org_id, seed_dir: Path = Path("seed")):
         for yaml_file in sorted(entities_dir.glob("*.yaml")):
             with open(yaml_file) as f:
                 data = yaml.safe_load(f)
-            existing = await EntityDefinition.find_one(
-                {"name": data["name"], "org_id": org_id}
-            )
+            existing = await EntityDefinition.find_one({"name": data["name"], "org_id": org_id})
             if not existing:
                 defn = EntityDefinition(**data, org_id=org_id)
                 await defn.insert()

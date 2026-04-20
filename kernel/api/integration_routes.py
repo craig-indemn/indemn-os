@@ -151,40 +151,42 @@ async def integration_health_check(
                 test_result = await adapter.test()
                 integ.last_checked_at = datetime.now(timezone.utc)
                 integ.last_error = None
-                await integ.save_tracked(
-                    actor_id=str(actor.id), method="health_check"
+                await integ.save_tracked(actor_id=str(actor.id), method="health_check")
+                results.append(
+                    {
+                        "id": str(integ.id),
+                        "name": integ.name,
+                        "system_type": integ.system_type,
+                        "provider": integ.provider,
+                        "status": "healthy",
+                        "detail": test_result,
+                    }
                 )
-                results.append({
-                    "id": str(integ.id),
-                    "name": integ.name,
-                    "system_type": integ.system_type,
-                    "provider": integ.provider,
-                    "status": "healthy",
-                    "detail": test_result,
-                })
             else:
-                results.append({
-                    "id": str(integ.id),
-                    "name": integ.name,
-                    "system_type": integ.system_type,
-                    "status": "no_test_method",
-                })
+                results.append(
+                    {
+                        "id": str(integ.id),
+                        "name": integ.name,
+                        "system_type": integ.system_type,
+                        "status": "no_test_method",
+                    }
+                )
         except Exception as e:
             integ.last_checked_at = datetime.now(timezone.utc)
             integ.last_error = str(e)[:500]
             try:
-                await integ.save_tracked(
-                    actor_id=str(actor.id), method="health_check"
-                )
+                await integ.save_tracked(actor_id=str(actor.id), method="health_check")
             except Exception:
                 pass
-            results.append({
-                "id": str(integ.id),
-                "name": integ.name,
-                "system_type": integ.system_type,
-                "status": "error",
-                "error": str(e)[:500],
-            })
+            results.append(
+                {
+                    "id": str(integ.id),
+                    "name": integ.name,
+                    "system_type": integ.system_type,
+                    "status": "error",
+                    "error": str(e)[:500],
+                }
+            )
 
     return {
         "checked": len(results),

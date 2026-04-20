@@ -4,8 +4,8 @@ import json
 import os
 from pathlib import Path
 
-import typer
 import httpx
+import typer
 
 auth_app = typer.Typer(name="auth", help="Authentication")
 
@@ -21,9 +21,14 @@ def login(
     """Log in and store access token."""
     base_url = os.environ.get("INDEMN_API_URL", "http://localhost:8000")
     with httpx.Client(base_url=base_url) as client:
-        r = client.post("/auth/login", json={
-            "org_slug": org, "email": email, "password": password,
-        })
+        r = client.post(
+            "/auth/login",
+            json={
+                "org_slug": org,
+                "email": email,
+                "password": password,
+            },
+        )
         if r.status_code != 200:
             typer.echo(f"Login failed: {r.text}", err=True)
             raise typer.Exit(1)
@@ -35,13 +40,17 @@ def login(
 
     token = data["access_token"]
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_FILE.write_text(json.dumps({
-        "access_token": token,
-        "refresh_token": data.get("refresh_token", ""),
-        "api_url": base_url,
-        "org_slug": org,
-        "email": email,
-    }))
+    TOKEN_FILE.write_text(
+        json.dumps(
+            {
+                "access_token": token,
+                "refresh_token": data.get("refresh_token", ""),
+                "api_url": base_url,
+                "org_slug": org,
+                "email": email,
+            }
+        )
+    )
     TOKEN_FILE.chmod(0o600)
     typer.echo(f"Logged in as {email} @ {org}")
     typer.echo(f"Token stored in {TOKEN_FILE}")
@@ -56,7 +65,9 @@ def logout():
             creds = json.loads(TOKEN_FILE.read_text())
             token = creds.get("access_token", "")
             if token:
-                base_url = creds.get("api_url", os.environ.get("INDEMN_API_URL", "http://localhost:8000"))
+                base_url = creds.get(
+                    "api_url", os.environ.get("INDEMN_API_URL", "http://localhost:8000")
+                )
                 with httpx.Client(base_url=base_url) as client:
                     client.post(
                         "/auth/logout",

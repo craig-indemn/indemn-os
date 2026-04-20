@@ -49,9 +49,7 @@ async def websocket_handler(websocket: WebSocket):
     watcher_task = None
     try:
         # Start change stream watcher for this connection
-        watcher_task = asyncio.create_task(
-            _watch_changes(connection_id, org_id, websocket)
-        )
+        watcher_task = asyncio.create_task(_watch_changes(connection_id, org_id, websocket))
 
         # Handle incoming messages (subscribe/unsubscribe/ping)
         async for data in websocket.iter_text():
@@ -67,9 +65,7 @@ async def websocket_handler(websocket: WebSocket):
                 sub_id = msg.get("subscription_id", str(uuid4()))
                 _connections[connection_id]["subscriptions"][sub_id] = msg.get("filter", {})
             elif msg_type == "unsubscribe":
-                _connections[connection_id]["subscriptions"].pop(
-                    msg.get("subscription_id"), None
-                )
+                _connections[connection_id]["subscriptions"].pop(msg.get("subscription_id"), None)
 
     except WebSocketDisconnect:
         pass
@@ -81,9 +77,7 @@ async def websocket_handler(websocket: WebSocket):
         _connections.pop(connection_id, None)
 
 
-async def _watch_changes(
-    connection_id: str, org_id: str, websocket: WebSocket
-):
+async def _watch_changes(connection_id: str, org_id: str, websocket: WebSocket):
     """Watch MongoDB Change Streams and push matching changes to the client.
 
     Filter-aware: only sends changes matching active subscriptions. [G-34]
@@ -110,15 +104,17 @@ async def _watch_changes(
                 for sub_id, sub_filter in conn["subscriptions"].items():
                     if _matches_filter(collection, doc, sub_filter):
                         try:
-                            await websocket.send_json({
-                                "type": "entity_change",
-                                "subscription_id": sub_id,
-                                "collection": collection,
-                                "operation": change.get("operationType"),
-                                "entity_type": _collection_to_entity_type(collection),
-                                "entity_id": str(doc.get("_id", "")),
-                                "data": _serialize_for_ws(doc),
-                            })
+                            await websocket.send_json(
+                                {
+                                    "type": "entity_change",
+                                    "subscription_id": sub_id,
+                                    "collection": collection,
+                                    "operation": change.get("operationType"),
+                                    "entity_type": _collection_to_entity_type(collection),
+                                    "entity_id": str(doc.get("_id", "")),
+                                    "data": _serialize_for_ws(doc),
+                                }
+                            )
                         except Exception:
                             return
     except asyncio.CancelledError:

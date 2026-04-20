@@ -88,15 +88,22 @@ async def test_rule_veto(db, org_id, actor):
 
     # Positive rule
     pos = Rule(
-        org_id=org_id, entity_type="Email", capability="auto_classify",
+        org_id=org_id,
+        entity_type="Email",
+        capability="auto_classify",
         name="positive",
         conditions={"field": "from_address", "op": "ends_with", "value": "@usli.com"},
-        action="set_fields", sets={"classification": "usli_quote"},
-        priority=100, status="active", created_by=str(actor.id),
+        action="set_fields",
+        sets={"classification": "usli_quote"},
+        priority=100,
+        status="active",
+        created_by=str(actor.id),
     )
     # Veto rule (higher priority check: both conditions)
     veto = Rule(
-        org_id=org_id, entity_type="Email", capability="auto_classify",
+        org_id=org_id,
+        entity_type="Email",
+        capability="auto_classify",
         name="veto",
         conditions={
             "all": [
@@ -106,13 +113,17 @@ async def test_rule_veto(db, org_id, actor):
         },
         action="force_reasoning",
         forces_reasoning_reason="USLI decline needs human review",
-        priority=200, status="active", created_by=str(actor.id),
+        priority=200,
+        status="active",
+        created_by=str(actor.id),
     )
     await pos.insert()
     await veto.insert()
 
     result = await evaluate_rules(
-        org_id=org_id, entity_type="Email", capability="auto_classify",
+        org_id=org_id,
+        entity_type="Email",
+        capability="auto_classify",
         entity_data={
             "from_address": "quotes@usli.com",
             "subject": "Decline - Policy XYZ",
@@ -150,16 +161,22 @@ async def test_rule_archive(db, org_id, actor):
     from kernel.rule.engine import evaluate_rules
 
     rule = Rule(
-        org_id=org_id, entity_type="Email", capability="auto_classify",
+        org_id=org_id,
+        entity_type="Email",
+        capability="auto_classify",
         name="archived-rule",
         conditions={"field": "subject", "op": "equals", "value": "test"},
-        action="set_fields", sets={"classification": "archived"},
-        status="archived", created_by=str(actor.id),
+        action="set_fields",
+        sets={"classification": "archived"},
+        status="archived",
+        created_by=str(actor.id),
     )
     await rule.insert()
 
     result = await evaluate_rules(
-        org_id=org_id, entity_type="Email", capability="auto_classify",
+        org_id=org_id,
+        entity_type="Email",
+        capability="auto_classify",
         entity_data={"subject": "test"},
     )
     # Archived rules should not match

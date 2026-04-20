@@ -15,13 +15,12 @@ import logging
 import os
 import subprocess
 
-from starlette.websockets import WebSocket
-
+from harness.agent import build_agent
 from harness_common.attention import attention_heartbeat_loop, close_attention, open_attention
 from harness_common.cli import CLIError, indemn
 from harness_common.interaction import close_interaction, create_interaction
 from harness_common.runtime import RUNTIME_ID
-from harness.agent import build_agent
+from starlette.websockets import WebSocket
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +37,14 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
 class ChatSession:
     """Manages one WebSocket conversation session."""
 
-    def __init__(self, websocket: WebSocket, associate_id: str, auth_token: str, checkpointer=None, interaction_id=None):
+    def __init__(
+        self,
+        websocket: WebSocket,
+        associate_id: str,
+        auth_token: str,
+        checkpointer=None,
+        interaction_id=None,
+    ):
         self.ws = websocket
         self.associate_id = associate_id
         self.auth_token = auth_token
@@ -122,8 +128,9 @@ class ChatSession:
         # Start events stream for mid-conversation awareness
         self._events_task = asyncio.create_task(self._run_events_stream())
 
-        log.info("Session started: interaction=%s, attention=%s",
-                 self.interaction_id, self.attention_id)
+        log.info(
+            "Session started: interaction=%s, attention=%s", self.interaction_id, self.attention_id
+        )
 
     async def handle_message(self, content: str, context: dict | None = None):
         """Process one user message — run agent, stream response tokens."""
@@ -169,13 +176,23 @@ class ChatSession:
                         await self._send({"type": "response", "content": content})
                     # Send tool calls
                     for tc in getattr(msg, "tool_calls", []):
-                        tc_name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-                        tc_args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                        tc_name = (
+                            tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+                        )
+                        tc_args = (
+                            tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                        )
                         await self._send({"type": "tool_call", "name": tc_name, "args": tc_args})
                 elif msg_type == "tool":
                     tool_name = getattr(msg, "name", "")
                     tool_content = getattr(msg, "content", "")
-                    await self._send({"type": "tool_result", "name": tool_name, "content": str(tool_content)[:1000]})
+                    await self._send(
+                        {
+                            "type": "tool_result",
+                            "name": tool_name,
+                            "content": str(tool_content)[:1000],
+                        }
+                    )
 
             await self._send({"type": "done"})
 
@@ -218,9 +235,15 @@ class ChatSession:
                 "PATH": os.environ["PATH"],
             }
             self._events_process = subprocess.Popen(
-                ["indemn", "events", "stream",
-                 "--actor", self.associate_id,
-                 "--interaction", self.interaction_id],
+                [
+                    "indemn",
+                    "events",
+                    "stream",
+                    "--actor",
+                    self.associate_id,
+                    "--interaction",
+                    self.interaction_id,
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,

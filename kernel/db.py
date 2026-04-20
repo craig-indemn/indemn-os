@@ -148,7 +148,8 @@ async def init_database():
         for fname, fdef in defn.fields.items():
             if fdef.unique:
                 await coll.create_index(
-                    [("org_id", 1), (fname, 1)], unique=True,
+                    [("org_id", 1), (fname, 1)],
+                    unique=True,
                 )
             elif fdef.indexed:
                 await coll.create_index([("org_id", 1), (fname, 1)])
@@ -181,8 +182,9 @@ async def register_domain_entity(defn, app=None):
     from kernel.entity.factory import create_entity_class
 
     # Check reserved names
-    reserved = {name for name, cls in ENTITY_REGISTRY.items()
-                if getattr(cls, "_is_kernel_entity", False)}
+    reserved = {
+        name for name, cls in ENTITY_REGISTRY.items() if getattr(cls, "_is_kernel_entity", False)
+    }
     if defn.name in reserved:
         raise ValueError(f"'{defn.name}' collides with kernel entity name")
 
@@ -207,8 +209,14 @@ async def register_domain_entity(defn, app=None):
         from kernel.api.registration import register_entity_routes
 
         _INFRASTRUCTURE = {
-            "EntityDefinition", "Skill", "Rule", "RuleGroup", "Lookup",
-            "Message", "MessageLog", "ChangeRecord",
+            "EntityDefinition",
+            "Skill",
+            "Rule",
+            "RuleGroup",
+            "Lookup",
+            "Message",
+            "MessageLog",
+            "ChangeRecord",
         }
         if defn.name not in _INFRASTRUCTURE:
             register_entity_routes(app, defn.name, dynamic_cls)

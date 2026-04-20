@@ -125,9 +125,7 @@ async def process_human_decision(message_id: str, decision: dict) -> dict:
         target = decision.get("target_state")
         if target:
             entity.transition_to(target, reason=reason)
-            await entity.save_tracked(
-                method="human_reject", method_metadata={"decision": decision}
-            )
+            await entity.save_tracked(method="human_reject", method_metadata={"decision": decision})
 
     return {"status": action, "entity_id": str(entity.id)}
 
@@ -201,9 +199,7 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
                             entity.transition_to(spec.target_state)
                             await entity.save_tracked(
                                 method="bulk_transition",
-                                method_metadata={
-                                    "bulk_operation_id": activity.info().workflow_id
-                                },
+                                method_metadata={"bulk_operation_id": activity.info().workflow_id},
                             )
                         elif spec.operation == "method":
                             cap_fn = get_capability(spec.method_name)
@@ -245,11 +241,15 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
                     except (StateMachineError, ValueError, PermissionError) as e:
                         if spec.failure_mode == "abort":
                             raise BulkAbortError(str(e))
-                        errors.append({
-                            "entity_id": str(entity.id) if hasattr(entity, "id") else str(entity),
-                            "error_type": type(e).__name__,
-                            "message": str(e),
-                        })
+                        errors.append(
+                            {
+                                "entity_id": str(entity.id)
+                                if hasattr(entity, "id")
+                                else str(entity),
+                                "error_type": type(e).__name__,
+                                "message": str(e),
+                            }
+                        )
 
                     activity.heartbeat(f"batch progress: {batch_processed}")
 
@@ -285,4 +285,3 @@ async def preview_bulk_operation(spec_dict: dict) -> dict:
             "dry_run": True,
         }
     return {"count": 0}
-

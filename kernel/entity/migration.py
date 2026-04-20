@@ -44,8 +44,13 @@ async def plan_migration(entity_name: str, operations: list[dict]) -> MigrationP
     try:
         sample_docs = await entity_cls.find_scoped({}).limit(5).to_list()
         plan.preview_sample = [
-            {k: str(v) if hasattr(v, '__str__') and not isinstance(v, (str, int, float, bool, list, dict, type(None))) else v
-             for k, v in (e.model_dump() if hasattr(e, 'model_dump') else vars(e)).items()}
+            {
+                k: str(v)
+                if hasattr(v, "__str__")
+                and not isinstance(v, (str, int, float, bool, list, dict, type(None)))
+                else v
+                for k, v in (e.model_dump() if hasattr(e, "model_dump") else vars(e)).items()
+            }
             for e in sample_docs
         ]
     except Exception:

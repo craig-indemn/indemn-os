@@ -40,17 +40,28 @@ async def export_org_config(org_id: ObjectId) -> dict:
     db = get_database()
     org_doc = await db["organizations"].find_one({"_id": org_id})
     if org_doc:
-        config["org"] = _serialize_bson({
-            k: v for k, v in org_doc.items()
-            if k not in ("_id", "org_id", "created_at", "updated_at")
-        })
+        config["org"] = _serialize_bson(
+            {
+                k: v
+                for k, v in org_doc.items()
+                if k not in ("_id", "org_id", "created_at", "updated_at")
+            }
+        )
 
     # Entity definitions
     defs = await EntityDefinition.find({"org_id": org_id}).to_list()
     for d in defs:
-        dumped = _dump_doc(d, exclude={
-            "_id", "id", "org_id", "created_at", "updated_at", "created_by",
-        })
+        dumped = _dump_doc(
+            d,
+            exclude={
+                "_id",
+                "id",
+                "org_id",
+                "created_at",
+                "updated_at",
+                "created_by",
+            },
+        )
         # Extract capability activations into separate category
         caps = dumped.pop("activated_capabilities", [])
         if caps:
@@ -58,32 +69,51 @@ async def export_org_config(org_id: ObjectId) -> dict:
         config["entities"][d.name] = dumped
 
     # Rules
-    rules = await Rule.find(
-        {"org_id": org_id, "status": {"$ne": "archived"}}
-    ).to_list()
+    rules = await Rule.find({"org_id": org_id, "status": {"$ne": "archived"}}).to_list()
     for r in rules:
-        dumped = _dump_doc(r, exclude={
-            "_id", "id", "org_id", "created_at", "created_by", "group_id",
-        })
+        dumped = _dump_doc(
+            r,
+            exclude={
+                "_id",
+                "id",
+                "org_id",
+                "created_at",
+                "created_by",
+                "group_id",
+            },
+        )
         rule_key = r.name or str(r.id)
         config["rules"][rule_key] = dumped
 
     # Lookups
     lookups = await Lookup.find({"org_id": org_id}).to_list()
     for lk in lookups:
-        dumped = _dump_doc(lk, exclude={
-            "_id", "id", "org_id", "created_at", "created_by",
-        })
+        dumped = _dump_doc(
+            lk,
+            exclude={
+                "_id",
+                "id",
+                "org_id",
+                "created_at",
+                "created_by",
+            },
+        )
         config["lookups"][lk.name] = dumped
 
     # Skills
-    skills = await Skill.find(
-        {"org_id": org_id, "status": {"$ne": "deprecated"}}
-    ).to_list()
+    skills = await Skill.find({"org_id": org_id, "status": {"$ne": "deprecated"}}).to_list()
     for s in skills:
-        dumped = _dump_doc(s, exclude={
-            "_id", "id", "org_id", "created_at", "updated_at", "created_by",
-        })
+        dumped = _dump_doc(
+            s,
+            exclude={
+                "_id",
+                "id",
+                "org_id",
+                "created_at",
+                "updated_at",
+                "created_by",
+            },
+        )
         config["skills"][s.name] = dumped
 
     # Roles (kernel entity — query via Motor)
@@ -94,7 +124,11 @@ async def export_org_config(org_id: ObjectId) -> dict:
     async for doc in roles_coll.find({"org_id": org_id}):
         name = doc.get("name", str(doc["_id"]))
         _ROLE_EXCLUDE = {
-            "_id", "org_id", "created_at", "updated_at", "created_by",
+            "_id",
+            "org_id",
+            "created_at",
+            "updated_at",
+            "created_by",
         }
         dumped = {k: v for k, v in doc.items() if k not in _ROLE_EXCLUDE}
         dumped = _serialize_bson(dumped)
@@ -103,8 +137,12 @@ async def export_org_config(org_id: ObjectId) -> dict:
     # Associate actors (not human actors — those are per-person)
     actors_coll = db["actors"]
     _ACTOR_EXCLUDE = {
-        "_id", "org_id", "created_at", "updated_at",
-        "created_by", "authentication_methods",
+        "_id",
+        "org_id",
+        "created_at",
+        "updated_at",
+        "created_by",
+        "authentication_methods",
     }
     async for doc in actors_coll.find({"org_id": org_id, "type": "associate"}):
         name = doc.get("name", str(doc["_id"]))
@@ -115,8 +153,14 @@ async def export_org_config(org_id: ObjectId) -> dict:
     # Integration configs (without secrets)
     integ_coll = db["integrations"]
     _INTEG_EXCLUDE = {
-        "_id", "org_id", "created_at", "updated_at", "created_by",
-        "secret_ref", "last_checked_at", "last_error",
+        "_id",
+        "org_id",
+        "created_at",
+        "updated_at",
+        "created_by",
+        "secret_ref",
+        "last_checked_at",
+        "last_error",
     }
     async for doc in integ_coll.find({"org_id": org_id}):
         name = doc.get("name", str(doc["_id"]))
@@ -138,8 +182,11 @@ async def import_org_config(target_org_name: str, config: dict) -> dict:
     org_id = ObjectId()
     slug = target_org_name.lower().replace(" ", "-")
     org = Organization(
-        id=org_id, org_id=org_id, name=target_org_name,
-        slug=slug, status="active",
+        id=org_id,
+        org_id=org_id,
+        name=target_org_name,
+        slug=slug,
+        status="active",
     )
     await org.insert()
 
@@ -187,9 +234,10 @@ async def import_org_config(target_org_name: str, config: dict) -> dict:
     from kernel.db import get_database
 
     db = get_database()
-    # Direct insert with explicit org_id — intentional bypass of OrgScopedCollection
-    # because we're creating entities in a new org during import (org_id is the target, not current context)
-    role_id_map = {}  # old role name → new ObjectId
+    # Direct insert with explicit org_id — intentional bypass of
+    # OrgScopedCollection because we're creating entities in a new org
+    # during import (org_id is the target, not current context)
+    role_id_map = {}  # old role name -> new ObjectId
     for name, role_data in config.get("roles", {}).items():
         role_id = ObjectId()
         role_data["_id"] = role_id
@@ -204,8 +252,8 @@ async def import_org_config(target_org_name: str, config: dict) -> dict:
         role_id_map[name] = role_id
         items_imported += 1
 
-    # Direct insert with explicit org_id — intentional bypass of OrgScopedCollection
-    # because we're creating entities in a new org during import (org_id is the target, not current context)
+    # Direct insert with explicit org_id — intentional bypass of
+    # OrgScopedCollection (org_id is the target, not current context)
     for name, actor_data in config.get("actors", {}).items():
         actor_id = ObjectId()
         actor_data["_id"] = actor_id
@@ -230,8 +278,8 @@ async def import_org_config(target_org_name: str, config: dict) -> dict:
         await db["actors"].insert_one(actor_data)
         items_imported += 1
 
-    # Direct insert with explicit org_id — intentional bypass of OrgScopedCollection
-    # because we're creating entities in a new org during import (org_id is the target, not current context)
+    # Direct insert with explicit org_id — intentional bypass of
+    # OrgScopedCollection (org_id is the target, not current context)
     for name, integ_data in config.get("integrations", {}).items():
         integ_id = ObjectId()
         integ_data["_id"] = integ_id
@@ -324,9 +372,7 @@ async def deploy_org(
     return {"dry_run": False, "applied": applied}
 
 
-async def _apply_config_item(
-    org_id: ObjectId, category: str, name: str, item_data: dict
-):
+async def _apply_config_item(org_id: ObjectId, category: str, name: str, item_data: dict):
     """Apply a single configuration item to an org."""
     if category == "entities":
         existing = await EntityDefinition.find_one({"name": name, "org_id": org_id})
