@@ -39,9 +39,17 @@ class WebSocketManager {
     const token = getToken();
     if (!token) return;
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}/ws?token=${token}`;
-    this.ws = new WebSocket(url);
+    const apiUrl = (import.meta as unknown as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL || "";
+    let wsUrl: string;
+    if (apiUrl) {
+      // Production: derive WebSocket URL from API URL
+      wsUrl = apiUrl.replace(/^http/, "ws") + `/ws?token=${token}`;
+    } else {
+      // Dev: Vite proxy handles /ws
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      wsUrl = `${protocol}//${window.location.host}/ws?token=${token}`;
+    }
+    this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
