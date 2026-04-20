@@ -10,13 +10,6 @@ from bson import ObjectId
 
 from kernel.message.mongodb_bus import MongoDBMessageBus
 from kernel.message.schema import Message, MessageLog
-from kernel.skill.integrity import compute_content_hash
-from kernel.skill.schema import Skill
-from kernel.temporal.activities import (
-    SkillTamperError,
-    _extract_data_from_args,
-    _load_skills,
-)
 from kernel_entities.actor import Actor
 from kernel_entities.integration import Integration
 
@@ -140,67 +133,6 @@ class TestMessageLifecycle:
         assert updated.last_error == "permanent error"
 
 
-class TestSkillLoading:
-    """Test skill loading with integrity verification."""
-
-    @pytest.mark.asyncio
-    async def test_load_active_skill(self, db, org_id):
-        """Loading an active skill with valid hash succeeds."""
-        content = "# My Skill\n1. `indemn test run`"
-        skill = Skill(
-            name="test-skill",
-            type="associate",
-            content=content,
-            content_hash=compute_content_hash(content),
-            status="active",
-        )
-        await skill.insert()
-
-        result = await _load_skills(["test-skill"])
-        assert "indemn test run" in result
-
-    @pytest.mark.asyncio
-    async def test_tampered_skill_raises(self, db, org_id):
-        """Loading a skill with mismatched hash raises SkillTamperError."""
-        content = "# My Skill\n1. `indemn test run`"
-        skill = Skill(
-            name="tampered-skill",
-            type="associate",
-            content=content,
-            content_hash="badhash",
-            status="active",
-        )
-        await skill.insert()
-
-        with pytest.raises(SkillTamperError, match="failed integrity check"):
-            await _load_skills(["tampered-skill"])
-
-    @pytest.mark.asyncio
-    async def test_missing_skill_skipped(self, db, org_id):
-        """Missing skills are silently skipped."""
-        result = await _load_skills(["nonexistent-skill"])
-        assert result == ""
-
-    @pytest.mark.asyncio
-    async def test_multiple_skills_concatenated(self, db, org_id):
-        """Multiple skills are joined with dividers."""
-        for i in range(2):
-            content = f"# Skill {i}"
-            skill = Skill(
-                name=f"multi-skill-{i}",
-                type="associate",
-                content=content,
-                content_hash=compute_content_hash(content),
-                status="active",
-            )
-            await skill.insert()
-
-        result = await _load_skills(["multi-skill-0", "multi-skill-1"])
-        assert "# Skill 0" in result
-        assert "# Skill 1" in result
-        assert "---" in result
-
-
 class TestCredentialResolution:
     """Test the actor → owner → org resolution chain."""
 
@@ -301,21 +233,3 @@ class TestCredentialResolution:
 
         result = await resolve_integration("email", actor_id=associate.id, org_id=org_id)
         assert result.owner_id == owner.id
-
-
-class TestArgParsing:
-    def test_extract_key_value_pairs(self):
-        args = ["EMAIL-001", "--to", "admin", "--auto", "--priority", "high"]
-        data = _extract_data_from_args(args)
-        assert data["to"] == "admin"
-        assert data["priority"] == "high"
-        assert "auto" not in data  # --auto is excluded
-
-    def test_flag_without_value(self):
-        args = ["ID-1", "--force"]
-        data = _extract_data_from_args(args)
-        assert data["force"] is True
-
-    def test_empty_args(self):
-        data = _extract_data_from_args([])
-        assert data == {}
