@@ -182,7 +182,7 @@ export function EntityListView() {
             ? `Showing ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + (entities?.length || 0)}`
             : "No results"}
         </span>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
           <button
             onClick={() => setPage((p) => Math.max(0, p - 1))}
             disabled={page === 0}
@@ -190,6 +190,7 @@ export function EntityListView() {
           >
             ← Previous
           </button>
+          <span className="px-2 py-1 text-gray-400">Page {page + 1}</span>
           <button
             onClick={() => setPage((p) => p + 1)}
             disabled={(entities?.length || 0) < PAGE_SIZE}
