@@ -300,10 +300,33 @@ class ChatSession:
         """Classify tool output — detect entity data and send as typed message."""
         content_str = str(tool_content) if not isinstance(tool_content, str) else tool_content
 
-        # Try to parse as JSON for entity detection
+        log.info(
+            "Classifying tool result: name=%s, first_200=%r",
+            tool_name,
+            content_str[:200],
+        )
+
+        # Try to parse as JSON for entity detection.
+        # The execute tool may return output with extra text — try to find JSON within.
+        json_str = content_str.strip()
+
+        # Try direct parse first
+        data = None
         try:
-            data = json.loads(content_str)
+            data = json.loads(json_str)
         except (json.JSONDecodeError, TypeError):
+            # Try to extract JSON array or object from the content
+            for start_char, end_char in [("[", "]"), ("{", "}")]:
+                start = json_str.find(start_char)
+                end = json_str.rfind(end_char)
+                if start != -1 and end > start:
+                    try:
+                        data = json.loads(json_str[start : end + 1])
+                        break
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+
+        if data is None:
             await self._send(
                 {"type": "tool_result", "name": tool_name, "content": content_str[:1000]}
             )
@@ -316,15 +339,18 @@ class ChatSession:
             and isinstance(data[0], dict)
             and "_id" in data[0]
         ):
+            log.info("Detected entity_list: %d items", len(data))
             await self._send({"type": "entity_list", "data": data, "entity_type": ""})
             return
 
         # Detect single entity (dict with _id)
         if isinstance(data, dict) and "_id" in data:
+            log.info("Detected entity_detail: %s", data.get("name", data.get("_id")))
             await self._send({"type": "entity_detail", "data": data, "entity_type": ""})
             return
 
-        # Fallback: send as tool_result
+        # Fallback: parsed JSON but not entity data
+        log.info("Tool result is JSON but not entity data, type=%s", type(data).__name__)
         await self._send({"type": "tool_result", "name": tool_name, "content": content_str[:1000]})
 
     async def _send(self, data: dict):
