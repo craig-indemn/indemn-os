@@ -153,9 +153,7 @@ def transition_integration(
 ):
     """Transition integration status."""
     client = CLIClient()
-    result = client.post(
-        f"/api/integrations/{integration_id}/transition", json={"to": to}
-    )
+    result = client.post(f"/api/integrations/{integration_id}/transition", json={"to": to})
     render(result, "json")
 
 

@@ -45,9 +45,7 @@ async def fetch_new(entity_cls, config: dict, org_id, params: dict = {}) -> dict
         raw_results = await execute_with_retry(adapter, "fetch", **fetch_params)
 
         # Deduplicate against existing entities by external_ref
-        external_refs = [
-            r.get("external_ref") for r in raw_results if r.get("external_ref")
-        ]
+        external_refs = [r.get("external_ref") for r in raw_results if r.get("external_ref")]
         existing = set()
         if external_refs:
             existing_entities = await entity_cls.find_scoped(
@@ -74,9 +72,7 @@ async def fetch_new(entity_cls, config: dict, org_id, params: dict = {}) -> dict
                     item.get("external_ref", "?"),
                     e,
                 )
-                errors.append(
-                    {"external_ref": item.get("external_ref"), "error": str(e)}
-                )
+                errors.append({"external_ref": item.get("external_ref"), "error": str(e)})
 
         return {
             "fetched": len(raw_results),

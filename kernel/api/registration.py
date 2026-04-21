@@ -262,9 +262,7 @@ def _register_capability_route(router, entity_cls, entity_name, cap_name, activa
             return to_dict(entity)
 
 
-def _register_collection_capability_route(
-    router, entity_cls, entity_name, cap_name, activation
-):
+def _register_collection_capability_route(router, entity_cls, entity_name, cap_name, activation):
     """Register collection-level capability: POST /api/{entities}/{cap-name} (no entity_id).
 
     For capabilities like fetch_new that create entities rather than operating on existing ones.
@@ -278,13 +276,9 @@ def _register_collection_capability_route(
 
         capability_fn = get_capability(cap_name)
         config = (
-            activation.config
-            if hasattr(activation, "config")
-            else activation.get("config", {})
+            activation.config if hasattr(activation, "config") else activation.get("config", {})
         )
-        result = await capability_fn(
-            entity_cls, config, current_org_id.get(), params=data
-        )
+        result = await capability_fn(entity_cls, config, current_org_id.get(), params=data)
         return result
 
 

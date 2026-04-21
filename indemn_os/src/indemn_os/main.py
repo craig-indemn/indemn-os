@@ -226,9 +226,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             import orjson
 
             body = orjson.loads(data) if data else {}
-            result = client.post(
-                f"/api/{_slug}s/{_cap.replace('_', '-')}", json=body
-            )
+            result = client.post(f"/api/{_slug}s/{_cap.replace('_', '-')}", json=body)
             render(result, "json")
 
     # Register bulk commands for this entity type

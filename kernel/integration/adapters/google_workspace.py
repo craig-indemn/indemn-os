@@ -143,9 +143,7 @@ class GoogleWorkspaceAdapter(Adapter):
 
         return await asyncio.to_thread(_sync_list)
 
-    async def _search_user_drive(
-        self, email: str, query: str, since: str = None
-    ) -> list[dict]:
+    async def _search_user_drive(self, email: str, query: str, since: str = None) -> list[dict]:
         """Search a user's Drive for matching files."""
 
         def _sync_search():
@@ -167,8 +165,7 @@ class GoogleWorkspaceAdapter(Adapter):
                         q=drive_query,
                         pageSize=100,
                         fields=(
-                            "nextPageToken, files(id, name, mimeType,"
-                            " modifiedTime, createdTime)"
+                            "nextPageToken, files(id, name, mimeType, modifiedTime, createdTime)"
                         ),
                         pageToken=page_token,
                     )
@@ -187,9 +184,7 @@ class GoogleWorkspaceAdapter(Adapter):
 
         def _sync_export():
             service = self._drive_service(email)
-            return (
-                service.files().export(fileId=file_id, mimeType="text/plain").execute()
-            )
+            return service.files().export(fileId=file_id, mimeType="text/plain").execute()
 
         content = await asyncio.to_thread(_sync_export)
         return content.decode("utf-8") if isinstance(content, bytes) else content
@@ -206,9 +201,7 @@ class GoogleWorkspaceAdapter(Adapter):
             return {"status": "error", "message": str(e)}
 
 
-def parse_gemini_transcript(
-    raw_text: str, doc_name: str, doc_metadata: dict
-) -> dict:
+def parse_gemini_transcript(raw_text: str, doc_name: str, doc_metadata: dict) -> dict:
     """Parse a Gemini 'Notes by Gemini' document into Meeting entity fields.
 
     Gemini format: Notes header → Summary → Decisions → Next steps → Details.
@@ -224,8 +217,7 @@ def parse_gemini_transcript(
         date_str = name_match.group(2)
         time_str = name_match.group(3)
         meeting_date = (
-            datetime.strptime(f"{date_str} {time_str}", "%Y/%m/%d %H:%M").isoformat()
-            + "Z"
+            datetime.strptime(f"{date_str} {time_str}", "%Y/%m/%d %H:%M").isoformat() + "Z"
         )
     else:
         title = doc_name
@@ -237,9 +229,7 @@ def parse_gemini_transcript(
     if invited_match:
         names_raw = invited_match.group(1).strip()
         # Gemini lists space-separated full names: "George Remmer Peter Duffy"
-        team_members = re.findall(
-            r"[A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?", names_raw
-        )
+        team_members = re.findall(r"[A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?", names_raw)
 
     # Extract Summary section
     summary = ""
