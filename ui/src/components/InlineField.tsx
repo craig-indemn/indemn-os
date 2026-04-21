@@ -76,6 +76,13 @@ export function InlineField({ field, value, onSave, canEdit }: Props) {
   // Read mode
   if (!editing) {
     const isEmpty = value === null || value === undefined || value === "";
+    const long = isLongText(field, value);
+
+    // Long text: show truncated with expand
+    if (!isEmpty && long) {
+      return <ExpandableText value={String(value)} onEdit={canEdit ? startEdit : undefined} />;
+    }
+
     return (
       <div
         onClick={canEdit ? startEdit : undefined}
@@ -85,8 +92,6 @@ export function InlineField({ field, value, onSave, canEdit }: Props) {
       >
         {isEmpty ? (
           <span className="text-gray-300 italic">{canEdit ? "Click to add..." : "—"}</span>
-        ) : isLongText(field, value) ? (
-          <span className="whitespace-pre-wrap leading-relaxed">{String(value)}</span>
         ) : (
           <FieldRenderer type={field.enum_values?.length ? "enum" : field.type} value={value} meta={field} />
         )}
@@ -236,5 +241,57 @@ function renderEditInput(
       onKeyDown={onKeyDown}
       className={baseClass}
     />
+  );
+}
+
+/** Expandable text block for long string fields. */
+function ExpandableText({ value, onEdit }: { value: string; onEdit?: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = value.split("\n");
+  const isVeryLong = value.length > 200 || lines.length > 4;
+
+  if (expanded) {
+    return (
+      <div className="text-sm rounded px-2 py-1.5 -mx-2 bg-gray-50 border relative">
+        <pre className="whitespace-pre-wrap leading-relaxed font-sans text-gray-900">{value}</pre>
+        <div className="flex gap-2 mt-2">
+          <button
+            onClick={() => setExpanded(false)}
+            className="text-xs text-gray-500 hover:text-gray-700"
+          >
+            Collapse
+          </button>
+          {onEdit && (
+            <button
+              onClick={onEdit}
+              className="text-xs text-blue-500 hover:text-blue-700"
+            >
+              Edit
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const preview = isVeryLong
+    ? lines.slice(0, 3).join("\n").slice(0, 150) + "..."
+    : value;
+
+  return (
+    <div
+      onClick={() => isVeryLong ? setExpanded(true) : onEdit?.()}
+      className={`text-sm rounded px-2 py-1.5 -mx-2 min-h-[32px] group ${
+        isVeryLong || onEdit ? "cursor-pointer hover:bg-gray-50" : ""
+      }`}
+    >
+      <span className="whitespace-pre-wrap leading-relaxed text-gray-900">{preview}</span>
+      {isVeryLong && (
+        <span className="text-xs text-blue-500 ml-1">Show more</span>
+      )}
+      {onEdit && !isVeryLong && (
+        <span className="ml-2 text-gray-300 opacity-0 group-hover:opacity-100 text-xs shrink-0">✎</span>
+      )}
+    </div>
   );
 }

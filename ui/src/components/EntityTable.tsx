@@ -240,7 +240,7 @@ export function EntityTable({
                 {row.getVisibleCells().map((cell) => (
                   <td
                     key={cell.id}
-                    className="px-4 py-3 text-sm text-gray-900 whitespace-nowrap"
+                    className="px-4 py-3 text-sm text-gray-900 max-w-64 truncate"
                   >
                     {flexRender(
                       cell.column.columnDef.cell,
