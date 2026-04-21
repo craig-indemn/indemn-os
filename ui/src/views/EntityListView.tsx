@@ -5,6 +5,7 @@ import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntity } from "../hooks/useRealtime";
 import { apiClient } from "../api/client";
 import { EntityTable } from "../components/EntityTable";
+import { DetailPanel } from "../components/DetailPanel";
 import { FieldRenderer } from "../components/FieldRenderer";
 import { StateIndicator } from "../components/StateIndicator";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -22,6 +23,7 @@ export function EntityListView() {
   const [stateFilter, setStateFilter] = useState(searchParams.get("status") || "");
   const [page, setPage] = useState(Number(searchParams.get("page") || "0"));
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [panelEntityId, setPanelEntityId] = useState<string | null>(null);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -182,15 +184,28 @@ export function EntityListView() {
         </div>
       )}
 
-      <div className="flex-1 min-h-0">
-        <EntityTable
-          columns={columns}
-          data={entities || []}
-          onRowClick={(row) => navigate(`/${entityType}/${row._id}`)}
-          enableSelection={canBulk}
-          onSelectionChange={setSelectedIds}
-          storageKey={entityName}
-        />
+      <div className="flex-1 min-h-0 flex">
+        <div className={`${panelEntityId ? "flex-1" : "w-full"} min-w-0`}>
+          <EntityTable
+            columns={columns}
+            data={entities || []}
+            onRowClick={(row) => setPanelEntityId(row._id as string)}
+            onRowDoubleClick={(row) => navigate(`/${entityType}/${row._id}`)}
+            enableSelection={canBulk}
+            onSelectionChange={setSelectedIds}
+            storageKey={entityName}
+            activeRowId={panelEntityId}
+          />
+        </div>
+        {panelEntityId && entityType && (
+          <div className="w-[420px] shrink-0 border-l bg-white overflow-hidden">
+            <DetailPanel
+              entitySlug={entityType}
+              entityId={panelEntityId}
+              onClose={() => setPanelEntityId(null)}
+            />
+          </div>
+        )}
       </div>
 
       {/* Pagination */}

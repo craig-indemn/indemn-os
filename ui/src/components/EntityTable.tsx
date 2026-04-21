@@ -16,18 +16,22 @@ interface Props {
   columns: ColumnDef<Record<string, unknown>>[];
   data: Record<string, unknown>[];
   onRowClick?: (row: Record<string, unknown>) => void;
+  onRowDoubleClick?: (row: Record<string, unknown>) => void;
   enableSelection?: boolean;
   onSelectionChange?: (selectedIds: string[]) => void;
   storageKey?: string;
+  activeRowId?: string | null;
 }
 
 export function EntityTable({
   columns,
   data,
   onRowClick,
+  onRowDoubleClick,
   enableSelection,
   onSelectionChange,
   storageKey,
+  activeRowId,
 }: Props) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -224,11 +228,14 @@ export function EntityTable({
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {table.getRowModel().rows.map((row) => (
+            {table.getRowModel().rows.map((row) => {
+              const isActive = activeRowId === row.id;
+              return (
               <tr
                 key={row.id}
                 onClick={() => onRowClick?.(row.original)}
-                className={onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}
+                onDoubleClick={() => onRowDoubleClick?.(row.original)}
+                className={`${onRowClick ? "cursor-pointer hover:bg-gray-50" : ""} ${isActive ? "bg-blue-50" : ""}`}
               >
                 {row.getVisibleCells().map((cell) => (
                   <td
@@ -242,7 +249,8 @@ export function EntityTable({
                   </td>
                 ))}
               </tr>
-            ))}
+              );
+            })}
             {table.getRowModel().rows.length === 0 && (
               <tr>
                 <td
