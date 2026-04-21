@@ -4,6 +4,9 @@ Per vision § 14: "indemn trace entity {id}" queries all three data stores.
 "indemn trace cascade {correlation_id}" shows full execution tree.
 """
 
+from datetime import datetime
+from decimal import Decimal
+
 from bson import ObjectId
 from fastapi import APIRouter, Depends, Query
 
@@ -11,6 +14,21 @@ from kernel.auth.middleware import get_current_actor
 from kernel.changes.collection import ChangeRecord
 from kernel.context import current_org_id
 from kernel.message.schema import Message, MessageLog
+
+
+def _safe_value(v):
+    """Ensure a value is JSON-serializable (ObjectId → str, etc.)."""
+    if isinstance(v, ObjectId):
+        return str(v)
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, list):
+        return [_safe_value(i) for i in v]
+    if isinstance(v, dict):
+        return {k: _safe_value(val) for k, val in v.items()}
+    return v
 
 trace_router = APIRouter(prefix="/api/trace", tags=["trace"])
 
@@ -57,22 +75,27 @@ async def trace_entity(
     timeline = []
 
     for c in changes:
+        # Safely serialize field changes — old_value/new_value can contain ObjectIds
+        field_changes = []
+        if c.changes:
+            for fc in c.changes:
+                field_changes.append(
+                    {
+                        "field": fc.field if hasattr(fc, "field") else str(fc.get("field", "")),
+                        "old_value": _safe_value(fc.old_value if hasattr(fc, "old_value") else fc.get("old_value")),
+                        "new_value": _safe_value(fc.new_value if hasattr(fc, "new_value") else fc.get("new_value")),
+                    }
+                )
+
         timeline.append(
             {
                 "source": "changes",
                 "timestamp": c.timestamp.isoformat() if c.timestamp else None,
                 "type": c.change_type,
-                "actor_id": c.actor_id,
+                "actor_id": str(c.actor_id) if c.actor_id else None,
                 "correlation_id": c.correlation_id,
                 "method": c.method,
-                "changes": [
-                    {
-                        "field": fc.field,
-                        "old_value": fc.old_value,
-                        "new_value": fc.new_value,
-                    }
-                    for fc in c.changes
-                ],
+                "changes": field_changes,
             }
         )
 
@@ -157,8 +180,12 @@ async def trace_cascade(
 
     for c in changes:
         change_summary = []
-        for fc in c.changes:
-            change_summary.append(f"{fc.field}: {fc.old_value} → {fc.new_value}")
+        if c.changes:
+            for fc in c.changes:
+                field_name = fc.field if hasattr(fc, "field") else fc.get("field", "")
+                old_v = _safe_value(fc.old_value if hasattr(fc, "old_value") else fc.get("old_value"))
+                new_v = _safe_value(fc.new_value if hasattr(fc, "new_value") else fc.get("new_value"))
+                change_summary.append(f"{field_name}: {old_v} → {new_v}")
 
         timeline.append(
             {
@@ -167,7 +194,7 @@ async def trace_cascade(
                 "entity_type": c.entity_type,
                 "entity_id": str(c.entity_id),
                 "type": c.change_type,
-                "actor_id": c.actor_id,
+                "actor_id": str(c.actor_id) if c.actor_id else None,
                 "method": c.method,
                 "summary": "; ".join(change_summary) if change_summary else c.change_type,
             }
