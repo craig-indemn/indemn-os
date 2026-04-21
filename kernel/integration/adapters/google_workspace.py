@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 MEET_SCOPES = ["https://www.googleapis.com/auth/meetings.space.readonly"]
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 ADMIN_SCOPES = ["https://www.googleapis.com/auth/admin.directory.user.readonly"]
+CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 
 class GoogleWorkspaceAdapter(Adapter):
@@ -74,6 +75,17 @@ class GoogleWorkspaceAdapter(Adapter):
             subject=self.config["admin_email"],
         )
         return build("admin", "directory_v1", credentials=creds, cache_discovery=False)
+
+    def _calendar_service(self, user_email: str):
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+
+        creds = service_account.Credentials.from_service_account_info(
+            self._sa_info,
+            scopes=CALENDAR_SCOPES,
+            subject=user_email,
+        )
+        return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     async def fetch(
         self,
@@ -180,9 +192,19 @@ class GoogleWorkspaceAdapter(Adapter):
         meeting_code = space_info.get("meetingCode", "")
         meeting_url = space_info.get("meetingUri", "")
 
+        # Look up calendar event by meeting code for title + attendee emails
+        cal_event = {}
+        if meeting_code and start_time:
+            cal_event = await self._find_calendar_event(discovered_via, meeting_code, start_time)
+
+        # Calendar attendee emails (for enriching participant data)
+        cal_attendee_emails = {a.get("email", ""): a for a in cal_event.get("attendees", [])}
+        # Calendar organizer
+        cal_organizer = cal_event.get("organizer", {}).get("email", "")
+
         # Build structured participant data with email resolution
         participants = []
-        organizer = discovered_via
+        organizer = cal_organizer or discovered_via
         team_member_names = []
         for p in raw_participants:
             signed = p.get("signedinUser", {})
@@ -204,6 +226,15 @@ class GoogleWorkspaceAdapter(Adapter):
             email = self._resolve_email(user_id)
             p_type = "signed_in" if signed else "anonymous" if anon else "phone"
 
+            # If we couldn't resolve email from Admin SDK, try calendar attendees
+            # by matching display name
+            if not email and cal_attendee_emails:
+                for cal_email, cal_att in cal_attendee_emails.items():
+                    cal_name = cal_att.get("displayName", "")
+                    if cal_name and cal_name.lower() == name.lower():
+                        email = cal_email
+                        break
+
             participants.append(
                 {
                     "name": name,
@@ -215,10 +246,6 @@ class GoogleWorkspaceAdapter(Adapter):
                 }
             )
             team_member_names.append(name)
-
-            # First signed-in participant who matches discovered_via is likely organizer
-            if email == discovered_via:
-                organizer = email
 
         # Recording
         recording_url = None
@@ -277,8 +304,14 @@ class GoogleWorkspaceAdapter(Adapter):
         # Extract summary from Gemini notes
         summary = _extract_summary(notes_text) if notes_text else ""
 
-        # Build title
-        title = _extract_title(notes_text) or _extract_title(transcript_text) or "Untitled Meeting"
+        # Build title — prefer calendar event name, then notes, then transcript
+        cal_title = cal_event.get("summary", "")
+        title = (
+            cal_title
+            or _extract_title(notes_text)
+            or _extract_title(transcript_text)
+            or "Untitled Meeting"
+        )
 
         # Use transcript URL if available, else notes URL
         transcript_ref = transcript_url or notes_url
@@ -394,6 +427,48 @@ class GoogleWorkspaceAdapter(Adapter):
                 if not page_token:
                     break
             return records
+
+        return await asyncio.to_thread(_sync)
+
+    async def _find_calendar_event(self, email: str, meeting_code: str, start_time: str) -> dict:
+        """Find calendar event by meeting code. Returns event dict or {}."""
+
+        def _sync():
+            service = self._calendar_service(email)
+            # Search around the meeting start time (±2 hours)
+            try:
+                start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+            except Exception:
+                return {}
+            from datetime import timedelta
+
+            time_min = (start_dt - timedelta(hours=2)).isoformat()
+            time_max = (start_dt + timedelta(hours=2)).isoformat()
+
+            try:
+                events = (
+                    service.events()
+                    .list(
+                        calendarId="primary",
+                        timeMin=time_min,
+                        timeMax=time_max,
+                        maxResults=20,
+                        singleEvents=True,
+                    )
+                    .execute()
+                )
+                # Find event with matching conference/meeting code
+                for event in events.get("items", []):
+                    conf_data = event.get("conferenceData", {})
+                    if conf_data.get("conferenceId") == meeting_code:
+                        return event
+                    # Also check entry points for the meeting URI
+                    for ep in conf_data.get("entryPoints", []):
+                        if meeting_code in ep.get("uri", ""):
+                            return event
+            except Exception as e:
+                logger.warning("Calendar lookup failed for %s: %s", email, e)
+            return {}
 
         return await asyncio.to_thread(_sync)
 
