@@ -229,8 +229,12 @@ def _should_emit(entity, is_new: bool, method: str, changes: list) -> tuple[bool
 
 
 def _is_heartbeat_only(entity) -> bool:
-    """Detect heartbeat-only updates on Attention entities."""
-    if type(entity).__name__ != "Attention":
+    """Detect heartbeat-only updates on Attention and Runtime entities.
+
+    Per white paper: 'Heartbeat updates bypass audit logging to avoid noise.'
+    """
+    entity_name = type(entity).__name__
+    if entity_name not in ("Attention", "Runtime"):
         return False
     loaded = entity._loaded_state
     if not loaded:
@@ -238,18 +242,26 @@ def _is_heartbeat_only(entity) -> bool:
     current = _serialize_entity(entity)
     changed_fields = {k for k in current if current.get(k) != loaded.get(k)}
     changed_fields -= {"version", "updated_at"}
-    return changed_fields <= {"last_heartbeat", "expires_at"}
+    if entity_name == "Attention":
+        return changed_fields <= {"last_heartbeat", "expires_at"}
+    if entity_name == "Runtime":
+        return changed_fields <= {"instances", "last_heartbeat"}
+    return False
 
 
 async def _save_heartbeat_only(entity):
     """Fast path for heartbeat updates — skip changes + watches."""
+    update_fields: dict = {"updated_at": datetime.now(timezone.utc)}
+    if hasattr(entity, "last_heartbeat"):
+        update_fields["last_heartbeat"] = datetime.now(timezone.utc)
+    if hasattr(entity, "expires_at") and entity.expires_at:
+        update_fields["expires_at"] = entity.expires_at
+    if hasattr(entity, "instances") and entity.instances is not None:
+        update_fields["instances"] = [
+            inst if isinstance(inst, dict) else inst.model_dump()
+            for inst in entity.instances
+        ]
     await entity.get_motor_collection().update_one(
         {"_id": entity.id},
-        {
-            "$set": {
-                "last_heartbeat": datetime.now(timezone.utc),
-                "expires_at": entity.expires_at,
-                "updated_at": datetime.now(timezone.utc),
-            }
-        },
+        {"$set": update_fields},
     )

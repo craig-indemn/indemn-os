@@ -50,12 +50,21 @@ async def activity_feed(
     """
     org_id = current_org_id.get()
 
-    query = {"org_id": org_id}
+    query: dict = {"org_id": org_id}
+
+    # By default, exclude system noise (heartbeats, session refreshes).
+    # Per white paper: "heartbeat updates bypass audit logging to avoid noise."
+    # These should not be in the changes collection at all, but until that's
+    # fixed, filter them out of the activity feed.
+    query["method"] = {"$nin": ["heartbeat", "revoke"]}
+    query["change_type"] = {"$nin": ["auth.session_refreshed"]}
+
     if entity_type:
         query["entity_type"] = entity_type
     if actor_id:
         query["actor_id"] = actor_id
     if change_type:
+        # Override the default exclusion if user explicitly filters
         query["change_type"] = change_type
 
     total = await ChangeRecord.find(query).count()
