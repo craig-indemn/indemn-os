@@ -162,30 +162,30 @@ function ActivityRow({ item }: { item: ActivityItem }) {
       className="border rounded px-4 py-2.5 hover:bg-gray-50 cursor-pointer"
       onClick={() => setExpanded(!expanded)}
     >
-      <div className="flex items-center gap-3">
-        <span className="text-xs text-gray-400 w-40 shrink-0">{ts}</span>
+      <div className="flex items-center gap-3 min-w-0">
+        <span className="text-xs text-gray-400 w-36 shrink-0 truncate">{ts}</span>
         <span
-          className={`text-xs px-2 py-0.5 rounded font-medium w-20 text-center shrink-0 ${colorClass}`}
+          className={`text-xs px-2 py-0.5 rounded font-medium shrink-0 whitespace-nowrap ${colorClass}`}
         >
           {item.change_type}
         </span>
-        <span className="text-sm text-gray-500 w-28 shrink-0">
+        <span className="text-sm text-gray-500 w-32 shrink-0 truncate">
           {item.entity_type}
         </span>
         <Link
           to={`/${slug}/${item.entity_id}`}
           onClick={(e) => e.stopPropagation()}
-          className="text-sm text-blue-600 hover:underline shrink-0"
+          className="text-sm text-blue-600 hover:underline shrink-0 truncate max-w-48"
         >
           <EntityName entityType={item.entity_type} entityId={item.entity_id} />
         </Link>
-        <span className="text-sm text-gray-500 truncate flex-1">{summary}</span>
+        <span className="text-sm text-gray-500 truncate flex-1 min-w-0">{summary}</span>
         {item.actor_id && (
-          <span className="text-xs text-gray-400 shrink-0">
+          <span className="text-xs text-gray-400 shrink-0 whitespace-nowrap">
             by <ResolvedLink entityType="Actor" entityId={item.actor_id} className="text-xs text-gray-500 hover:underline" />
           </span>
         )}
-        <span className="text-gray-300 text-xs">{expanded ? "▼" : "▶"}</span>
+        <span className="text-gray-300 text-xs shrink-0">{expanded ? "▼" : "▶"}</span>
       </div>
 
       {expanded && item.changes.length > 0 && (
