@@ -143,21 +143,56 @@ class GoogleWorkspaceAdapter(Adapter):
                 continue
 
         logger.info(
-            "Found %d unique conferences across %d users",
+            "Found %d unique conference records across %d users",
             len(all_conferences),
             len(real_users),
         )
 
+        # Deduplicate by meeting code + date — Google creates multiple conference
+        # records for the same meeting room (lobby entry vs actual meeting).
+        # Keep the record with the most participants (the real meeting).
+        by_code_date: dict[str, list[dict]] = {}
+        for conf in all_conferences.values():
+            space = conf.get("space", "")
+            date = conf.get("startTime", "")[:10]  # YYYY-MM-DD
+            key = f"{space}:{date}"
+            by_code_date.setdefault(key, []).append(conf)
+
+        deduped = []
+        for key, confs in by_code_date.items():
+            if len(confs) == 1:
+                deduped.append(confs[0])
+            else:
+                # Keep the longest meeting (most likely the real one, not the lobby)
+                best = max(
+                    confs,
+                    key=lambda c: (
+                        c.get("endTime", "") > c.get("startTime", "") and c.get("endTime", "") or ""
+                    ),
+                )
+                deduped.append(best)
+                logger.info(
+                    "Deduped %d conference records for %s, kept %s",
+                    len(confs),
+                    key,
+                    best["name"][:40],
+                )
+
+        logger.info(
+            "After dedup: %d unique meetings",
+            len(deduped),
+        )
+
         # Build Meeting entity data for each conference
         results = []
-        for conf_id, conf in all_conferences.items():
+        for conf in deduped:
             if len(results) >= limit:
                 break
             try:
                 meeting = await self._build_meeting(conf)
                 results.append(meeting)
             except Exception as e:
-                logger.warning("Failed to build meeting %s: %s", conf_id, e)
+                logger.warning("Failed to build meeting %s: %s", conf["name"], e)
                 continue
 
         return results
@@ -202,10 +237,15 @@ class GoogleWorkspaceAdapter(Adapter):
         # Calendar organizer
         cal_organizer = cal_event.get("organizer", {}).get("email", "")
 
-        # Build structured participant data with email resolution
+        # Build structured participant data by merging:
+        # 1. Calendar attendees (everyone invited, with emails)
+        # 2. Meet participants (who actually joined, with timestamps)
         participants = []
         organizer = cal_organizer or discovered_via
         team_member_names = []
+        seen_emails = set()
+
+        # First: Meet participants (actually joined — have join/leave times)
         for p in raw_participants:
             signed = p.get("signedinUser", {})
             anon = p.get("anonymousUser", {})
@@ -227,7 +267,6 @@ class GoogleWorkspaceAdapter(Adapter):
             p_type = "signed_in" if signed else "anonymous" if anon else "phone"
 
             # If we couldn't resolve email from Admin SDK, try calendar attendees
-            # by matching display name
             if not email and cal_attendee_emails:
                 for cal_email, cal_att in cal_attendee_emails.items():
                     cal_name = cal_att.get("displayName", "")
@@ -243,9 +282,32 @@ class GoogleWorkspaceAdapter(Adapter):
                     "joined": p.get("earliestStartTime", ""),
                     "left": p.get("latestEndTime", ""),
                     "type": p_type,
+                    "attended": True,
                 }
             )
             team_member_names.append(name)
+            if email:
+                seen_emails.add(email)
+
+        # Second: Calendar attendees who did NOT join the Meet call
+        for cal_email, cal_att in cal_attendee_emails.items():
+            if cal_email in seen_emails:
+                continue
+            cal_name = cal_att.get("displayName", cal_email.split("@")[0])
+            rsvp = cal_att.get("responseStatus", "")
+            participants.append(
+                {
+                    "name": cal_name,
+                    "user_id": "",
+                    "email": cal_email,
+                    "joined": "",
+                    "left": "",
+                    "type": "invited",
+                    "attended": False,
+                    "rsvp": rsvp,
+                }
+            )
+            team_member_names.append(cal_name)
 
         # Recording
         recording_url = None
