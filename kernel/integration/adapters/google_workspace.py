@@ -3,10 +3,18 @@
 Uses the Meet REST API (meet.googleapis.com/v2) as the primary discovery
 mechanism. Each conference record natively links its recordings, transcripts,
 smart notes (Gemini), and participants. Drive API used only for content download.
+Admin SDK used for user enumeration and user ID → email resolution.
+
+Captures EVERYTHING the API provides:
+- Conference: start/end time, space, meeting code/URL
+- Participants: name, Google user ID, email, join/leave times, type
+- Recordings: Drive file ID, URL, start/end time
+- Transcripts: Doc ID, URL, structured entries (speaker, text, timestamp)
+- Smart Notes: Doc ID, URL, content with Summary/Decisions/Next Steps/Details
+- Transcript entries expire after 30 days — captured on every ingestion run
 
 Domain-wide delegation: service account impersonates each user to get their
-organized conferences. All Google API calls are synchronous (google-api-python-client)
-wrapped in asyncio.to_thread().
+conferences. All sync Google API calls wrapped in asyncio.to_thread().
 """
 
 import asyncio
@@ -41,6 +49,8 @@ class GoogleWorkspaceAdapter(Adapter):
         self._drive_creds_base = service_account.Credentials.from_service_account_info(
             credentials, scopes=DRIVE_SCOPES
         )
+        # Cache: Google user ID → email (built from Admin SDK)
+        self._user_id_to_email: dict[str, str] = {}
 
     def _meet_service(self, user_email: str):
         from googleapiclient.discovery import build
@@ -74,8 +84,8 @@ class GoogleWorkspaceAdapter(Adapter):
     ) -> list[dict]:
         """Fetch meetings via Google Meet API across all domain users.
 
-        Uses conferenceRecords as the anchor — each record natively links
-        recordings, transcripts, smart notes, and participants.
+        Captures everything: conference metadata, participants with IDs/emails,
+        recordings, transcripts (doc + structured entries), smart notes.
         """
         if not user_emails:
             try:
@@ -93,18 +103,20 @@ class GoogleWorkspaceAdapter(Adapter):
                     )
 
         # Filter out service/system accounts
-        user_emails = [
+        real_users = [
             e
             for e in user_emails
             if not any(skip in e for skip in ["backup@", "demo@", "indemn@indemn"])
         ]
 
-        logger.info("Scanning %d users for conference records", len(user_emails))
+        # Build user ID → email mapping for participant resolution
+        await self._build_user_id_map(real_users)
 
-        # Collect conference records from all users (each user's organized meetings)
-        # Dedup by conference record name (same meeting seen by different users)
+        logger.info("Scanning %d users for conference records", len(real_users))
+
+        # Collect conference records — dedup by conference name
         all_conferences: dict[str, dict] = {}
-        for email in user_emails:
+        for email in real_users:
             try:
                 conferences = await self._list_user_conferences(email, since)
                 for conf in conferences:
@@ -112,7 +124,7 @@ class GoogleWorkspaceAdapter(Adapter):
                     if conf_id not in all_conferences:
                         all_conferences[conf_id] = {
                             **conf,
-                            "organizer_email": email,
+                            "discovered_via": email,
                         }
             except Exception as e:
                 logger.warning("Skipping %s: %s", email, e)
@@ -121,7 +133,7 @@ class GoogleWorkspaceAdapter(Adapter):
         logger.info(
             "Found %d unique conferences across %d users",
             len(all_conferences),
-            len(user_emails),
+            len(real_users),
         )
 
         # Build Meeting entity data for each conference
@@ -139,13 +151,13 @@ class GoogleWorkspaceAdapter(Adapter):
         return results
 
     async def _build_meeting(self, conf: dict) -> dict:
-        """Build a Meeting entity dict from a conference record + its artifacts."""
-        organizer_email = conf["organizer_email"]
+        """Build a Meeting entity dict with ALL available data."""
+        discovered_via = conf["discovered_via"]
         conf_name = conf["name"]
         start_time = conf.get("startTime", "")
         end_time = conf.get("endTime", "")
 
-        # Calculate duration
+        # Duration
         duration_minutes = None
         if start_time and end_time:
             try:
@@ -155,21 +167,66 @@ class GoogleWorkspaceAdapter(Adapter):
             except Exception:
                 pass
 
-        # Get all artifacts in parallel
-        participants, recordings, transcripts, smart_notes = await asyncio.gather(
-            self._get_participants(organizer_email, conf_name),
-            self._get_recordings(organizer_email, conf_name),
-            self._get_transcripts(organizer_email, conf_name),
-            self._get_smart_notes(organizer_email, conf_name),
+        # Get space info (meeting code, URL) + all artifacts in parallel
+        space_info, raw_participants, recordings, transcripts, smart_notes = await asyncio.gather(
+            self._get_space(discovered_via, conf.get("space", "")),
+            self._get_participants(discovered_via, conf_name),
+            self._get_recordings(discovered_via, conf_name),
+            self._get_transcripts(discovered_via, conf_name),
+            self._get_smart_notes(discovered_via, conf_name),
         )
 
-        # Recording info
+        # Meeting code and URL from space
+        meeting_code = space_info.get("meetingCode", "")
+        meeting_url = space_info.get("meetingUri", "")
+
+        # Build structured participant data with email resolution
+        participants = []
+        organizer = discovered_via
+        team_member_names = []
+        for p in raw_participants:
+            signed = p.get("signedinUser", {})
+            anon = p.get("anonymousUser", {})
+            phone = p.get("phoneUser", {})
+
+            name = (
+                signed.get("displayName")
+                or anon.get("displayName")
+                or phone.get("displayName")
+                or "Unknown"
+            )
+
+            # Skip AI/bot participants
+            if any(skip in name.lower() for skip in ["ai assistant", "notetaker", "bot"]):
+                continue
+
+            user_id = signed.get("user", "")
+            email = self._resolve_email(user_id)
+            p_type = "signed_in" if signed else "anonymous" if anon else "phone"
+
+            participants.append(
+                {
+                    "name": name,
+                    "user_id": user_id,
+                    "email": email,
+                    "joined": p.get("earliestStartTime", ""),
+                    "left": p.get("latestEndTime", ""),
+                    "type": p_type,
+                }
+            )
+            team_member_names.append(name)
+
+            # First signed-in participant who matches discovered_via is likely organizer
+            if email == discovered_via:
+                organizer = email
+
+        # Recording
         recording_url = None
         if recordings:
             dd = recordings[0].get("driveDestination", {})
             recording_url = dd.get("exportUri")
 
-        # Transcript: prefer the Doc, download content
+        # Transcript doc
         transcript_text = ""
         transcript_url = None
         transcript_doc_id = None
@@ -177,13 +234,8 @@ class GoogleWorkspaceAdapter(Adapter):
             dd = transcripts[0].get("docsDestination", {})
             transcript_doc_id = dd.get("document")
             transcript_url = dd.get("exportUri")
-            if transcript_doc_id:
-                try:
-                    transcript_text = await self._export_doc(organizer_email, transcript_doc_id)
-                except Exception as e:
-                    logger.warning("Failed to export transcript %s: %s", transcript_doc_id, e)
 
-        # Smart Notes (Gemini): download content
+        # Smart Notes (Gemini) doc
         notes_text = ""
         notes_url = None
         notes_doc_id = None
@@ -191,41 +243,112 @@ class GoogleWorkspaceAdapter(Adapter):
             dd = smart_notes[0].get("docsDestination", {})
             notes_doc_id = dd.get("document")
             notes_url = dd.get("exportUri")
-            # Only download if it's a different doc than the transcript
-            if notes_doc_id and notes_doc_id != transcript_doc_id:
-                try:
-                    notes_text = await self._export_doc(organizer_email, notes_doc_id)
-                except Exception as e:
-                    logger.warning("Failed to export notes %s: %s", notes_doc_id, e)
-            elif notes_doc_id == transcript_doc_id:
-                # Same doc serves as both — notes IS the transcript content
-                notes_text = transcript_text
+
+        # Download transcript entries (structured, expire after 30 days)
+        # These are the primary transcript source — speaker-attributed with timestamps
+        transcript_entries = []
+        if transcripts:
+            t_name = transcripts[0]["name"]
+            transcript_entries = await self._get_transcript_entries(discovered_via, t_name)
+
+        # Build transcript text from structured entries (preferred over Doc export)
+        if transcript_entries:
+            transcript_text = self._entries_to_text(transcript_entries)
+        elif transcript_doc_id:
+            # Fallback: export the Doc if entries aren't available
+            try:
+                transcript_text = await self._export_doc(discovered_via, transcript_doc_id)
+            except Exception as e:
+                logger.warning("Failed to export transcript doc: %s", e)
+
+        # Download notes content (separate doc from transcript)
+        if notes_doc_id and notes_doc_id != transcript_doc_id:
+            try:
+                notes_text = await self._export_doc(discovered_via, notes_doc_id)
+            except Exception as e:
+                logger.warning("Failed to export notes doc: %s", e)
+        elif notes_doc_id == transcript_doc_id:
+            # Same doc for both — export it for notes
+            try:
+                notes_text = await self._export_doc(discovered_via, notes_doc_id)
+            except Exception as e:
+                logger.warning("Failed to export shared doc: %s", e)
 
         # Extract summary from Gemini notes
         summary = _extract_summary(notes_text) if notes_text else ""
 
-        # Build title from the first line of notes or transcript, or fallback
+        # Build title
         title = _extract_title(notes_text) or _extract_title(transcript_text) or "Untitled Meeting"
 
-        # Participant names (filter out bots)
-        team_members = [p["name"] for p in participants if p.get("name") and p["name"] != "?"]
-
-        # Use conference record name as external_ref (globally unique)
-        external_ref = conf_name
+        # Use transcript URL if available, else notes URL
+        transcript_ref = transcript_url or notes_url
 
         return {
             "title": title,
             "date": start_time,
             "duration_minutes": duration_minutes,
             "source": "google_meet",
+            "meeting_code": meeting_code,
+            "meeting_url": meeting_url,
+            "organizer": organizer,
+            "participants": participants,
+            "team_members": team_member_names,
             "transcript": transcript_text,
-            "summary": summary,
             "notes": notes_text,
-            "transcript_ref": transcript_url or notes_url,
+            "summary": summary,
+            "transcript_ref": transcript_ref,
             "recording_ref": recording_url,
-            "external_ref": external_ref,
-            "team_members": team_members,
+            "external_ref": conf["name"],
         }
+
+    def _entries_to_text(self, entries: list[dict]) -> str:
+        """Convert structured transcript entries to readable text."""
+        lines = []
+        for entry in entries:
+            # Resolve participant ID to name
+            p_ref = entry.get("participant", "")
+            # participant ref is like "conferenceRecords/.../participants/USER_ID"
+            p_id = p_ref.rsplit("/", 1)[-1] if "/" in p_ref else p_ref
+            user_key = f"users/{p_id}"
+            email = self._user_id_to_email.get(user_key, "")
+            # Use email username as speaker label, or the raw ID
+            speaker = email.split("@")[0] if email else p_id
+
+            # Look up display name from participants we've seen
+            for uid, em in self._user_id_to_email.items():
+                if uid == user_key:
+                    speaker = em.split("@")[0]
+                    break
+
+            timestamp = entry.get("startTime", "")[:19]
+            text = entry.get("text", "")
+            lines.append(f"[{timestamp}] {speaker}: {text}")
+        return "\n".join(lines)
+
+    def _resolve_email(self, user_id: str) -> str:
+        """Resolve Google user ID to email address."""
+        return self._user_id_to_email.get(user_id, "")
+
+    async def _build_user_id_map(self, user_emails: list[str]):
+        """Build Google user ID → email mapping from Admin SDK."""
+
+        def _sync():
+            service = self._admin_service()
+            mapping = {}
+            for email in user_emails:
+                try:
+                    user = service.users().get(userKey=email).execute()
+                    gid = user.get("id", "")
+                    if gid:
+                        mapping[f"users/{gid}"] = email
+                except Exception:
+                    continue
+            return mapping
+
+        self._user_id_to_email = await asyncio.to_thread(_sync)
+        logger.info("Built user ID map: %d users resolved", len(self._user_id_to_email))
+
+    # --- API wrappers ---
 
     async def _list_domain_users(self) -> list[str]:
         def _sync():
@@ -252,14 +375,11 @@ class GoogleWorkspaceAdapter(Adapter):
         return await asyncio.to_thread(_sync)
 
     async def _list_user_conferences(self, email: str, since: str = None) -> list[dict]:
-        """List conference records organized by this user."""
-
         def _sync():
             service = self._meet_service(email)
             filter_str = ""
             if since:
                 filter_str = f'end_time>="{since}"'
-
             records = []
             page_token = None
             while True:
@@ -277,32 +397,34 @@ class GoogleWorkspaceAdapter(Adapter):
 
         return await asyncio.to_thread(_sync)
 
+    async def _get_space(self, email: str, space_name: str) -> dict:
+        if not space_name:
+            return {}
+
+        def _sync():
+            service = self._meet_service(email)
+            try:
+                return service.spaces().get(name=space_name).execute()
+            except Exception:
+                return {}
+
+        return await asyncio.to_thread(_sync)
+
     async def _get_participants(self, email: str, conf_name: str) -> list[dict]:
         def _sync():
             service = self._meet_service(email)
-            result = service.conferenceRecords().participants().list(parent=conf_name).execute()
-            participants = []
-            for p in result.get("participants", []):
-                signed_in = p.get("signedinUser", {})
-                anon = p.get("anonymousUser", {})
-                phone = p.get("phoneUser", {})
-                name = (
-                    signed_in.get("displayName")
-                    or anon.get("displayName")
-                    or phone.get("displayName")
-                    or "?"
-                )
-                # Filter out AI/bot participants
-                if any(skip in name.lower() for skip in ["ai assistant", "bot", "notetaker"]):
-                    continue
-                participants.append(
-                    {
-                        "name": name,
-                        "user_id": signed_in.get("user", ""),
-                        "email": email if name != "?" else "",
-                    }
-                )
-            return participants
+            all_parts = []
+            page_token = None
+            while True:
+                kwargs = {"parent": conf_name, "pageSize": 100}
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                result = service.conferenceRecords().participants().list(**kwargs).execute()
+                all_parts.extend(result.get("participants", []))
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    break
+            return all_parts
 
         return await asyncio.to_thread(_sync)
 
@@ -333,6 +455,28 @@ class GoogleWorkspaceAdapter(Adapter):
 
         return await asyncio.to_thread(_sync)
 
+    async def _get_transcript_entries(self, email: str, transcript_name: str) -> list[dict]:
+        """Get ALL transcript entries (structured utterances). Expire after 30 days."""
+
+        def _sync():
+            service = self._meet_service(email)
+            all_entries = []
+            page_token = None
+            while True:
+                kwargs = {"parent": transcript_name, "pageSize": 100}
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                result = (
+                    service.conferenceRecords().transcripts().entries().list(**kwargs).execute()
+                )
+                all_entries.extend(result.get("transcriptEntries", []))
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    break
+            return all_entries
+
+        return await asyncio.to_thread(_sync)
+
     async def _export_doc(self, email: str, doc_id: str) -> str:
         def _sync():
             service = self._drive_service(email)
@@ -346,8 +490,8 @@ class GoogleWorkspaceAdapter(Adapter):
             admin_email = self.config.get("admin_email")
             if not admin_email:
                 return {"status": "error", "message": "admin_email not set in config"}
-            conferences = await self._list_user_conferences(admin_email)
             users = await self._list_domain_users()
+            conferences = await self._list_user_conferences(admin_email)
             return {
                 "status": "ok",
                 "domain": self.config["domain"],
@@ -367,26 +511,26 @@ def _normalize(text: str) -> str:
 
 
 def _extract_title(text: str) -> str:
-    """Extract meeting title from Notes or Transcript content.
-
-    Notes format: "📝 Notes\\nDate\\nTitle\\nInvited..."
-    Transcript format: "Title - Date - Transcript\\nAttendees\\n..."
-    """
+    """Extract meeting title from Notes or Transcript content."""
     if not text:
         return ""
     text = _normalize(text)
     lines = text.strip().split("\n")
 
-    # Notes format: skip emoji line + date line, title is line 3
+    # Notes format: "📝 Notes\nDate\nTitle\nInvited..."
     if lines and "Notes" in lines[0]:
         if len(lines) >= 3:
             return lines[2].strip()
 
-    # Transcript format: first line is "Title - Date - Transcript"
+    # Transcript format: "Title - Date - Transcript\nAttendees\n..."
     if lines and "Transcript" in lines[0]:
         m = re.match(r"^(.+?) - \d{4}/\d{2}/\d{2} .+ - Transcript$", lines[0])
         if m:
             return m.group(1)
+
+    # Structured entries format: "[timestamp] speaker: text"
+    if lines and lines[0].startswith("["):
+        return ""  # No title in structured entries
 
     # Fallback: first non-empty line that isn't a header/date
     for line in lines[:5]:
@@ -395,7 +539,7 @@ def _extract_title(text: str) -> str:
             line
             and line not in ("Notes", "Transcript", "")
             and "📝" not in line
-            and not re.match(r"^[A-Z][a-z]{2} \d{1,2}, \d{4}$", line)  # skip date lines
+            and not re.match(r"^[A-Z][a-z]{2} \d{1,2}, \d{4}$", line)
         ):
             return line
 
@@ -409,7 +553,6 @@ def _extract_summary(notes_text: str) -> str:
 
     text = _normalize(notes_text)
 
-    # Match between "Summary" header and the next known section
     match = re.search(
         r"\nSummary\n(.+?)(?=\n(?:Rate this Summary|Decisions|Next steps|Details))",
         text,
@@ -418,7 +561,6 @@ def _extract_summary(notes_text: str) -> str:
     if match:
         return match.group(1).strip()
 
-    # Fallback: after Summary header until double blank line
     match = re.search(r"\nSummary\n(.+?)(?=\n\n\n)", text, re.DOTALL)
     if match:
         return match.group(1).strip()
