@@ -267,10 +267,19 @@ class GoogleWorkspaceAdapter(Adapter):
             p_type = "signed_in" if signed else "anonymous" if anon else "phone"
 
             # If we couldn't resolve email from Admin SDK, try calendar attendees
+            # Match by: exact name, first name, or email prefix contains name
             if not email and cal_attendee_emails:
+                name_lower = name.lower()
+                first_name = name_lower.split()[0] if name_lower else ""
                 for cal_email, cal_att in cal_attendee_emails.items():
-                    cal_name = cal_att.get("displayName", "")
-                    if cal_name and cal_name.lower() == name.lower():
+                    cal_name = (cal_att.get("displayName") or "").lower()
+                    cal_prefix = cal_email.split("@")[0].lower()
+                    if (
+                        (cal_name and cal_name == name_lower)
+                        or (cal_name and first_name and cal_name.startswith(first_name))
+                        or (first_name and first_name in cal_prefix)
+                        or (cal_prefix and cal_prefix in name_lower)
+                    ):
                         email = cal_email
                         break
 
@@ -293,11 +302,13 @@ class GoogleWorkspaceAdapter(Adapter):
         for cal_email, cal_att in cal_attendee_emails.items():
             if cal_email in seen_emails:
                 continue
-            cal_name = cal_att.get("displayName", cal_email.split("@")[0])
+            cal_name = cal_att.get("displayName") or ""
+            # Use display name if available, otherwise derive from email
+            display = cal_name if cal_name else cal_email.split("@")[0].replace(".", " ").title()
             rsvp = cal_att.get("responseStatus", "")
             participants.append(
                 {
-                    "name": cal_name,
+                    "name": display,
                     "user_id": "",
                     "email": cal_email,
                     "joined": "",
@@ -307,7 +318,7 @@ class GoogleWorkspaceAdapter(Adapter):
                     "rsvp": rsvp,
                 }
             )
-            team_member_names.append(cal_name)
+            team_member_names.append(display)
 
         # Recording
         recording_url = None
@@ -342,7 +353,7 @@ class GoogleWorkspaceAdapter(Adapter):
 
         # Build transcript text from structured entries (preferred over Doc export)
         if transcript_entries:
-            transcript_text = self._entries_to_text(transcript_entries)
+            transcript_text = self._entries_to_text(transcript_entries, participants)
         elif transcript_doc_id:
             # Fallback: export the Doc if entries aren't available
             try:
@@ -396,24 +407,33 @@ class GoogleWorkspaceAdapter(Adapter):
             "external_ref": conf["name"],
         }
 
-    def _entries_to_text(self, entries: list[dict]) -> str:
-        """Convert structured transcript entries to readable text."""
+    def _entries_to_text(self, entries: list[dict], participants: list[dict]) -> str:
+        """Convert structured transcript entries to readable text.
+
+        Uses both Admin SDK user map AND the built participant list
+        to resolve speaker IDs to names (handles external participants).
+        """
+        # Build participant ID → name lookup from the participants we've built
+        id_to_name: dict[str, str] = {}
+        for p in participants:
+            uid = p.get("user_id", "")
+            if uid:
+                # Extract numeric ID from "users/12345"
+                numeric = uid.rsplit("/", 1)[-1] if "/" in uid else uid
+                id_to_name[numeric] = p.get("name", "")
+
         lines = []
         for entry in entries:
-            # Resolve participant ID to name
             p_ref = entry.get("participant", "")
-            # participant ref is like "conferenceRecords/.../participants/USER_ID"
+            # participant ref: "conferenceRecords/.../participants/USER_ID"
             p_id = p_ref.rsplit("/", 1)[-1] if "/" in p_ref else p_ref
-            user_key = f"users/{p_id}"
-            email = self._user_id_to_email.get(user_key, "")
-            # Use email username as speaker label, or the raw ID
-            speaker = email.split("@")[0] if email else p_id
 
-            # Look up display name from participants we've seen
-            for uid, em in self._user_id_to_email.items():
-                if uid == user_key:
-                    speaker = em.split("@")[0]
-                    break
+            # Resolve: participant list first (has external names), then Admin SDK
+            speaker = id_to_name.get(p_id, "")
+            if not speaker:
+                user_key = f"users/{p_id}"
+                email = self._user_id_to_email.get(user_key, "")
+                speaker = email.split("@")[0] if email else p_id
 
             timestamp = entry.get("startTime", "")[:19]
             text = entry.get("text", "")
