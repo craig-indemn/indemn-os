@@ -18,7 +18,7 @@ from kernel.integration.registry import register_adapter
 
 logger = logging.getLogger(__name__)
 
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 ADMIN_SCOPES = ["https://www.googleapis.com/auth/admin.directory.user.readonly"]
 
 
