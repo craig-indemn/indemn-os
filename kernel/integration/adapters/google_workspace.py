@@ -11,6 +11,7 @@ wrapped in asyncio.to_thread().
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 
 from kernel.integration.adapter import (
@@ -360,6 +361,11 @@ class GoogleWorkspaceAdapter(Adapter):
 # --- Parsing helpers ---
 
 
+def _normalize(text: str) -> str:
+    """Normalize line endings and BOM from Google Docs export."""
+    return text.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
+
+
 def _extract_title(text: str) -> str:
     """Extract meeting title from Notes or Transcript content.
 
@@ -368,6 +374,7 @@ def _extract_title(text: str) -> str:
     """
     if not text:
         return ""
+    text = _normalize(text)
     lines = text.strip().split("\n")
 
     # Notes format: skip emoji line + date line, title is line 3
@@ -377,16 +384,19 @@ def _extract_title(text: str) -> str:
 
     # Transcript format: first line is "Title - Date - Transcript"
     if lines and "Transcript" in lines[0]:
-        import re
-
         m = re.match(r"^(.+?) - \d{4}/\d{2}/\d{2} .+ - Transcript$", lines[0])
         if m:
             return m.group(1)
 
-    # Fallback: first non-empty line that isn't a header
+    # Fallback: first non-empty line that isn't a header/date
     for line in lines[:5]:
         line = line.strip()
-        if line and line not in ("Notes", "Transcript", "") and "📝" not in line:
+        if (
+            line
+            and line not in ("Notes", "Transcript", "")
+            and "📝" not in line
+            and not re.match(r"^[A-Z][a-z]{2} \d{1,2}, \d{4}$", line)  # skip date lines
+        ):
             return line
 
     return ""
@@ -394,22 +404,22 @@ def _extract_title(text: str) -> str:
 
 def _extract_summary(notes_text: str) -> str:
     """Extract the Summary section from Gemini notes."""
-    import re
-
     if not notes_text:
         return ""
+
+    text = _normalize(notes_text)
 
     # Match between "Summary" header and the next known section
     match = re.search(
         r"\nSummary\n(.+?)(?=\n(?:Rate this Summary|Decisions|Next steps|Details))",
-        notes_text,
+        text,
         re.DOTALL,
     )
     if match:
         return match.group(1).strip()
 
     # Fallback: after Summary header until double blank line
-    match = re.search(r"\nSummary\n(.+?)(?=\n\n\n)", notes_text, re.DOTALL)
+    match = re.search(r"\nSummary\n(.+?)(?=\n\n\n)", text, re.DOTALL)
     if match:
         return match.group(1).strip()
 
