@@ -5,6 +5,7 @@ import { useEntity, useEntityMeta, useChanges } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { useRealtimeEntityDetail } from "../hooks/useRealtime";
 import { apiClient } from "../api/client";
+import type { FieldMeta } from "../api/types";
 import { InlineField } from "../components/InlineField";
 import { ResolvedLink } from "../components/ResolvedLink";
 import { StateIndicator } from "../components/StateIndicator";
@@ -21,7 +22,7 @@ const SYSTEM_FIELDS = new Set([
 ]);
 
 /** Smart field ordering: name/title first, state, key fields, then the rest. */
-function orderFields(fields: { name: string; is_state_field?: boolean; type: string }[]) {
+function orderFields(fields: FieldMeta[]) {
   const priority: Record<string, number> = {
     name: 0, title: 1, deal_id: 2, stage: 3, status: 3,
     company: 5, owner: 6, next_step: 7, next_step_owner: 8,

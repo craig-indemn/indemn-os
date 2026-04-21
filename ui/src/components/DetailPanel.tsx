@@ -2,6 +2,7 @@ import { useEntity, useEntityMeta, useChanges } from "../api/hooks";
 import { useEntityNameFromSlug } from "../hooks/useEntityMeta";
 import { Link } from "react-router-dom";
 import { apiClient } from "../api/client";
+import type { FieldMeta } from "../api/types";
 import { InlineField } from "./InlineField";
 import { StateIndicator } from "./StateIndicator";
 import { ChangeTimeline } from "./ChangeTimeline";
@@ -11,7 +12,7 @@ const SYSTEM_FIELDS = new Set([
   "_id", "org_id", "version", "created_at", "updated_at", "created_by",
 ]);
 
-function orderFields(fields: { name: string; is_state_field?: boolean; type: string }[]) {
+function orderFields(fields: FieldMeta[]) {
   const priority: Record<string, number> = {
     name: 0, title: 1, deal_id: 2, stage: 3, status: 3,
     company: 5, owner: 6, next_step: 7, next_step_owner: 8,
