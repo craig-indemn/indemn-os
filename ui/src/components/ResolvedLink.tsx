@@ -26,6 +26,7 @@ export function ResolvedLink({ entityType, entityId, className }: Props) {
     <Link
       to={`/${slug}/${entityId}`}
       className={className || "text-blue-600 hover:underline"}
+      onClick={(e) => e.stopPropagation()}
     >
       {displayName}
     </Link>
