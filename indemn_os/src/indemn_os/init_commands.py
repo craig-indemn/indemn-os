@@ -20,19 +20,57 @@ This project builds on the Indemn Operating System.
 The OS auto-generates API, CLI, UI, and documentation from entity definitions.
 AI agents are a channel into the platform — they use the CLI like any other client.
 
-## Quick Start
+## Session Startup — Do This First
+
+Every Claude Code session should start by understanding what's in the system.
 
 ```bash
-# Authenticate
-indemn auth login --org <org_slug> --email <email>
+# 1. Authenticate
+export INDEMN_API_URL=https://api.os.indemn.ai
+indemn auth login --org _platform --email <your-email>
 
-# See what exists
-indemn entity list          # Entity definitions
-indemn skill list            # Skills (auto-generated docs)
-indemn actor list            # Team members + associates
-indemn role list             # Roles with permissions + watches
+# 2. Discover what entity types exist
+indemn entity list --format table
 
-# Create an entity type
+# 3. See what skills are available (auto-generated entity docs + associate skills)
+indemn skill list --format json
+
+# 4. For each entity you need to work with, pull its skill to understand
+#    the fields, lifecycle, relationships, and CLI commands:
+indemn skill get Deal
+indemn skill get Company
+indemn skill get Contact
+# ... pull whatever entities are relevant to your task
+
+# 5. See who's in the system
+indemn actor list --format table
+
+# 6. See what roles and watches exist
+indemn role list --format json
+
+# 7. Check system health
+indemn platform health
+```
+
+After this, you know: what data exists, what each entity looks like
+(fields, states, commands), who the actors are, and what the wiring is.
+You're ready to work.
+
+## Working With Entities
+
+Entity skills are the source of truth for what each entity type looks like.
+They're auto-generated from entity definitions and contain:
+- Every field with its type, whether it's required, enum values
+- The state machine (valid transitions)
+- All CLI commands (list, get, create, update, transition)
+- Relationships to other entities
+
+When working with an entity, always read its skill first:
+`indemn skill get <EntityName>`
+
+## Creating New Entity Types
+
+```bash
 indemn entity create --data '{
   "name": "Submission",
   "collection_name": "submissions",
