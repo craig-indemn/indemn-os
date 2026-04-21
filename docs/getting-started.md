@@ -2,34 +2,26 @@
 
 ## Install the CLI
 
-**From the repo (recommended for developers):**
 ```bash
-git clone https://github.com/craig-indemn/indemn-os.git
-cd indemn-os
-uv sync
-uv run indemn --help
+# One-liner (requires gh CLI authenticated)
+bash install-cli.sh
+
+# Or manually:
+gh release download v0.1.0 --repo craig-indemn/indemn-os --pattern "*.whl"
+pip install indemn_os-*.whl
 ```
 
-**As a standalone package:**
-```bash
-pip install "indemn-os @ git+https://github.com/craig-indemn/indemn-os.git#subdirectory=indemn_os"
-indemn --help
-```
-
-## Connect to the OS
+## Connect
 
 ```bash
-# Set the API URL
-export INDEMN_API_URL=https://indemn-api-production.up.railway.app
+export INDEMN_API_URL=https://api.os.indemn.ai
 
-# Authenticate (get a token from your admin)
-export INDEMN_SERVICE_TOKEN=indemn_xxx
-
-# Or use the setup script:
-source scripts/setup-cli.sh dev
+indemn auth login --org _platform --email you@indemn.ai --password <your-password>
 ```
 
-## Verify Connection
+Ask Craig for your password. He'll set it up for you.
+
+## Verify
 
 ```bash
 indemn platform health
@@ -40,81 +32,72 @@ indemn platform health
 
 ```bash
 # See what's in the system
-indemn queue stats
-indemn actor list --type associate --status active
-indemn runtime list
+indemn company list
+indemn deal list
+indemn contact list
 
-# Create a test entity
-indemn entity create --data '{
-  "name": "Task",
-  "collection_name": "tasks",
-  "fields": {
-    "title": {"type": "str", "required": true},
-    "status": {"type": "str", "default": "open", "is_state_field": true}
-  },
-  "state_machine": {"open": ["closed"], "closed": []}
-}'
+# Look at a specific deal
+indemn deal get <id>
 
-# Use the auto-generated commands
-indemn task list
-indemn task create --data '{"title": "My first task"}'
-indemn task get <id>
-indemn task transition <id> --to closed
+# See entity definitions
+indemn entity list
 
-# See what happened
-indemn trace entity Task <id>
+# See auto-generated documentation for any entity
+indemn skill get Deal
+indemn skill get Company
 
-# Read the auto-generated skill (documentation)
-indemn skill get Task
+# See the audit trail for any entity
+indemn trace entity Deal <id>
+
+# Update a deal
+indemn deal update <id> --data '{"next_step": "Send proposal by Friday"}'
+
+# Transition a deal's stage
+indemn deal transition <id> --to proposal
 ```
 
-## Using from Claude Code
+## Use the UI
 
-When working on the OS from Claude Code:
+Go to [os.indemn.ai](https://os.indemn.ai) and log in with your Indemn credentials.
 
-1. The `indemn` CLI is available via `uv run indemn` from the repo
-2. Set `INDEMN_API_URL` and `INDEMN_SERVICE_TOKEN` in your session
-3. Use the `/domain-modeling` skill for the 8-step process
-4. Read `CLAUDE.md` at repo root for conventions
+- Click any entity in the sidebar to see the list
+- Click a row to open the detail panel
+- Double-click to go to the full detail page
+- Click any field to edit it inline
+- Check the **Activity** tab to see everything that's happened
 
-## The 8-Step Process
+## Use with Claude Code
 
-To build a business domain on the OS, follow the domain modeling process:
+Clone the repo and open it in Claude Code. CLAUDE.md loads automatically and gives Claude full context.
 
-1. Understand the business
-2. Define entities (`indemn entity create`)
-3. Define roles + watches (`indemn role create`)
-4. Define rules (`indemn rule create`)
-5. Write associate skills (`indemn skill create`)
-6. Set up integrations (`indemn integration create`)
-7. Test in staging (`indemn trace entity/cascade`)
-8. Deploy and tune
-
-See `/domain-modeling` skill for full details with examples.
-
-## Architecture
-
+```bash
+git clone https://github.com/craig-indemn/indemn-os.git
+cd indemn-os
+# Open in Claude Code — CLAUDE.md loads automatically
 ```
-User/Agent
-  ↓ (CLI or API)
-Kernel API Server
-  ↓
-Entity Framework (auto-generated CRUD, state machines, watches)
-  ↓
-Message Queue (watches fire → messages → associates process)
-  ↓
-Harnesses (async/chat/voice — run agents outside kernel)
-  ↓
-CLI subprocess (agents use same CLI as humans)
-```
+
+Use the `/domain-modeling` skill for the 8-step process to build any system on the OS.
+
+## The 8-Step Domain Modeling Process
+
+To build any business domain on the OS:
+
+1. **Understand the business** — what workflows, people, systems, pain points
+2. **Define entities** — `indemn entity create` with fields, state machines, relationships
+3. **Define roles + watches** — `indemn role create` with permissions and watches
+4. **Define rules** — `indemn rule create` for deterministic business logic
+5. **Write associate skills** — `indemn skill create` with behavioral instructions
+6. **Set up integrations** — `indemn integration create` for external systems
+7. **Test** — `indemn trace entity/cascade` to verify watches fire correctly
+8. **Deploy and tune** — monitor, add rules for patterns the LLM keeps handling
 
 ## Services
 
-| Service | What | URL |
-|---|---|---|
-| API | The gateway — all CLI/UI/harness calls | https://indemn-api-production.up.railway.app |
-| UI | Base UI — entity views, queue, assistant | https://indemn-ui-production.up.railway.app |
-| Chat Harness | WebSocket server for real-time conversations | wss://indemn-runtime-chat-production.up.railway.app/ws/chat |
+| Service | URL |
+|---------|-----|
+| UI | [os.indemn.ai](https://os.indemn.ai) |
+| API | [api.os.indemn.ai](https://api.os.indemn.ai) |
+| Chat Runtime | wss://indemn-runtime-chat-production.up.railway.app/ws/chat |
 
 ## Help
 
@@ -123,5 +106,5 @@ indemn --help                    # All commands
 indemn entity --help             # Entity management
 indemn actor --help              # Actor/associate management
 indemn trace --help              # Debugging
-indemn skill get <EntityName>    # Read entity documentation
+indemn skill get <EntityName>    # Read auto-generated entity documentation
 ```
