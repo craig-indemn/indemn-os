@@ -13,6 +13,7 @@ export function Navigation() {
 
   const navItems = [
     { path: "/queue", label: "Queue" },
+    { path: "/activity", label: "Activity" },
     { path: "/roles", label: "Roles" },
     { path: "/observability", label: "Observability" },
   ];

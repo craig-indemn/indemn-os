@@ -33,6 +33,71 @@ def _safe_value(v):
 trace_router = APIRouter(prefix="/api/trace", tags=["trace"])
 
 
+@trace_router.get("/activity")
+async def activity_feed(
+    entity_type: str = Query(None, description="Filter by entity type"),
+    actor_id: str = Query(None, description="Filter by actor"),
+    change_type: str = Query(None, description="Filter by change type (create, update, transition)"),
+    limit: int = Query(50, le=200),
+    skip: int = Query(0, ge=0),
+    actor=Depends(get_current_actor),
+):
+    """Global activity feed — all changes across all entities, newest first.
+
+    The changes collection rendered as a queryable list. Every field mutation,
+    every creation, every state transition — with actor attribution and
+    field-level detail.
+    """
+    org_id = current_org_id.get()
+
+    query = {"org_id": org_id}
+    if entity_type:
+        query["entity_type"] = entity_type
+    if actor_id:
+        query["actor_id"] = actor_id
+    if change_type:
+        query["change_type"] = change_type
+
+    total = await ChangeRecord.find(query).count()
+    records = (
+        await ChangeRecord.find(query)
+        .sort("-timestamp")
+        .skip(skip)
+        .limit(limit)
+        .to_list()
+    )
+
+    items = []
+    for r in records:
+        field_changes = []
+        if r.changes:
+            for fc in r.changes:
+                field_changes.append({
+                    "field": fc.field if hasattr(fc, "field") else str(fc.get("field", "")),
+                    "old_value": _safe_value(fc.old_value if hasattr(fc, "old_value") else fc.get("old_value")),
+                    "new_value": _safe_value(fc.new_value if hasattr(fc, "new_value") else fc.get("new_value")),
+                })
+
+        items.append({
+            "id": str(r.id),
+            "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+            "entity_type": r.entity_type,
+            "entity_id": str(r.entity_id),
+            "change_type": r.change_type,
+            "actor_id": str(r.actor_id) if r.actor_id else None,
+            "method": r.method,
+            "correlation_id": r.correlation_id,
+            "changes": field_changes,
+        })
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "skip": skip,
+    }
+
+
 @trace_router.get("/entity/{entity_type}/{entity_id}")
 async def trace_entity(
     entity_type: str,
