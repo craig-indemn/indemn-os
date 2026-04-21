@@ -1,18 +1,16 @@
-"""Google Workspace adapter — domain-wide delegation for org-level Drive access.
+"""Google Workspace adapter — Google Meet API for meeting ingestion.
 
-Fetches Google Meet meeting data: Gemini notes, word-for-word transcripts, and
-recording links. Groups related files per meeting. Uses google-api-python-client
-(synchronous) wrapped in asyncio.to_thread().
+Uses the Meet REST API (meet.googleapis.com/v2) as the primary discovery
+mechanism. Each conference record natively links its recordings, transcripts,
+smart notes (Gemini), and participants. Drive API used only for content download.
 
-Google Meet creates up to 3 files per meeting:
-  - "Title - YYYY/MM/DD HH:MM TZ - Notes by Gemini" (AI summary doc)
-  - "Title - YYYY/MM/DD HH:MM TZ - Transcript" (word-for-word speaker-attributed)
-  - "Title - YYYY/MM/DD HH:MM TZ - Recording" (video/mp4)
+Domain-wide delegation: service account impersonates each user to get their
+organized conferences. All Google API calls are synchronous (google-api-python-client)
+wrapped in asyncio.to_thread().
 """
 
 import asyncio
 import logging
-import re
 from datetime import datetime
 
 from kernel.integration.adapter import (
@@ -23,22 +21,9 @@ from kernel.integration.registry import register_adapter
 
 logger = logging.getLogger(__name__)
 
+MEET_SCOPES = ["https://www.googleapis.com/auth/meetings.space.readonly"]
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 ADMIN_SCOPES = ["https://www.googleapis.com/auth/admin.directory.user.readonly"]
-
-# Patterns for Google Meet file suffixes
-_NOTES_SUFFIX = re.compile(r"^(.+?) - (\d{4}/\d{2}/\d{2}) (\d{2}:\d{2}) (\w+) - Notes by Gemini$")
-_TRANSCRIPT_SUFFIX = re.compile(r"^(.+?) - (\d{4}/\d{2}/\d{2}) (\d{2}:\d{2}) (\w+) - Transcript$")
-_RECORDING_SUFFIX = re.compile(r"^(.+?) - (\d{4}/\d{2}/\d{2}) (\d{2}:\d{2}) (\w+) - Recording$")
-
-
-def _parse_meeting_key(name: str) -> tuple[str, str, str] | None:
-    """Extract (title, date, time) from any Google Meet file name."""
-    for pattern in [_NOTES_SUFFIX, _TRANSCRIPT_SUFFIX, _RECORDING_SUFFIX]:
-        m = pattern.match(name)
-        if m:
-            return (m.group(1), m.group(2), m.group(3))
-    return None
 
 
 class GoogleWorkspaceAdapter(Adapter):
@@ -48,14 +33,24 @@ class GoogleWorkspaceAdapter(Adapter):
         super().__init__(config, credentials)
         from google.oauth2 import service_account
 
-        self._base_creds = service_account.Credentials.from_service_account_info(
+        self._sa_info = credentials
+        self._meet_creds_base = service_account.Credentials.from_service_account_info(
+            credentials, scopes=MEET_SCOPES
+        )
+        self._drive_creds_base = service_account.Credentials.from_service_account_info(
             credentials, scopes=DRIVE_SCOPES
         )
+
+    def _meet_service(self, user_email: str):
+        from googleapiclient.discovery import build
+
+        creds = self._meet_creds_base.with_subject(user_email)
+        return build("meet", "v2", credentials=creds, cache_discovery=False)
 
     def _drive_service(self, user_email: str):
         from googleapiclient.discovery import build
 
-        creds = self._base_creds.with_subject(user_email)
+        creds = self._drive_creds_base.with_subject(user_email)
         return build("drive", "v3", credentials=creds, cache_discovery=False)
 
     def _admin_service(self):
@@ -63,7 +58,7 @@ class GoogleWorkspaceAdapter(Adapter):
         from googleapiclient.discovery import build
 
         creds = service_account.Credentials.from_service_account_info(
-            self.credentials,
+            self._sa_info,
             scopes=ADMIN_SCOPES,
             subject=self.config["admin_email"],
         )
@@ -76,10 +71,10 @@ class GoogleWorkspaceAdapter(Adapter):
         limit: int = 500,
         **params,
     ) -> list[dict]:
-        """Fetch Google Meet meetings from all users' Drives.
+        """Fetch meetings via Google Meet API across all domain users.
 
-        Searches for Notes, Transcripts, and Recordings. Groups related files
-        per meeting. Returns Meeting entity-shaped dicts.
+        Uses conferenceRecords as the anchor — each record natively links
+        recordings, transcripts, smart notes, and participants.
         """
         if not user_emails:
             try:
@@ -96,136 +91,143 @@ class GoogleWorkspaceAdapter(Adapter):
                         f"or set user_emails in config."
                     )
 
-        logger.info("Scanning %d users for meeting files", len(user_emails))
-
-        # Search for ALL meeting-related files across all users
-        # Google Meet files: Notes by Gemini, Transcript, Recording
-        all_files: dict[str, dict] = {}  # file_id -> file_data
-        queries = [
-            ("Notes by Gemini", "application/vnd.google-apps.document"),
-            ("Transcript", "application/vnd.google-apps.document"),
-            ("Recording", "video/mp4"),
+        # Filter out service/system accounts
+        user_emails = [
+            e
+            for e in user_emails
+            if not any(skip in e for skip in ["backup@", "demo@", "indemn@indemn"])
         ]
 
+        logger.info("Scanning %d users for conference records", len(user_emails))
+
+        # Collect conference records from all users (each user's organized meetings)
+        # Dedup by conference record name (same meeting seen by different users)
+        all_conferences: dict[str, dict] = {}
         for email in user_emails:
-            for query_text, mime_type in queries:
-                try:
-                    files = await self._search_user_drive(email, query_text, mime_type, since)
-                    for f in files:
-                        if f["id"] not in all_files:
-                            all_files[f["id"]] = {**f, "owner_email": email}
-                except Exception as e:
-                    logger.warning("Skipping %s/%s: %s", email, query_text, e)
-                    continue
-
-        logger.info("Found %d unique files across %d users", len(all_files), len(user_emails))
-
-        # Group files by meeting (same title + date)
-        meetings: dict[tuple, dict] = {}  # (title, date) -> {notes, transcript, recording}
-        for file_data in all_files.values():
-            key = _parse_meeting_key(file_data["name"])
-            if not key:
+            try:
+                conferences = await self._list_user_conferences(email, since)
+                for conf in conferences:
+                    conf_id = conf["name"]
+                    if conf_id not in all_conferences:
+                        all_conferences[conf_id] = {
+                            **conf,
+                            "organizer_email": email,
+                        }
+            except Exception as e:
+                logger.warning("Skipping %s: %s", email, e)
                 continue
-            if key not in meetings:
-                meetings[key] = {
-                    "title": key[0],
-                    "date_str": key[1],
-                    "time_str": key[2],
-                    "notes": None,
-                    "transcript": None,
-                    "recording": None,
-                }
-            name = file_data["name"]
-            if "Notes by Gemini" in name:
-                meetings[key]["notes"] = file_data
-            elif "- Transcript" in name:
-                meetings[key]["transcript"] = file_data
-            elif "- Recording" in name:
-                meetings[key]["recording"] = file_data
 
-        logger.info("Grouped into %d unique meetings", len(meetings))
+        logger.info(
+            "Found %d unique conferences across %d users",
+            len(all_conferences),
+            len(user_emails),
+        )
 
-        # For each meeting, export docs and build Meeting entity data
+        # Build Meeting entity data for each conference
         results = []
-        for meeting_key, meeting_files in meetings.items():
+        for conf_id, conf in all_conferences.items():
             if len(results) >= limit:
                 break
             try:
-                result = await self._build_meeting(meeting_files)
-                results.append(result)
+                meeting = await self._build_meeting(conf)
+                results.append(meeting)
             except Exception as e:
-                logger.warning("Failed to build meeting %s: %s", meeting_files["title"], e)
+                logger.warning("Failed to build meeting %s: %s", conf_id, e)
                 continue
 
         return results
 
-    async def _build_meeting(self, meeting_files: dict) -> dict:
-        """Build a Meeting entity dict from grouped files."""
-        title = meeting_files["title"]
-        date_str = meeting_files["date_str"]
-        time_str = meeting_files["time_str"]
+    async def _build_meeting(self, conf: dict) -> dict:
+        """Build a Meeting entity dict from a conference record + its artifacts."""
+        organizer_email = conf["organizer_email"]
+        conf_name = conf["name"]
+        start_time = conf.get("startTime", "")
+        end_time = conf.get("endTime", "")
 
-        meeting_date = (
-            datetime.strptime(f"{date_str} {time_str}", "%Y/%m/%d %H:%M").isoformat() + "Z"
+        # Calculate duration
+        duration_minutes = None
+        if start_time and end_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+                duration_minutes = int((end_dt - start_dt).total_seconds() / 60)
+            except Exception:
+                pass
+
+        # Get all artifacts in parallel
+        participants, recordings, transcripts, smart_notes = await asyncio.gather(
+            self._get_participants(organizer_email, conf_name),
+            self._get_recordings(organizer_email, conf_name),
+            self._get_transcripts(organizer_email, conf_name),
+            self._get_smart_notes(organizer_email, conf_name),
         )
 
-        # Use the Notes file ID as the primary external_ref (most meetings have notes)
-        # Fall back to transcript ID if no notes
-        notes_file = meeting_files.get("notes")
-        transcript_file = meeting_files.get("transcript")
-        recording_file = meeting_files.get("recording")
+        # Recording info
+        recording_url = None
+        if recordings:
+            dd = recordings[0].get("driveDestination", {})
+            recording_url = dd.get("exportUri")
 
-        primary_file = notes_file or transcript_file
-        if not primary_file:
-            raise ValueError(f"Meeting '{title}' has no notes or transcript")
-
-        external_ref = primary_file["id"]
-
-        # Export the actual transcript (word-for-word) if available
+        # Transcript: prefer the Doc, download content
         transcript_text = ""
-        team_members = []
-        if transcript_file:
-            transcript_text = await self._export_doc(
-                transcript_file["owner_email"], transcript_file["id"]
-            )
-            team_members = _parse_attendees_from_transcript(transcript_text)
+        transcript_url = None
+        transcript_doc_id = None
+        if transcripts:
+            dd = transcripts[0].get("docsDestination", {})
+            transcript_doc_id = dd.get("document")
+            transcript_url = dd.get("exportUri")
+            if transcript_doc_id:
+                try:
+                    transcript_text = await self._export_doc(organizer_email, transcript_doc_id)
+                except Exception as e:
+                    logger.warning("Failed to export transcript %s: %s", transcript_doc_id, e)
 
-        # Export the Gemini notes (AI summary) if available
+        # Smart Notes (Gemini): download content
         notes_text = ""
-        if notes_file:
-            notes_text = await self._export_doc(notes_file["owner_email"], notes_file["id"])
-            # If we didn't get attendees from transcript, try from notes
-            if not team_members:
-                team_members = _parse_attendees_from_notes(notes_text)
+        notes_url = None
+        notes_doc_id = None
+        if smart_notes:
+            dd = smart_notes[0].get("docsDestination", {})
+            notes_doc_id = dd.get("document")
+            notes_url = dd.get("exportUri")
+            # Only download if it's a different doc than the transcript
+            if notes_doc_id and notes_doc_id != transcript_doc_id:
+                try:
+                    notes_text = await self._export_doc(organizer_email, notes_doc_id)
+                except Exception as e:
+                    logger.warning("Failed to export notes %s: %s", notes_doc_id, e)
+            elif notes_doc_id == transcript_doc_id:
+                # Same doc serves as both — notes IS the transcript content
+                notes_text = transcript_text
 
         # Extract summary from Gemini notes
         summary = _extract_summary(notes_text) if notes_text else ""
 
-        # Build URLs
-        transcript_url = None
-        if transcript_file:
-            transcript_url = f"https://docs.google.com/document/d/{transcript_file['id']}/edit"
-        elif notes_file:
-            transcript_url = f"https://docs.google.com/document/d/{notes_file['id']}/edit"
+        # Build title from the first line of notes or transcript, or fallback
+        title = _extract_title(notes_text) or _extract_title(transcript_text) or "Untitled Meeting"
 
-        recording_url = None
-        if recording_file:
-            recording_url = f"https://drive.google.com/file/d/{recording_file['id']}/view"
+        # Participant names (filter out bots)
+        team_members = [p["name"] for p in participants if p.get("name") and p["name"] != "?"]
+
+        # Use conference record name as external_ref (globally unique)
+        external_ref = conf_name
 
         return {
             "title": title,
-            "date": meeting_date,
+            "date": start_time,
+            "duration_minutes": duration_minutes,
             "source": "google_meet",
-            "transcript": transcript_text or notes_text,
+            "transcript": transcript_text,
             "summary": summary,
-            "transcript_ref": transcript_url,
+            "notes": notes_text,
+            "transcript_ref": transcript_url or notes_url,
             "recording_ref": recording_url,
             "external_ref": external_ref,
             "team_members": team_members,
         }
 
     async def _list_domain_users(self) -> list[str]:
-        def _sync_list():
+        def _sync():
             service = self._admin_service()
             users = []
             page_token = None
@@ -246,53 +248,96 @@ class GoogleWorkspaceAdapter(Adapter):
                     break
             return users
 
-        return await asyncio.to_thread(_sync_list)
+        return await asyncio.to_thread(_sync)
 
-    async def _search_user_drive(
-        self,
-        email: str,
-        query: str,
-        mime_type: str,
-        since: str = None,
-    ) -> list[dict]:
-        """Search a user's Drive for files matching query and mime type."""
+    async def _list_user_conferences(self, email: str, since: str = None) -> list[dict]:
+        """List conference records organized by this user."""
 
-        def _sync_search():
-            service = self._drive_service(email)
-            drive_query = f"name contains '{query}' and mimeType='{mime_type}' and trashed=false"
+        def _sync():
+            service = self._meet_service(email)
+            filter_str = ""
             if since:
-                drive_query += f" and modifiedTime > '{since}'"
+                filter_str = f'end_time>="{since}"'
 
-            files = []
+            records = []
             page_token = None
             while True:
-                response = (
-                    service.files()
-                    .list(
-                        q=drive_query,
-                        pageSize=100,
-                        fields=(
-                            "nextPageToken, files(id, name, mimeType,"
-                            " modifiedTime, createdTime, webViewLink)"
-                        ),
-                        pageToken=page_token,
-                    )
-                    .execute()
-                )
-                files.extend(response.get("files", []))
+                kwargs = {"pageSize": 50}
+                if filter_str:
+                    kwargs["filter"] = filter_str
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                response = service.conferenceRecords().list(**kwargs).execute()
+                records.extend(response.get("conferenceRecords", []))
                 page_token = response.get("nextPageToken")
                 if not page_token:
                     break
-            return files
+            return records
 
-        return await asyncio.to_thread(_sync_search)
+        return await asyncio.to_thread(_sync)
 
-    async def _export_doc(self, email: str, file_id: str) -> str:
-        def _sync_export():
+    async def _get_participants(self, email: str, conf_name: str) -> list[dict]:
+        def _sync():
+            service = self._meet_service(email)
+            result = service.conferenceRecords().participants().list(parent=conf_name).execute()
+            participants = []
+            for p in result.get("participants", []):
+                signed_in = p.get("signedinUser", {})
+                anon = p.get("anonymousUser", {})
+                phone = p.get("phoneUser", {})
+                name = (
+                    signed_in.get("displayName")
+                    or anon.get("displayName")
+                    or phone.get("displayName")
+                    or "?"
+                )
+                # Filter out AI/bot participants
+                if any(skip in name.lower() for skip in ["ai assistant", "bot", "notetaker"]):
+                    continue
+                participants.append(
+                    {
+                        "name": name,
+                        "user_id": signed_in.get("user", ""),
+                        "email": email if name != "?" else "",
+                    }
+                )
+            return participants
+
+        return await asyncio.to_thread(_sync)
+
+    async def _get_recordings(self, email: str, conf_name: str) -> list[dict]:
+        def _sync():
+            service = self._meet_service(email)
+            result = service.conferenceRecords().recordings().list(parent=conf_name).execute()
+            return result.get("recordings", [])
+
+        return await asyncio.to_thread(_sync)
+
+    async def _get_transcripts(self, email: str, conf_name: str) -> list[dict]:
+        def _sync():
+            service = self._meet_service(email)
+            result = service.conferenceRecords().transcripts().list(parent=conf_name).execute()
+            return result.get("transcripts", [])
+
+        return await asyncio.to_thread(_sync)
+
+    async def _get_smart_notes(self, email: str, conf_name: str) -> list[dict]:
+        def _sync():
+            service = self._meet_service(email)
+            try:
+                result = service.conferenceRecords().smartNotes().list(parent=conf_name).execute()
+                return result.get("smartNotes", [])
+            except Exception:
+                return []
+
+        return await asyncio.to_thread(_sync)
+
+    async def _export_doc(self, email: str, doc_id: str) -> str:
+        def _sync():
             service = self._drive_service(email)
-            return service.files().export(fileId=file_id, mimeType="text/plain").execute()
+            return service.files().export(fileId=doc_id, mimeType="text/plain").execute()
 
-        content = await asyncio.to_thread(_sync_export)
+        content = await asyncio.to_thread(_sync)
         return content.decode("utf-8") if isinstance(content, bytes) else content
 
     async def test(self) -> dict:
@@ -300,10 +345,14 @@ class GoogleWorkspaceAdapter(Adapter):
             admin_email = self.config.get("admin_email")
             if not admin_email:
                 return {"status": "error", "message": "admin_email not set in config"}
-            await self._search_user_drive(
-                admin_email, "test", "application/vnd.google-apps.document", None
-            )
-            return {"status": "ok", "domain": self.config["domain"]}
+            conferences = await self._list_user_conferences(admin_email)
+            users = await self._list_domain_users()
+            return {
+                "status": "ok",
+                "domain": self.config["domain"],
+                "users": len(users),
+                "recent_conferences": len(conferences),
+            }
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -311,42 +360,46 @@ class GoogleWorkspaceAdapter(Adapter):
 # --- Parsing helpers ---
 
 
-def _parse_attendees_from_transcript(text: str) -> list[str]:
-    """Parse comma-separated attendee names from a Transcript doc.
+def _extract_title(text: str) -> str:
+    """Extract meeting title from Notes or Transcript content.
 
-    Format: "Attendees\\nCraig Certo, Kyle Geoghan, Ganesh Iyer, ..."
+    Notes format: "📝 Notes\\nDate\\nTitle\\nInvited..."
+    Transcript format: "Title - Date - Transcript\\nAttendees\\n..."
     """
-    match = re.search(r"Attendees\n(.+?)\nTranscript", text, re.DOTALL)
-    if match:
-        raw = match.group(1).strip()
-        # Comma-separated full names — clean and split
-        names = [n.strip() for n in raw.split(",") if n.strip()]
-        # Filter out non-person entries like "Indemn AI Assistant"
-        return [n for n in names if not re.search(r"\bAI\b|\bBot\b|\bAssistant\b", n)]
-    return []
+    if not text:
+        return ""
+    lines = text.strip().split("\n")
 
+    # Notes format: skip emoji line + date line, title is line 3
+    if lines and "Notes" in lines[0]:
+        if len(lines) >= 3:
+            return lines[2].strip()
 
-def _parse_attendees_from_notes(text: str) -> list[str]:
-    """Parse attendee names from a Notes by Gemini doc.
+    # Transcript format: first line is "Title - Date - Transcript"
+    if lines and "Transcript" in lines[0]:
+        import re
 
-    Format: "Invited George Remmer Peter Duffy Ganesh Iyer ..."
-    Space-separated full names — harder to parse. Try splitting by known
-    two-word name patterns.
-    """
-    match = re.search(r"Invited (.+?)(?:\n|Attachments)", text)
-    if match:
-        raw = match.group(1).strip()
-        # Try comma-separated first (some Gemini versions use commas)
-        if "," in raw:
-            return [n.strip() for n in raw.split(",") if n.strip()]
-        # Fall back to two-word pattern matching
-        return re.findall(r"[A-Z][a-z]+ [A-Z][a-z]+", raw)
-    return []
+        m = re.match(r"^(.+?) - \d{4}/\d{2}/\d{2} .+ - Transcript$", lines[0])
+        if m:
+            return m.group(1)
+
+    # Fallback: first non-empty line that isn't a header
+    for line in lines[:5]:
+        line = line.strip()
+        if line and line not in ("Notes", "Transcript", "") and "📝" not in line:
+            return line
+
+    return ""
 
 
 def _extract_summary(notes_text: str) -> str:
     """Extract the Summary section from Gemini notes."""
-    # Try matching between "Summary" header and the next known section
+    import re
+
+    if not notes_text:
+        return ""
+
+    # Match between "Summary" header and the next known section
     match = re.search(
         r"\nSummary\n(.+?)(?=\n(?:Rate this Summary|Decisions|Next steps|Details))",
         notes_text,
@@ -355,7 +408,7 @@ def _extract_summary(notes_text: str) -> str:
     if match:
         return match.group(1).strip()
 
-    # Fallback: look for Summary after the header block
+    # Fallback: after Summary header until double blank line
     match = re.search(r"\nSummary\n(.+?)(?=\n\n\n)", notes_text, re.DOTALL)
     if match:
         return match.group(1).strip()
