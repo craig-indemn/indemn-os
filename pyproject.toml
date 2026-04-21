@@ -26,6 +26,8 @@ dependencies = [
     "jsonschema>=4.21",
     "croniter>=2.0",
     "stripe>=10.0",
+    "google-auth>=2.0",
+    "google-api-python-client>=2.0",
     "indemn-os",
 ]
 

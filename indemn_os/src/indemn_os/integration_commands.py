@@ -27,6 +27,16 @@ def create_integration(
         "--actor",
         help="Actor email for actor-level integrations (resolved to ID)",
     ),
+    config: str = typer.Option(
+        None,
+        "--config",
+        help="JSON config string (provider-specific non-secret config)",
+    ),
+    secret_ref: str = typer.Option(
+        None,
+        "--secret-ref",
+        help="AWS Secrets Manager path for credentials",
+    ),
 ):
     """Create an integration with named flags.
 
@@ -91,6 +101,14 @@ def create_integration(
         roles = [r.strip() for r in access_roles.split(",")]
         data["access"] = {"roles": roles}
 
+    # Config and credentials
+    if config:
+        import orjson
+
+        data["config"] = orjson.loads(config)
+    if secret_ref:
+        data["secret_ref"] = secret_ref
+
     result = client.post("/api/integrations/", json=data)
     typer.echo(f"Created integration: {name} ({provider})")
     render(result, "json")
@@ -113,6 +131,32 @@ def get_integration(
     client = CLIClient()
     result = client.get(f"/api/integrations/{integration_id}")
     render(result, fmt)
+
+
+@integration_app.command("update")
+def update_integration(
+    integration_id: str,
+    data_str: str = typer.Option(..., "--data", help="JSON fields to update"),
+):
+    """Update integration fields."""
+    import orjson
+
+    client = CLIClient()
+    result = client.put(f"/api/integrations/{integration_id}", json=orjson.loads(data_str))
+    render(result, "json")
+
+
+@integration_app.command("transition")
+def transition_integration(
+    integration_id: str,
+    to: str = typer.Option(..., "--to", help="Target status"),
+):
+    """Transition integration status."""
+    client = CLIClient()
+    result = client.post(
+        f"/api/integrations/{integration_id}/transition", json={"to": to}
+    )
+    render(result, "json")
 
 
 @integration_app.command("set-credentials")

@@ -176,13 +176,27 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
             _register_exposed_route(router, entity_cls, entity_name, method_name, attr)
 
     # Register capability-activated methods
+    _COLLECTION_LEVEL_CAPABILITIES = {"fetch_new"}
     for cap_activation in getattr(entity_cls, "_activated_capabilities", []):
         cap_name = (
             cap_activation.capability
             if hasattr(cap_activation, "capability")
             else cap_activation.get("capability", "")
         )
-        _register_capability_route(router, entity_cls, entity_name, cap_name, cap_activation)
+        if cap_name not in _COLLECTION_LEVEL_CAPABILITIES:
+            _register_capability_route(router, entity_cls, entity_name, cap_name, cap_activation)
+
+    # Register collection-level capabilities (no entity_id — creates entities)
+    for cap_activation in getattr(entity_cls, "_activated_capabilities", []):
+        cap_name = (
+            cap_activation.capability
+            if hasattr(cap_activation, "capability")
+            else cap_activation.get("capability", "")
+        )
+        if cap_name in _COLLECTION_LEVEL_CAPABILITIES:
+            _register_collection_capability_route(
+                router, entity_cls, entity_name, cap_name, cap_activation
+            )
 
     # Register generic evaluate-rules route (works without capability activation)
     _register_evaluate_rules_route(router, entity_cls, entity_name)
@@ -246,6 +260,32 @@ def _register_capability_route(router, entity_cls, entity_name, cap_name, activa
                 setattr(entity, field, value)
             await entity.save_tracked(method=cap_name)
             return to_dict(entity)
+
+
+def _register_collection_capability_route(
+    router, entity_cls, entity_name, cap_name, activation
+):
+    """Register collection-level capability: POST /api/{entities}/{cap-name} (no entity_id).
+
+    For capabilities like fetch_new that create entities rather than operating on existing ones.
+    FastAPI matches fixed paths before parameterized paths on the same router.
+    """
+
+    @router.post(f"/{cap_name.replace('_', '-')}")
+    async def collection_capability(data: dict = {}, actor=Depends(get_current_actor)):
+        check_permission(actor, entity_name, "write")
+        from kernel.capability.registry import get_capability
+
+        capability_fn = get_capability(cap_name)
+        config = (
+            activation.config
+            if hasattr(activation, "config")
+            else activation.get("config", {})
+        )
+        result = await capability_fn(
+            entity_cls, config, current_org_id.get(), params=data
+        )
+        return result
 
 
 def _register_evaluate_rules_route(router, entity_cls, entity_name: str):

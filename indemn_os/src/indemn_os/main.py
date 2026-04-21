@@ -169,7 +169,10 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             render(result, "json")
 
     # Register capability commands
+    _COLLECTION_LEVEL_CAPS = {"fetch_new"}
     for cap in meta.get("capabilities", []):
+        if cap["name"] in _COLLECTION_LEVEL_CAPS:
+            continue  # Handled below
         cap_slug = cap["name"].replace("_", "-")
 
         @entity_app.command(cap_slug)
@@ -210,6 +213,23 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
                     if result.get("matched") or result.get("result"):
                         processed += 1
                 typer.echo(f"Processed {processed}/{len(entities)} {_slug}s")
+
+    # Register collection-level capability commands (no entity_id — creates entities)
+    for cap in meta.get("capabilities", []):
+        if cap["name"] not in _COLLECTION_LEVEL_CAPS:
+            continue
+        cap_slug = cap["name"].replace("_", "-")
+
+        @entity_app.command(cap_slug)
+        def collection_cap_cmd(data: str = None, _cap=cap["name"], _slug=slug):
+            """Invoke a collection-level capability (e.g., fetch-new)."""
+            import orjson
+
+            body = orjson.loads(data) if data else {}
+            result = client.post(
+                f"/api/{_slug}s/{_cap.replace('_', '-')}", json=body
+            )
+            render(result, "json")
 
     # Register bulk commands for this entity type
     from indemn_os.bulk_commands import register_bulk_commands
