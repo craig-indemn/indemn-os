@@ -86,8 +86,8 @@ class ProcessMessageWorkflow:
             "process_with_associate",
             agent_input,
             task_queue=f"runtime-{runtime_id}",
-            start_to_close_timeout=timedelta(minutes=10),
-            heartbeat_timeout=timedelta(minutes=2),
+            start_to_close_timeout=timedelta(minutes=30),
+            heartbeat_timeout=timedelta(seconds=90),
             retry_policy=RetryPolicy(
                 maximum_attempts=2,
                 initial_interval=timedelta(seconds=5),

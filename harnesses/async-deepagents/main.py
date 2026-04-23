@@ -45,6 +45,47 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
     }
 
 
+def _write_skills_to_filesystem(skill_refs: list[str]) -> list[str]:
+    """Fetch skills via CLI and write as SKILL.md files for deepagents.
+
+    deepagents loads skill metadata into the prompt and the agent reads
+    full content on demand via read_file (progressive disclosure).
+    Returns list of relative paths for deepagents' skills parameter.
+    """
+    if not skill_refs:
+        return []
+
+    skills_dir = "/workspace/skills"
+    os.makedirs(skills_dir, exist_ok=True)
+
+    skill_paths = []
+    for ref in skill_refs:
+        try:
+            skill = indemn("skill", "get", ref)
+        except CLIError:
+            log.warning("Skill not found: %s", ref)
+            continue
+
+        slug = ref.lower().replace(" ", "-")
+        skill_dir = os.path.join(skills_dir, slug)
+        os.makedirs(skill_dir, exist_ok=True)
+
+        content = skill.get("content", "")
+        name = skill.get("name", ref)
+        description = skill.get("description", f"Skill: {name}")
+
+        # Write SKILL.md with frontmatter for deepagents
+        skill_file = os.path.join(skill_dir, "SKILL.md")
+        with open(skill_file, "w") as f:
+            f.write(f"---\nname: {name}\ndescription: {description}\n---\n\n")
+            f.write(content)
+
+        skill_paths.append(f"skills/{slug}")
+
+    log.info("Wrote %d skills to filesystem for progressive disclosure", len(skill_paths))
+    return skill_paths
+
+
 @activity.defn
 async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionResult:
     """Agent execution loop. Migrated from kernel/temporal/activities.py.
@@ -75,29 +116,48 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # Three-layer LLM config merge [Q3, G-50]
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Load skills — CLI verifies content_hash before returning [Q4]
-        skill_contents = []
-        for skill_ref in associate.get("skills", []):
-            skill = indemn("skill", "get", skill_ref)
-            skill_contents.append(skill["content"])
+        # Write skills to filesystem for deepagents progressive disclosure.
+        # Agent reads full content on demand via read_file — NOT loaded upfront.
+        skill_paths = _write_skills_to_filesystem(associate.get("skills", []))
 
         # Build agent (thin — deepagents handles everything once backend is set)
-        agent = build_agent(associate=associate, skills=skill_contents, llm_config=llm_config)
+        agent = build_agent(associate=associate, skill_paths=skill_paths, llm_config=llm_config)
 
         # Heartbeat before the potentially long agent run
         activity.heartbeat("starting_agent")
 
-        # Run the agent loop
-        result = await agent.ainvoke(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": f"Process this work:\n\n{context}",
-                    }
-                ],
-            }
-        )
+        # Run the agent loop with periodic heartbeating.
+        # ainvoke() may take minutes; heartbeat every 30s to prevent
+        # Temporal from cancelling the activity.
+        heartbeat_task = None
+        try:
+            async def _heartbeat_loop():
+                while True:
+                    try:
+                        await asyncio.sleep(30.0)
+                        activity.heartbeat("agent_running")
+                    except asyncio.CancelledError:
+                        break
+
+            heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
+            result = await agent.ainvoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"Process this work:\n\n{context}",
+                        }
+                    ],
+                }
+            )
+        finally:
+            if heartbeat_task:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
 
         # Log what the agent did — every message, every tool call
         messages = result.get("messages", [])
