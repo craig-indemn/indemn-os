@@ -121,9 +121,9 @@ async def dispatch_associate_workflows():
                 }
             ).to_list()
 
-            try:
-                from temporalio.client import WorkflowAlreadyStartedError
+            from temporalio.client import WorkflowAlreadyStartedError
 
+            try:
                 if associates:
                     # Associate available — ProcessMessageWorkflow
                     associate = associates[0]
