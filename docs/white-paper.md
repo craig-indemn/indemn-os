@@ -24,7 +24,7 @@ The operating system models the whole business. Every entity, every lifecycle, e
 
 The OS is six primitives. Not six features. Six structural building blocks that compose into anything.
 
-**Entities** are the data — structured, with defined lifecycles and relationships. **Messages** are the connective tissue — when entities change, messages carry consequences to whoever needs to know. **Actors** do the work, and the system draws no distinction between a human and an AI. **Roles** define what each actor can access and what changes flow to them. **Organizations** scope everything — each business is its own world on the same platform. **Integrations** connect the OS to every external system it touches.
+**Entities**[^1] are the data — structured, with defined lifecycles and relationships. **Messages**[^2] are the connective tissue — when entities change, messages carry consequences to whoever needs to know. **Actors**[^3] do the work, and the system draws no distinction between a human and an AI. **Roles**[^2] define what each actor can access and what changes flow to them. **Organizations**[^4] scope everything — each business is its own world on the same platform. **Integrations**[^5] connect the OS to every external system it touches.
 
 A submission pipeline, a quoting engine, a policy administration system, a claims workflow, an embedded insurance product — each one is a composition of these six. Different entities, different roles, different rules. Same building blocks underneath.
 
@@ -34,7 +34,7 @@ This is what separates the OS from everything else.
 
 When you define an entity — a Submission with fields, a lifecycle, relationships — you don't then build its API separately. You don't write its documentation. You don't create CLI commands for it. You don't teach an AI how to use it. You don't build a UI for it.
 
-All of that exists the moment the entity is defined. The API. The CLI. The documentation. The AI interface. The human interface. The system describes itself, documents itself, and exposes itself to every surface — human, AI, programmatic — by the act of being defined.
+All of that exists the moment the entity is defined.[^1] The API. The CLI. The documentation. The AI interface. The human interface. The system describes itself, documents itself, and exposes itself to every surface — human, AI, programmatic — by the act of being defined.
 
 Building a system on the OS is defining what the system IS. The rest follows.
 
@@ -42,9 +42,9 @@ Building a system on the OS is defining what the system IS. The rest follows.
 
 AI today is an augmentation layer. Take an existing system, find a manual step, bolt on an AI tool. Draft some emails. Summarize some documents. Chat with customers. The AI sits on top, disconnected from the business logic, reaching in through whatever narrow interface was carved out for it.
 
-On the OS, AI is architectural. An AI associate is an actor — the same kind of participant as a human employee. It has a role. It has permissions. It sees the same work queue. It uses the same operations. The system is indifferent to whether the actor is a person or an AI.
+On the OS, AI is architectural. An AI associate is an actor[^3] — the same kind of participant as a human employee. It has a role. It has permissions. It sees the same work queue.[^2] It uses the same operations. The system is indifferent to whether the actor is a person or an AI.
 
-Put an AI alongside a human on the same role. Both see the same work. The AI handles what it can. The human handles what it can't. As the AI proves reliable, it takes on more. The human shifts to work that needs their judgment. The transition is a configuration change, not a rewrite.
+Put an AI alongside a human on the same role. Both see the same work. The AI handles what it can. The human handles what it can't. As the AI proves reliable, it takes on more. The human shifts to work that needs their judgment. The transition is a configuration change[^3], not a rewrite.
 
 This isn't a future where AI replaces people. It's a future where they work the same system, side by side, and the balance shifts naturally based on capability.
 
@@ -54,21 +54,21 @@ When the OS runs, it churns.
 
 Something enters — an email, a phone call, a form, a webhook. It becomes an entity. Roles that watch for that kind of change are notified. Actors process the work — changing entities, creating new ones, transitioning states. Those changes notify more roles. More actors activate. The system moves continuously until every piece of work reaches a decision point or a final state.
 
-There is no central workflow engine directing this. The behavior emerges from how roles are configured — what each role watches for, what each actor does when work arrives. The entire wiring of the system is visible at a glance and changeable through configuration. Add a step by adding a watch. Remove a step by removing one.
+There is no central workflow engine directing this. The behavior emerges from how roles are configured[^2] — what each role watches for, what each actor does when work arrives. The entire wiring of the system is visible at a glance and changeable through configuration. Add a step by adding a watch. Remove a step by removing one.
 
 The OS isn't a set of static tools. It's a living system — humans and AI working together, messages flowing between them, the whole operation running like the organization it models.
 
 ### What This Makes Possible
 
-Setting up a new business on the OS is defining what that business is — entities, roles, rules, connections — not writing software. An AI agent can do this through the CLI. The system that runs businesses can be assembled by AI.
+Setting up a new business on the OS is defining what that business is[^7] — entities, roles, rules, connections — not writing software. An AI agent can do this through the CLI. The system that runs businesses can be assembled by AI.
 
 Any part of any workflow can have AI introduced through a role assignment. Not through a custom integration. A role assignment. Today a person does this job. Tomorrow an associate joins them. Next month the associate handles it alone. Role by role, across the entire operation.
 
-Once a business runs on the OS, every piece of data is structured, every lifecycle is tracked, every operation is available through every surface. Intelligence compounds — every transaction improves the models, every pattern becomes a rule. The system gets smarter over time.
+Once a business runs on the OS, every piece of data is structured, every lifecycle is tracked, every operation is available through every surface. Intelligence compounds — every transaction improves the models, every pattern becomes a rule.[^6] The system gets smarter over time.
 
 Products that couldn't exist become viable. A $200 umbrella policy that no agent will sell because the commission doesn't justify a phone call — an AI sells it in a conversation that costs fractions of a penny. Embedded insurance at checkout. Parametric coverage for niche markets. When the full lifecycle runs at near-zero marginal cost, the constraint isn't profitability. It's imagination.
 
-And the kernel has no domain assumptions baked in. Insurance is where we start. The same six building blocks model any business.
+And the kernel has no domain assumptions baked in.[^8] Insurance is where we start. The same six building blocks model any business.
 
 ### The Future
 
@@ -79,6 +79,15 @@ Imagine acquiring a company and putting it on the OS in weeks. The cross-sell ga
 Imagine a product engine that creates new insurance products through configuration. Filed with regulators, modeled on the OS, distributed through AI across every channel, iterated based on real data. Products that legacy carriers take eighteen months to launch, live in weeks.
 
 This is what the operating system makes possible. The rest of this document is the blueprint.
+
+[^1]: [Entity Framework](architecture/entity-framework.md) — how entity definitions auto-generate APIs, CLI commands, documentation, and UI. The self-evidence property in detail: save_tracked(), state machines, computed fields, schema migration.
+[^2]: [Watches & Wiring](architecture/watches-and-wiring.md) — how watches on roles wire entity changes to consequences. The condition language, scoped watches, the unified queue, message cascades, and selective emission.
+[^3]: [Associates](architecture/associates.md) — the actor model, skills as markdown programs, the harness pattern, async and real-time execution lifecycles, and the gradual rollout from human to AI.
+[^4]: [Security](architecture/security.md) — how organization isolation is enforced at the database layer. Every query scoped. Cross-org platform admin access with full audit.
+[^5]: [Integrations](architecture/integrations.md) — adapters, credential resolution (personal vs org-level), inbound webhooks, and content visibility scoping.
+[^6]: [Rules & --auto](architecture/rules-and-auto.md) — the rule engine, lookups, kernel capabilities, and the --auto pattern. How the system gets more deterministic over time as rules replace AI reasoning for repeated patterns.
+[^7]: [Domain Modeling Guide](guides/domain-modeling.md) — the 8-step process for modeling any business on the OS, with worked examples: a GIC insurance email pipeline and an Indemn CRM with zero insurance concepts.
+[^8]: [System Overview](architecture/overview.md) — the full architecture: trust boundary, six primitives, seven kernel entities, dispatch pattern, deployment topology, and external dependencies. Domain-agnostic by design, validated against three radically different workloads.
 
 ---
 
