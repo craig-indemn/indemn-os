@@ -95,6 +95,8 @@ class ProcessMessageWorkflow:
                     "PermanentProcessingError",
                     "SkillTamperError",
                     "PermissionError",
+                    "CLIError",
+                    "ValidationError",
                 ],
             ),
         )
