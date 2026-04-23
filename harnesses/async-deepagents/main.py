@@ -45,17 +45,18 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
     }
 
 
-def _write_skills_to_filesystem(skill_refs: list[str]) -> list[str]:
-    """Fetch skills via CLI and write as SKILL.md files for deepagents.
+def _write_skills_to_filesystem(skill_refs: list[str], activity_id: str) -> list[str]:
+    """Fetch associate skills and write to per-activity directory.
 
-    deepagents loads skill metadata into the prompt and the agent reads
-    full content on demand via read_file (progressive disclosure).
-    Returns list of relative paths for deepagents' skills parameter.
+    Only writes associate-type skills (behavioral instructions).
+    Entity skills are NOT pre-loaded — the agent reads them on demand
+    via execute("indemn skill get <EntityName>").
     """
     if not skill_refs:
         return []
 
-    skills_dir = "/workspace/skills"
+    # Per-activity directory to avoid contention between concurrent agents
+    skills_dir = f"/workspace/{activity_id}/skills"
     os.makedirs(skills_dir, exist_ok=True)
 
     skill_paths = []
@@ -66,6 +67,10 @@ def _write_skills_to_filesystem(skill_refs: list[str]) -> list[str]:
             log.warning("Skill not found: %s", ref)
             continue
 
+        # Only write associate skills, not entity skills
+        if skill.get("type") == "entity":
+            continue
+
         slug = ref.lower().replace(" ", "-")
         skill_dir = os.path.join(skills_dir, slug)
         os.makedirs(skill_dir, exist_ok=True)
@@ -74,15 +79,14 @@ def _write_skills_to_filesystem(skill_refs: list[str]) -> list[str]:
         name = skill.get("name", ref)
         description = skill.get("description", f"Skill: {name}")
 
-        # Write SKILL.md with frontmatter for deepagents
         skill_file = os.path.join(skill_dir, "SKILL.md")
         with open(skill_file, "w") as f:
             f.write(f"---\nname: {name}\ndescription: {description}\n---\n\n")
             f.write(content)
 
-        skill_paths.append(f"skills/{slug}")
+        skill_paths.append(f"{activity_id}/skills/{slug}")
 
-    log.info("Wrote %d skills to filesystem for progressive disclosure", len(skill_paths))
+    log.info("Wrote %d associate skills for agent", len(skill_paths))
     return skill_paths
 
 
@@ -116,9 +120,10 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # Three-layer LLM config merge [Q3, G-50]
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Write skills to filesystem for deepagents progressive disclosure.
-        # Agent reads full content on demand via read_file — NOT loaded upfront.
-        skill_paths = _write_skills_to_filesystem(associate.get("skills", []))
+        # Write associate skill(s) to filesystem for deepagents progressive disclosure.
+        # Entity skills are NOT pre-loaded — agent reads them via indemn skill get.
+        activity_id = f"act-{input.message_id[:12]}"
+        skill_paths = _write_skills_to_filesystem(associate.get("skills", []), activity_id)
 
         # Build agent (thin — deepagents handles everything once backend is set)
         agent = build_agent(associate=associate, skill_paths=skill_paths, llm_config=llm_config)

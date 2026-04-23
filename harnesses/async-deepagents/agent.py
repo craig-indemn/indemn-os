@@ -1,8 +1,8 @@
 """deepagents agent builder for the async runtime.
 
-Uses deepagents' built-in execute via the backend. No custom tools.
-Skills loaded via deepagents' progressive disclosure — metadata in prompt,
-full content loaded on demand via read_file. Same pattern as chat harness.
+Skills loaded via deepagents' progressive disclosure. The associate's own
+skill is written to filesystem and passed via the skills parameter.
+Entity skills are accessed on demand via execute("indemn skill get <Entity>").
 """
 
 import os
@@ -15,31 +15,28 @@ DEFAULT_PROMPT = (
     "You are an Indemn OS Associate.\n\n"
     "CRITICAL: You MUST use the execute tool to run `indemn` CLI commands "
     "for ALL entity operations. This is how you interact with the OS.\n\n"
-    "Examples:\n"
-    "  execute('indemn email get <id>')\n"
-    "  execute('indemn company list')\n"
-    "  execute('indemn email update <id> --data \\'...\\'')\n"
-    "  execute('indemn email transition <id> --to classified')\n"
-    "  execute('indemn contact create --data \\'...\\'')\n\n"
+    "Before working with any entity, read its skill first:\n"
+    "  execute('indemn skill get Email')\n"
+    "  execute('indemn skill get Company')\n"
+    "This gives you the exact field names, states, and CLI commands.\n\n"
     "RULES:\n"
-    "- ALWAYS use the execute tool for entity operations. "
-    "NEVER use write_file to store results. "
-    "NEVER use task subagents for entity lookups.\n"
-    "- Read your skills for correct CLI syntax and field names.\n"
+    "- ALWAYS use execute for entity operations.\n"
+    "- ALWAYS read the entity skill before creating or updating an entity.\n"
+    "- NEVER use write_file to store results.\n"
+    "- NEVER use task subagents for entity lookups.\n"
     "- Lead with the action. Be concise.\n"
 )
 
 
 def build_agent(associate: dict, skill_paths: list[str], llm_config: dict):
-    """Construct the agent from merged LLM config + skill file paths.
+    """Construct the agent from merged LLM config + skill paths.
 
-    skill_paths: relative paths to SKILL.md files on the backend filesystem.
-    deepagents loads skill metadata into the prompt and the agent reads
-    full content on demand via read_file (progressive disclosure).
+    skill_paths: paths to the associate's own skill(s) on the backend filesystem.
+    deepagents handles progressive disclosure — metadata in prompt, full content
+    read on demand.
     """
     model_id = llm_config.pop("model", "anthropic:claude-sonnet-4-6")
 
-    # Vertex AI needs project + location
     if "vertexai" in model_id:
         llm_config.setdefault("project", os.environ.get("GCP_PROJECT_ID", ""))
         llm_config.setdefault("location", os.environ.get("GCP_LOCATION", "us-central1"))
