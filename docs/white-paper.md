@@ -286,6 +286,8 @@ Three data stores serve three purposes, linked by the same trace ID:
 
 Not redundant. Three optimized views of the same events, each serving a different audience — compliance, operations, engineering — linked by one identifier.
 
+> **Go deeper:** [System Overview](architecture/overview.md) for the trust boundary, dispatch pattern, and deployment topology. [Entity Framework](architecture/entity-framework.md) for save_tracked(), self-evidence, and schema migration. [Watches & Wiring](architecture/watches-and-wiring.md) for the condition language, scoping, and message cascade. [Rules & --auto](architecture/rules-and-auto.md) for the rule engine, lookups, and capabilities. [Associates](architecture/associates.md) for the actor model, harness pattern, and execution lifecycle. [Integrations](architecture/integrations.md) for adapters, credentials, and webhooks. [Observability](architecture/observability.md) for the changes collection, message log, and tracing. [Security](architecture/security.md) for org isolation, credential management, and audit.
+
 ---
 
 ## 3. Domain Modeling
@@ -359,6 +361,8 @@ Actors authenticate with the OS and have roles. They are participants in the sys
 External counterparties — for example, the customers buying insurance, the retail agents submitting applications, the partner carriers providing products — are **entities**, not actors. They have data and lifecycle like any entity, but they don't authenticate, don't have roles, and don't participate in the message queue. They're the subjects of the business, not participants in the system.
 
 Both concepts are valid and coexist. The kernel handles actors through the actor/role primitives. The domain handles external counterparties through entity definitions. Confusing the two — for example, trying to make every customer an actor — would break the model.
+
+> **Go deeper:** [Domain Modeling Guide](guides/domain-modeling.md) walks through the full 8-step process with worked examples — a GIC email intelligence pipeline and an Indemn CRM with zero insurance concepts.
 
 ### Entry Points
 
@@ -482,6 +486,8 @@ The very first organization on the platform has no email integration yet — the
 
 Every authentication event flows through the same change-tracking system as entity mutations. Login attempts, session creation, session revocation, MFA challenges, password changes, role grants, platform admin access, brute-force lockouts — all recorded with specific event types in the changes collection. Same tamper-evident hash chain. Same queryable history. Surfaced through the base UI and CLI.
 
+> **Go deeper:** [Authentication](architecture/authentication.md) for the full Session entity schema, JWT verification hot path, MFA policy resolution, platform admin session mechanics, and recovery flows.
+
 ---
 
 ## 5. Base UI
@@ -541,6 +547,8 @@ It is not a bespoke dashboard application with per-organization custom views. No
 It is not the customer-facing UI. The base UI is for internal operators — Indemn staff, forward-deployed engineers, customer operations teams. Customer-facing interfaces — policyholder portals, agent workbenches, embedded widgets — are separate products built on the same primitives and API. The base UI is the operations surface.
 
 Active alerting is deferred. The base UI provides visibility — operators watch the system through the live views. Active alerts — notifications when thresholds are breached, integrations fail, or queues grow — will be added when specific thresholds and notification patterns are established through real usage. The mechanism will likely be watches on kernel entities with actions that invoke notification integrations.
+
+> **Go deeper:** [Real-Time](architecture/realtime.md) for the Attention entity, Runtime lifecycle, scoped watches, harness pattern, and handoff mechanics.
 
 ---
 
@@ -657,6 +665,8 @@ Infrastructure cost at MVP is approximately $200/month — database, workflow en
 
 LLM cost for associate processing is separate and per-customer. The `--auto` pattern keeps it proportional to edge-case complexity, not total volume.
 
+> **Go deeper:** [Infrastructure](architecture/infrastructure.md) for Railway service configuration, local dev setup, deployment strategies, scaling triggers, and the full cost model.
+
 ---
 
 ## 8. Development and Operations
@@ -754,6 +764,8 @@ Each migration is its own project: model the customer's workflows on the OS, set
 ### What the Current Platform Teaches the OS
 
 Every bespoke customer implementation is R&D for the OS. The patterns discovered in custom builds — entity lifecycles, watch-driven pipelines, integration adapters, the `--auto` pattern — are baked into the kernel architecture. The current platform is the proving ground. The OS is the generalization.
+
+> **Go deeper:** [Development](guides/development.md) for local setup, testing, deploying, and code conventions. [Getting Started](getting-started.md) for CLI installation and first commands.
 
 ---
 
@@ -932,3 +944,41 @@ The build sequence is complete when the OS reaches the point where new customers
 ---
 
 *This document is the source of truth for the design of the Indemn Operating System. Implementation specifications for each phase are produced separately, with research and detailed design, when building begins.*
+
+---
+
+## Further Reading
+
+This white paper describes what the OS is and why it's designed this way. The documentation below goes deeper into how it works and how to build on it.
+
+### Getting Started
+
+- [Getting Started](getting-started.md) — Install the CLI, connect to the OS, run your first commands
+- [CLAUDE.md](../CLAUDE.md) — The builder's manual — compact reference for AI sessions working on the codebase
+
+### Architecture (mechanism-level detail)
+
+| Document | What It Covers |
+|----------|---------------|
+| [System Overview](architecture/overview.md) | Trust boundary, dispatch pattern, deployment topology, external dependencies |
+| [Entity Framework](architecture/entity-framework.md) | Self-evidence property, save_tracked() transaction, state machines, computed fields, schema migration |
+| [Watches & Wiring](architecture/watches-and-wiring.md) | Condition language, scoped watches, unified queue, message cascade, selective emission |
+| [Rules & --auto](architecture/rules-and-auto.md) | Rule engine, rule groups, lookups, kernel capabilities, the --auto pattern |
+| [Associates](architecture/associates.md) | Actor model, skills, harness pattern, async and real-time execution, gradual rollout |
+| [Integrations](architecture/integrations.md) | Adapters, credential resolution, inbound webhooks, content visibility |
+| [Authentication](architecture/authentication.md) | JWT + sessions, five auth methods, MFA policy, platform admin, recovery flows |
+| [Real-Time](architecture/realtime.md) | Attention, Runtime, scoped watches, event delivery, handoff |
+| [Observability](architecture/observability.md) | Changes collection, message log, OTEL tracing, debugging commands |
+| [Infrastructure](architecture/infrastructure.md) | Railway services, local dev, deployment strategies, cost model |
+| [Security](architecture/security.md) | Org isolation, credential management, skill integrity, audit trail |
+
+### Guides (step-by-step)
+
+| Guide | What You'll Do |
+|-------|---------------|
+| [Domain Modeling](guides/domain-modeling.md) | The 8-step process with worked examples (GIC insurance + Indemn CRM) |
+| [Adding Entities](guides/adding-entities.md) | Define an entity type, verify auto-generation, wire it into the system |
+| [Adding Watches](guides/adding-watches.md) | Configure watches on roles, test message routing |
+| [Adding Associates](guides/adding-associates.md) | Write a skill, create an associate, deploy with gradual rollout |
+| [Adding Integrations](guides/adding-integrations.md) | Connect an external system, build a new adapter |
+| [Development](guides/development.md) | Local setup, testing, deploying, code conventions |
