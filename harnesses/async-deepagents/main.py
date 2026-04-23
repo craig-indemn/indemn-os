@@ -243,6 +243,13 @@ async def main():
     log.info("Starting async-deepagents harness, runtime=%s", RUNTIME_ID)
     log.info("Sandbox type: %s", os.environ.get("INDEMN_SANDBOX_TYPE", "localshell"))
 
+    # Increase thread pool for high concurrency — deepagents uses asyncio.to_thread
+    # for filesystem ops (skill loading, backend ls/read_file). Default pool (5 threads
+    # per CPU) starves at 50+ concurrent agents.
+    from concurrent.futures import ThreadPoolExecutor
+    import asyncio as _asyncio
+    _asyncio.get_event_loop().set_default_executor(ThreadPoolExecutor(max_workers=500))
+
     _setup_gcp_credentials()
     await register_instance()
 
