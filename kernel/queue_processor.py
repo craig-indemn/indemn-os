@@ -121,7 +121,7 @@ async def dispatch_associate_workflows():
                 }
             ).to_list()
 
-            from temporalio.client import WorkflowAlreadyStartedError
+            from temporalio.service import RPCError, RPCStatusCode
 
             try:
                 if associates:
@@ -143,8 +143,11 @@ async def dispatch_associate_workflows():
                         id=f"human-review-{message.id}",
                         task_queue="indemn-kernel",
                     )
-            except WorkflowAlreadyStartedError:
-                pass  # Already dispatched — optimistic dispatch got it
+            except RPCError as e:
+                if e.status == RPCStatusCode.ALREADY_EXISTS:
+                    pass  # Already dispatched — optimistic dispatch got it
+                else:
+                    raise
             except Exception as e:
                 logger.warning("Failed to dispatch workflow %s: %s", message.id, e)
 
