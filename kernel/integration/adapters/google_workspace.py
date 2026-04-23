@@ -350,7 +350,7 @@ class GoogleWorkspaceAdapter(Adapter):
             "subject": headers.get("subject", ""),
             "body": body,
             "has_attachments": has_attachments,
-            "external_ref": message_id,  # Gmail message ID for dedup
+            "external_ref": headers.get("message-id", message_id),  # Email Message-ID header for cross-mailbox dedup
         }
 
     def _extract_body(self, payload: dict) -> str:
