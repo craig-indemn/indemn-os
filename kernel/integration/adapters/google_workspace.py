@@ -34,6 +34,7 @@ MEET_SCOPES = ["https://www.googleapis.com/auth/meetings.space.readonly"]
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 ADMIN_SCOPES = ["https://www.googleapis.com/auth/admin.directory.user.readonly"]
 CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 
 class GoogleWorkspaceAdapter(Adapter):
@@ -75,6 +76,17 @@ class GoogleWorkspaceAdapter(Adapter):
             subject=self.config["admin_email"],
         )
         return build("admin", "directory_v1", credentials=creds, cache_discovery=False)
+
+    def _gmail_service(self, user_email: str):
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+
+        creds = service_account.Credentials.from_service_account_info(
+            self._sa_info,
+            scopes=GMAIL_SCOPES,
+            subject=user_email,
+        )
+        return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
     def _calendar_service(self, user_email: str):
         from google.oauth2 import service_account
@@ -196,6 +208,212 @@ class GoogleWorkspaceAdapter(Adapter):
                 continue
 
         return results
+
+    async def fetch_emails(
+        self,
+        since: str = None,
+        user_emails: list = None,
+        limit: int = 500,
+        **params,
+    ) -> list[dict]:
+        """Fetch emails via Gmail API across specified users.
+
+        Returns list of dicts matching Email entity fields.
+        Uses domain-wide delegation to impersonate each user.
+        """
+        if not user_emails:
+            try:
+                user_emails = await self._list_domain_users()
+            except Exception as e:
+                fallback = self.config.get("user_emails")
+                if fallback:
+                    user_emails = fallback
+                else:
+                    raise AdapterAuthError(f"Cannot list domain users: {e}")
+
+        real_users = [
+            e for e in user_emails
+            if not any(skip in e for skip in ["backup@", "demo@", "indemn@indemn"])
+        ]
+
+        logger.info("Scanning %d users for emails", len(real_users))
+
+        all_emails = []
+        seen_message_ids = set()
+
+        for email_addr in real_users:
+            if len(all_emails) >= limit:
+                break
+            try:
+                messages = await self._list_gmail_messages(email_addr, since, limit - len(all_emails))
+                for msg_meta in messages:
+                    msg_id = msg_meta["id"]
+                    if msg_id in seen_message_ids:
+                        continue
+                    seen_message_ids.add(msg_id)
+                    try:
+                        email_data = await self._get_gmail_message(email_addr, msg_id)
+                        if email_data:
+                            all_emails.append(email_data)
+                    except Exception as e:
+                        logger.warning("Failed to get message %s for %s: %s", msg_id, email_addr, e)
+            except Exception as e:
+                logger.warning("Skipping %s: %s", email_addr, e)
+                continue
+
+        logger.info("Fetched %d emails across %d users", len(all_emails), len(real_users))
+        return all_emails
+
+    async def _list_gmail_messages(self, user_email: str, since: str = None, max_results: int = 500) -> list[dict]:
+        """List message IDs from a user's Gmail inbox."""
+        def _sync():
+            service = self._gmail_service(user_email)
+            query = ""
+            if since:
+                # Gmail query uses YYYY/MM/DD format
+                date_str = since[:10].replace("-", "/")
+                query = f"after:{date_str}"
+
+            all_messages = []
+            page_token = None
+            while len(all_messages) < max_results:
+                kwargs = {"userId": "me", "maxResults": min(100, max_results - len(all_messages))}
+                if query:
+                    kwargs["q"] = query
+                if page_token:
+                    kwargs["pageToken"] = page_token
+                result = service.users().messages().list(**kwargs).execute()
+                all_messages.extend(result.get("messages", []))
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    break
+            return all_messages
+
+        return await asyncio.to_thread(_sync)
+
+    async def _get_gmail_message(self, user_email: str, message_id: str) -> dict | None:
+        """Get full message content and parse into Email entity fields."""
+        def _sync():
+            service = self._gmail_service(user_email)
+            return service.users().messages().get(
+                userId="me", id=message_id, format="full"
+            ).execute()
+
+        msg = await asyncio.to_thread(_sync)
+
+        headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
+
+        # Parse recipients from headers
+        def parse_addresses(header_val: str) -> list[str]:
+            if not header_val:
+                return []
+            import email.utils
+            return [addr for _, addr in email.utils.getaddresses([header_val]) if addr]
+
+        sender = headers.get("from", "")
+        # Extract just email from "Name <email>" format
+        import email.utils as eu
+        _, sender_email = eu.parseaddr(sender)
+
+        to_addrs = parse_addresses(headers.get("to", ""))
+        cc_addrs = parse_addresses(headers.get("cc", ""))
+        bcc_addrs = parse_addresses(headers.get("bcc", ""))
+
+        # Parse date
+        date_str = headers.get("date", "")
+        date_iso = None
+        if date_str:
+            try:
+                from email.utils import parsedate_to_datetime
+                dt = parsedate_to_datetime(date_str)
+                date_iso = dt.isoformat()
+            except Exception:
+                date_iso = date_str
+
+        # Extract body — prefer text/plain, fall back to text/html
+        body = self._extract_body(msg.get("payload", {}))
+
+        # Check for attachments
+        has_attachments = self._has_attachments(msg.get("payload", {}))
+
+        # Build attachment metadata for downstream processing
+        attachment_meta = self._get_attachment_metadata(msg.get("payload", {}))
+
+        return {
+            "message_id": headers.get("message-id", message_id),
+            "thread_id": msg.get("threadId", ""),
+            "sender": sender_email or sender,
+            "recipients": to_addrs,
+            "cc": cc_addrs,
+            "bcc": bcc_addrs,
+            "date": date_iso,
+            "subject": headers.get("subject", ""),
+            "body": body,
+            "has_attachments": has_attachments,
+            "external_ref": message_id,  # Gmail message ID for dedup
+        }
+
+    def _extract_body(self, payload: dict) -> str:
+        """Extract email body text from MIME payload."""
+        import base64
+
+        # Simple single-part message
+        if payload.get("body", {}).get("data"):
+            return base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
+
+        # Multipart — walk parts looking for text
+        parts = payload.get("parts", [])
+        text_parts = []
+        html_parts = []
+
+        def walk_parts(parts_list):
+            for part in parts_list:
+                mime = part.get("mimeType", "")
+                if mime == "text/plain" and part.get("body", {}).get("data"):
+                    text_parts.append(
+                        base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
+                    )
+                elif mime == "text/html" and part.get("body", {}).get("data"):
+                    html_parts.append(
+                        base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
+                    )
+                elif part.get("parts"):
+                    walk_parts(part["parts"])
+
+        walk_parts(parts)
+
+        # Prefer plain text, fall back to HTML
+        if text_parts:
+            return "\n".join(text_parts)
+        if html_parts:
+            return "\n".join(html_parts)
+        return ""
+
+    def _has_attachments(self, payload: dict) -> bool:
+        """Check if the message has file attachments."""
+        parts = payload.get("parts", [])
+        for part in parts:
+            if part.get("filename"):
+                return True
+            if part.get("parts") and self._has_attachments({"parts": part["parts"]}):
+                return True
+        return False
+
+    def _get_attachment_metadata(self, payload: dict) -> list[dict]:
+        """Get metadata for attachments (not the content — downloaded later)."""
+        attachments = []
+        parts = payload.get("parts", [])
+        for part in parts:
+            if part.get("filename"):
+                attachments.append({
+                    "filename": part["filename"],
+                    "mime_type": part.get("mimeType", ""),
+                    "size": part.get("body", {}).get("size", 0),
+                    "attachment_id": part.get("body", {}).get("attachmentId", ""),
+                })
+            if part.get("parts"):
+                attachments.extend(self._get_attachment_metadata({"parts": part["parts"]}))
+        return attachments
 
     async def _build_meeting(self, conf: dict) -> dict:
         """Build a Meeting entity dict with ALL available data."""

@@ -42,7 +42,8 @@ async def fetch_new(entity_cls, config: dict, org_id, params: dict = {}) -> dict
                 pass  # No existing entities or no date field — fetch all
 
         # Fetch from external system
-        raw_results = await execute_with_retry(adapter, "fetch", **fetch_params)
+        fetch_method = config.get("fetch_method", "fetch")
+        raw_results = await execute_with_retry(adapter, fetch_method, **fetch_params)
 
         # Deduplicate against existing entities by external_ref
         external_refs = [r.get("external_ref") for r in raw_results if r.get("external_ref")]
