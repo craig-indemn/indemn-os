@@ -68,12 +68,17 @@ async def fetch_new(entity_cls, config: dict, org_id, params: dict = {}) -> dict
                 await entity.save_tracked(actor_id=actor_id, method="fetch_new")
                 created.append(str(entity.id))
             except Exception as e:
+                error_str = str(e)
+                if "E11000" in error_str or "duplicate key" in error_str:
+                    # Unique constraint caught a duplicate not in external_ref set
+                    skipped += 1
+                    continue
                 logger.warning(
                     "Failed to create entity from %s: %s",
                     item.get("external_ref", "?"),
                     e,
                 )
-                errors.append({"external_ref": item.get("external_ref"), "error": str(e)})
+                errors.append({"external_ref": item.get("external_ref"), "error": error_str})
 
         return {
             "fetched": len(raw_results),
