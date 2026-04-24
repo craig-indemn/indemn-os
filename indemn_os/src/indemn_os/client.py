@@ -46,7 +46,11 @@ class CLIClient:
             print(f"Error {response.status_code}: {msg}", file=sys.stderr)
             raise SystemExit(1)
 
-    def _client(self, timeout: int = 30) -> httpx.Client:
+    def _client(self, timeout: int = None) -> httpx.Client:
+        # Long default for POST/PUT — capability invocations (fetch-new, scraping,
+        # external-system calls) can take minutes. Override with INDEMN_CLI_TIMEOUT env var.
+        if timeout is None:
+            timeout = int(os.environ.get("INDEMN_CLI_TIMEOUT", "600"))
         return httpx.Client(
             base_url=self.base_url,
             follow_redirects=True,
@@ -54,19 +58,20 @@ class CLIClient:
         )
 
     def get(self, path, params=None):
-        with self._client() as client:
+        # GET is typically fast — shorter timeout
+        with self._client(timeout=int(os.environ.get("INDEMN_CLI_GET_TIMEOUT", "60"))) as client:
             r = client.get(path, params=params, headers=self._headers())
             self._handle_error(r)
             return r.json()
 
     def post(self, path, json=None, params=None):
-        with self._client(timeout=60) as client:
+        with self._client() as client:
             r = client.post(path, json=json, params=params, headers=self._headers())
             self._handle_error(r)
             return r.json()
 
     def put(self, path, json=None):
-        with self._client(timeout=60) as client:
+        with self._client() as client:
             r = client.put(path, json=json, headers=self._headers())
             self._handle_error(r)
             return r.json()
