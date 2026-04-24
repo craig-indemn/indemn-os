@@ -37,6 +37,19 @@ CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 
+def _normalize_rfc3339(s: str) -> str:
+    """Accept 'YYYY-MM-DD' or RFC3339 datetime; return RFC3339 with Z.
+
+    Google Meet API rejects date-only filters as 'Invalid filter' — every caller
+    needs a full RFC3339 timestamp. Normalize here so callers can pass either form.
+    """
+    if not s:
+        return s
+    if "T" in s:
+        return s if (s.endswith("Z") or "+" in s[10:]) else s + "Z"
+    return s + "T00:00:00Z"
+
+
 class GoogleWorkspaceAdapter(Adapter):
     """Google Workspace adapter with domain-wide delegation."""
 
@@ -110,7 +123,10 @@ class GoogleWorkspaceAdapter(Adapter):
 
         Captures everything: conference metadata, participants with IDs/emails,
         recordings, transcripts (doc + structured entries), smart notes.
+
+        `since` accepts 'YYYY-MM-DD' or full RFC3339 datetime — normalized here.
         """
+        since = _normalize_rfc3339(since)
         if not user_emails:
             try:
                 user_emails = await self._list_domain_users()
