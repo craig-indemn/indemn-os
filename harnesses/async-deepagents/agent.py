@@ -28,12 +28,21 @@ DEFAULT_PROMPT = (
 )
 
 
-def build_agent(associate: dict, skill_paths: list[str], llm_config: dict):
+def build_agent(
+    associate: dict,
+    skill_paths: list[str],
+    llm_config: dict,
+    activity_id: str | None = None,
+):
     """Construct the agent from merged LLM config + skill paths.
 
     skill_paths: paths to the associate's own skill(s) on the backend filesystem.
     deepagents handles progressive disclosure — metadata in prompt, full content
     read on demand.
+
+    activity_id: per-invocation identifier passed to build_backend so the
+    sandbox is scoped per-activity, preventing cross-invocation tool-cache
+    leaks (Bug #3 from os-bugs-and-shakeout).
     """
     model_id = llm_config.pop("model", "anthropic:claude-sonnet-4-6")
 
@@ -46,6 +55,6 @@ def build_agent(associate: dict, skill_paths: list[str], llm_config: dict):
     return create_deep_agent(
         model=init_chat_model(model_id, **llm_config),
         system_prompt=system_prompt,
-        backend=build_backend(),
+        backend=build_backend(activity_id=activity_id),
         skills=skill_paths if skill_paths else None,
     )
