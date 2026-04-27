@@ -17,8 +17,8 @@ import logging
 import os
 from datetime import timedelta
 
-from completion_logic import agent_did_useful_work
 from harness.agent import build_agent
+from harness.completion_logic import agent_did_useful_work
 from harness_common.cli import CLIError, indemn
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from indemn_os.types import AgentExecutionInput, AgentExecutionResult
