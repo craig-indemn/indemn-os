@@ -240,10 +240,12 @@ def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str
             cap_name = cap.capability
             cli_name = cap_name.replace("_", "-")
             if cap_name in COLLECTION_LEVEL_CAPABILITIES:
-                # Collection-level: no entity_id, takes --data params
+                # Collection-level: no entity_id, takes --data params.
+                # Description is generic since collection-level capabilities
+                # do different things (fetch_new creates; entity_resolve queries).
                 lines.append(
                     f"| `indemn {slug} {cli_name} --data '{{...}}'` | "
-                    f"{cap_name} (collection-level — creates/syncs records) |"
+                    f"{cap_name} (collection-level — operates on the entity type) |"
                 )
             else:
                 # Instance-level: <id> + --auto for rules-first / LLM fallback
@@ -251,5 +253,49 @@ def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str
                     f"| `indemn {slug} {cli_name} <id> --auto` | "
                     f"{cap_name} (rules first, LLM fallback if `--auto`) |"
                 )
+
+        # entity_resolve gets its own section with the configured fields
+        # and the contract spelled out — it's the primitive associates use
+        # to figure out which existing entity this new thing is, and the
+        # contract ("returns ranked candidates, never auto-picks") is the
+        # load-bearing thing to teach unmissably.
+        resolve_cap = next(
+            (c for c in capabilities if c.capability == "entity_resolve"), None
+        )
+        if resolve_cap is not None:
+            cfg = resolve_cap.config or {}
+            strategies = cfg.get("strategies", [])
+            resolve_fields = []
+            for s in strategies:
+                f = s.get("field")
+                if f and f not in resolve_fields:
+                    resolve_fields.append(f)
+            example_candidate = {
+                f: f"<{f}>" for f in (resolve_fields or ["<field>"])
+            }
+            example_payload = _format_json_inline({"candidate": example_candidate})
+            lines.append("\n### Resolve — find existing matches before creating\n")
+            lines.append(
+                f"`entity_resolve` is activated on {entity_name}. Before creating a new "
+                f"record, call resolve with the identity signals you have, then decide "
+                f"based on the returned candidates."
+            )
+            lines.append(
+                f"\n```\nindemn {slug} entity-resolve --data '{example_payload}'\n```"
+            )
+            if resolve_fields:
+                pretty_fields = ", ".join(f"`{f}`" for f in resolve_fields)
+                lines.append(
+                    f"\nConfigured fields: {pretty_fields}. Provide one or more in the "
+                    f"`candidate` object — strategies that don't see their field "
+                    f"contribute nothing."
+                )
+            lines.append(
+                "\n**Contract:** the capability returns ranked candidates with `score` "
+                "and `matched_on`. **It never auto-picks.** Multiple candidates tied at "
+                "score 1.0 means the system has ambiguous data — surface for human "
+                "review or escalate to a higher reasoning step. Score < 1.0 is fuzzy "
+                "(probabilistic); the LLM should examine `summary` and decide explicitly.\n"
+            )
 
     return "\n".join(lines)
