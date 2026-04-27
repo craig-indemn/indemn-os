@@ -83,15 +83,24 @@ def test_rejects_unknown_fields():
     assert "title" in detail or "status" in detail
 
 
-def test_rejects_operator_dicts_for_now():
-    """Operator filters ($in, $gte) need a safelist that lands with Bug #23.
-    Until then, surface a clear rejection so callers don't think they were
-    silently applied."""
+def test_operator_dicts_now_pass_through_safelist():
+    """Operator filters ($in, $gte, etc.) flow through the shared safelist
+    that landed with Bug #23. The full operator/coercion behavior is pinned
+    in test_filter_safelist.py — this test just confirms the list endpoint
+    now reaches the safelist instead of rejecting on sight."""
     cls = _entity_cls({"status": _field_info(str)})
+    result = _parse_list_filter(cls, "Email", '{"status": {"$in": ["a", "b"]}}')
+    assert result == {"status": {"$in": ["a", "b"]}}
+
+
+def test_unknown_operator_still_rejected_via_safelist():
+    """Operators outside the safelist still 400 — just with the new error
+    message ('not in the safelist') instead of the old blanket rejection."""
+    cls = _entity_cls({"name": _field_info(str)})
     with pytest.raises(HTTPException) as exc:
-        _parse_list_filter(cls, "Email", '{"status": {"$in": ["a", "b"]}}')
+        _parse_list_filter(cls, "Company", '{"name": {"$regex": "^Acme"}}')
     assert exc.value.status_code == 400
-    assert "$in" in str(exc.value.detail) or "Operator filters" in str(exc.value.detail)
+    assert "$regex" in str(exc.value.detail)
 
 
 # --- Valid input — equality matches ---
