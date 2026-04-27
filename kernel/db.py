@@ -134,25 +134,18 @@ async def init_database():
         except Exception as e:
             logger.error("Failed to create entity class for %s: %s", defn.name, e)
 
-    # Ensure indexes exist for domain entity collections
+    # Reconcile indexes for domain entity collections — drops kernel-managed
+    # indexes the definition no longer requests, creates missing ones,
+    # preserves custom (operator-added) indexes. The previous additive
+    # create_index loop was the source of Bug #2 / Bug #25 / Bug #26: stale
+    # unique indexes from prior definition versions kept blocking writes.
+    from kernel.entity.indexes import reconcile_indexes
+
     for defn in seen_names.values():
         if defn.name in RESERVED_NAMES:
             continue
         coll = _db[defn.collection_name]
-        # Always index by org_id
-        await coll.create_index([("org_id", 1)])
-        # Compound indexes from IndexDef list
-        for idx in defn.indexes:
-            await coll.create_index([("org_id", 1)] + list(idx.fields), unique=idx.unique)
-        # Per-field indexes from FieldDefinition.indexed/unique flags
-        for fname, fdef in defn.fields.items():
-            if fdef.unique:
-                await coll.create_index(
-                    [("org_id", 1), (fname, 1)],
-                    unique=True,
-                )
-            elif fdef.indexed:
-                await coll.create_index([("org_id", 1), (fname, 1)])
+        await reconcile_indexes(coll, defn)
 
     # Load watch cache
     from kernel.watch.cache import load_watch_cache
@@ -193,16 +186,13 @@ async def register_domain_entity(defn, app=None):
     dynamic_cls._db_ref = _db
     ENTITY_REGISTRY[defn.name] = dynamic_cls
 
-    # Ensure indexes
+    # Reconcile indexes — drops stale kernel-managed indexes from prior
+    # versions of this definition, creates missing ones requested by the
+    # current definition. See kernel/entity/indexes.py.
+    from kernel.entity.indexes import reconcile_indexes
+
     coll = _db[defn.collection_name]
-    await coll.create_index([("org_id", 1)])
-    for idx in defn.indexes:
-        await coll.create_index([("org_id", 1)] + list(idx.fields), unique=idx.unique)
-    for fname, fdef in defn.fields.items():
-        if fdef.unique:
-            await coll.create_index([("org_id", 1), (fname, 1)], unique=True)
-        elif fdef.indexed:
-            await coll.create_index([("org_id", 1), (fname, 1)])
+    await reconcile_indexes(coll, defn)
 
     # Register API routes if app provided
     if app is not None:
