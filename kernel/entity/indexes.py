@@ -129,6 +129,16 @@ async def reconcile_indexes(coll, defn: EntityDefinition) -> dict:
     async for idx in coll.list_indexes():
         current_by_name[idx["name"]] = idx
 
+    # Diagnostic: log what we see vs what we want — visible in Railway logs
+    # so misalignments between the entity definition and MongoDB are
+    # debuggable without ssh-ing or attaching.
+    logger.info(
+        "reconcile_indexes(%s): existing=%s desired=%s",
+        coll.name,
+        {n: {"unique": v.get("unique"), "sparse": v.get("sparse")} for n, v in current_by_name.items()},
+        {n: {"unique": v["unique"], "sparse": v["sparse"]} for n, v in desired.items()},
+    )
+
     summary: dict[str, list[str]] = {"created": [], "dropped": [], "preserved": []}
 
     # Drop pass: kernel-managed indexes that either aren't in the desired
