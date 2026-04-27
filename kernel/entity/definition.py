@@ -21,6 +21,7 @@ class FieldDefinition(BaseModel):
     default: Optional[Any] = None
     unique: bool = False
     indexed: bool = False
+    sparse: bool = False  # If true and (unique or indexed), index ignores documents where this field is missing/null
     enum_values: Optional[list[str]] = None
     description: Optional[str] = None
     is_state_field: bool = False  # True for the field controlled by the state machine
@@ -40,6 +41,7 @@ class IndexDef(BaseModel):
 
     fields: list[tuple[str, int]]  # [("org_id", 1), ("status", 1)]
     unique: bool = False
+    sparse: bool = False  # If true, the index ignores documents missing the indexed fields
 
 
 class CapabilityActivation(BaseModel):

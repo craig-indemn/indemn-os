@@ -41,31 +41,52 @@ def _kernel_index_name(keys: list[tuple[str, int]]) -> str:
 def _desired_indexes(defn: EntityDefinition) -> dict[str, dict]:
     """Compute the set of indexes the kernel would create for this entity.
 
-    Returns name -> spec where spec has `keys` (list of (field, dir)) and
-    `unique` (bool). Names are deterministic from the definition so we can
-    diff against `coll.list_indexes()`.
+    Returns name -> spec where spec has `keys` (list of (field, dir)),
+    `unique` (bool), and `sparse` (bool). Names are deterministic from the
+    definition so we can diff against `coll.list_indexes()`.
     """
     desired: dict[str, dict] = {}
 
     # Always-on org_id index (every entity collection scopes by org).
     keys = [("org_id", 1)]
-    desired[_kernel_index_name(keys)] = {"keys": keys, "unique": False}
+    desired[_kernel_index_name(keys)] = {"keys": keys, "unique": False, "sparse": False}
 
     # Compound indexes from the definition's IndexDef list. Always prepend
     # org_id so cross-org queries cannot accidentally use the index path.
     for idx in defn.indexes:
         keys = [("org_id", 1)] + list(idx.fields)
-        desired[_kernel_index_name(keys)] = {"keys": keys, "unique": idx.unique}
+        desired[_kernel_index_name(keys)] = {
+            "keys": keys,
+            "unique": idx.unique,
+            "sparse": getattr(idx, "sparse", False),
+        }
 
     # Field-level flags become (org_id, field) compound indexes.
     for fname, fdef in defn.fields.items():
         keys = [("org_id", 1), (fname, 1)]
+        sparse = getattr(fdef, "sparse", False)
         if fdef.unique:
-            desired[_kernel_index_name(keys)] = {"keys": keys, "unique": True}
+            desired[_kernel_index_name(keys)] = {"keys": keys, "unique": True, "sparse": sparse}
         elif fdef.indexed:
-            desired[_kernel_index_name(keys)] = {"keys": keys, "unique": False}
+            desired[_kernel_index_name(keys)] = {"keys": keys, "unique": False, "sparse": sparse}
 
     return desired
+
+
+def _options_match(existing: dict, desired_spec: dict) -> bool:
+    """True if an existing MongoDB index has the same options as the desired spec.
+
+    Compares `unique` and `sparse` flags. MongoDB's `list_indexes()` omits
+    these keys when they're false, so missing == False. Other options
+    (collation, partial filter expressions, TTL) are not currently managed
+    by the kernel, so we don't compare them.
+    """
+    existing_unique = bool(existing.get("unique", False))
+    existing_sparse = bool(existing.get("sparse", False))
+    return (
+        existing_unique == desired_spec["unique"]
+        and existing_sparse == desired_spec["sparse"]
+    )
 
 
 def _is_kernel_managed_name(name: str) -> bool:
@@ -110,29 +131,39 @@ async def reconcile_indexes(coll, defn: EntityDefinition) -> dict:
 
     summary: dict[str, list[str]] = {"created": [], "dropped": [], "preserved": []}
 
-    # Drop pass: kernel-managed indexes that aren't in the desired set.
+    # Drop pass: kernel-managed indexes that either aren't in the desired
+    # set OR exist with mismatched options (e.g., a unique index that
+    # should now be sparse). Custom-named and `_id_` are always preserved.
     for name in list(current_by_name.keys()):
         if not _is_kernel_managed_name(name):
             summary["preserved"].append(name)
             continue
-        if name in desired:
+        if name in desired and _options_match(current_by_name[name], desired[name]):
             summary["preserved"].append(name)
             continue
+        # Either no longer desired, or options differ — drop and let the
+        # create pass below rebuild it from the current spec.
         try:
             await coll.drop_index(name)
             summary["dropped"].append(name)
-            logger.info("Dropped stale kernel index %s on %s", name, coll.name)
+            del current_by_name[name]
+            logger.info("Dropped kernel index %s on %s (stale or option mismatch)", name, coll.name)
         except Exception as e:  # noqa: BLE001
             logger.warning("Could not drop index %s on %s: %s", name, coll.name, e)
 
-    # Create pass: desired indexes that don't exist yet.
+    # Create pass: desired indexes that don't exist yet (or were just dropped).
     for name, spec in desired.items():
         if name in current_by_name:
-            # Already there from before the drop pass — leave it alone.
+            # Already there with matching options — leave it alone.
             continue
         try:
-            await coll.create_index(spec["keys"], unique=spec["unique"])
+            await coll.create_index(
+                spec["keys"],
+                unique=spec["unique"],
+                sparse=spec["sparse"],
+            )
             summary["created"].append(name)
+            logger.info("Created kernel index %s on %s", name, coll.name)
         except Exception as e:  # noqa: BLE001
             logger.warning("Could not create index %s on %s: %s", name, coll.name, e)
 

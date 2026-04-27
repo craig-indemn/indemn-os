@@ -34,6 +34,7 @@ def _field(
     required: bool = False,
     unique: bool = False,
     indexed: bool = False,
+    sparse: bool = False,
     is_relationship: bool = False,
     is_state_field: bool = False,
 ):
@@ -42,6 +43,7 @@ def _field(
         required=required,
         unique=unique,
         indexed=indexed,
+        sparse=sparse,
         is_relationship=is_relationship,
         is_state_field=is_state_field,
         enum_values=None,
@@ -49,10 +51,10 @@ def _field(
     )
 
 
-def _index_def(fields: list[tuple[str, int]], unique: bool = False):
-    """Build an IndexDef stand-in. Real IndexDef has `fields: list[tuple]`
-    and `unique: bool`. SimpleNamespace mirrors the shape for the reconciler."""
-    return SimpleNamespace(fields=fields, unique=unique)
+def _index_def(fields: list[tuple[str, int]], unique: bool = False, sparse: bool = False):
+    """Build an IndexDef stand-in. Real IndexDef has `fields: list[tuple]`,
+    `unique: bool`, and `sparse: bool`. SimpleNamespace mirrors the shape."""
+    return SimpleNamespace(fields=fields, unique=unique, sparse=sparse)
 
 
 def _definition(
@@ -228,7 +230,7 @@ async def test_creates_missing_org_id_index():
     defn = _definition()
     summary = await reconcile_indexes(coll, defn)
     assert "org_id_1" in summary["created"]
-    coll.create_index.assert_called_once_with([("org_id", 1)], unique=False)
+    coll.create_index.assert_called_once_with([("org_id", 1)], unique=False, sparse=False)
 
 
 @pytest.mark.asyncio
@@ -241,7 +243,7 @@ async def test_creates_missing_unique_field_index():
     defn = _definition(fields={"email": _field(unique=True)})
     summary = await reconcile_indexes(coll, defn)
     assert "org_id_1_email_1" in summary["created"]
-    coll.create_index.assert_called_once_with([("org_id", 1), ("email", 1)], unique=True)
+    coll.create_index.assert_called_once_with([("org_id", 1), ("email", 1)], unique=True, sparse=False)
 
 
 @pytest.mark.asyncio
@@ -297,3 +299,121 @@ async def test_summary_keys_present_even_when_empty():
     assert "created" in summary
     assert "dropped" in summary
     assert "preserved" in summary
+
+
+# --- Sparse and option-mismatch (Apr 27 Alliance trace second-order finding) ---
+
+
+def test_desired_passes_through_sparse_on_field():
+    """Field-level sparse=True flows into the desired index spec."""
+    fields = {"external_ref": _field(unique=True, sparse=True)}
+    desired = _desired_indexes(_definition(fields=fields))
+    spec = desired["org_id_1_external_ref_1"]
+    assert spec["unique"] is True
+    assert spec["sparse"] is True
+
+
+def test_desired_passes_through_sparse_on_indexdef():
+    indexes = [_index_def(fields=[("external_ref", 1)], unique=True, sparse=True)]
+    desired = _desired_indexes(_definition(indexes=indexes))
+    spec = desired["org_id_1_external_ref_1"]
+    assert spec["unique"] is True
+    assert spec["sparse"] is True
+
+
+def test_desired_sparse_defaults_false():
+    """Fields/indexes that don't specify sparse default to non-sparse."""
+    fields = {"email": _field(unique=True)}
+    desired = _desired_indexes(_definition(fields=fields))
+    assert desired["org_id_1_email_1"]["sparse"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_pass_passes_sparse_to_motor():
+    """When the definition requests sparse, create_index gets sparse=True."""
+    existing = [{"name": "_id_", "key": {"_id": 1}}]
+    coll = _fake_collection(existing)
+    fields = {"external_ref": _field(unique=True, sparse=True)}
+    defn = _definition(fields=fields)
+    await reconcile_indexes(coll, defn)
+    # Two create calls expected — org_id_1 (non-sparse) and the sparse-unique one.
+    create_calls = coll.create_index.call_args_list
+    sparse_calls = [c for c in create_calls if c.kwargs.get("sparse") is True]
+    assert len(sparse_calls) == 1, f"Expected one sparse create call, got: {create_calls}"
+    assert sparse_calls[0].args[0] == [("org_id", 1), ("external_ref", 1)]
+    assert sparse_calls[0].kwargs["unique"] is True
+
+
+@pytest.mark.asyncio
+async def test_drops_and_recreates_index_when_sparse_flips_from_false_to_true():
+    """The Meeting case after the sparse-flag fix: existing
+    `org_id_1_external_ref_1` is unique-not-sparse; the new definition asks
+    for unique-and-sparse. Same name, different options. Reconciler must
+    drop+recreate, not preserve.
+    """
+    existing = [
+        {"name": "_id_", "key": {"_id": 1}},
+        {"name": "org_id_1", "key": {"org_id": 1}},
+        {
+            "name": "org_id_1_external_ref_1",
+            "key": {"org_id": 1, "external_ref": 1},
+            "unique": True,
+            # sparse not set in MongoDB metadata → defaults to false
+        },
+    ]
+    coll = _fake_collection(existing)
+    fields = {"external_ref": _field(unique=True, sparse=True)}
+    defn = _definition(fields=fields)
+    summary = await reconcile_indexes(coll, defn)
+    # Drop happened.
+    assert "org_id_1_external_ref_1" in summary["dropped"]
+    coll.drop_index.assert_called_once_with("org_id_1_external_ref_1")
+    # Recreate happened — with sparse=True this time.
+    create_calls = coll.create_index.call_args_list
+    rebuild = [c for c in create_calls if c.args[0] == [("org_id", 1), ("external_ref", 1)]]
+    assert len(rebuild) == 1
+    assert rebuild[0].kwargs == {"unique": True, "sparse": True}
+
+
+@pytest.mark.asyncio
+async def test_drops_and_recreates_when_unique_flips():
+    """If a field's unique flag changes, the existing index has wrong
+    semantics — must drop and rebuild."""
+    existing = [
+        {"name": "_id_", "key": {"_id": 1}},
+        {"name": "org_id_1", "key": {"org_id": 1}},
+        {"name": "org_id_1_email_1", "key": {"org_id": 1, "email": 1}},  # non-unique
+    ]
+    coll = _fake_collection(existing)
+    defn = _definition(fields={"email": _field(unique=True)})  # now unique
+    summary = await reconcile_indexes(coll, defn)
+    assert "org_id_1_email_1" in summary["dropped"]
+    create_calls = [
+        c for c in coll.create_index.call_args_list
+        if c.args[0] == [("org_id", 1), ("email", 1)]
+    ]
+    assert len(create_calls) == 1
+    assert create_calls[0].kwargs["unique"] is True
+
+
+@pytest.mark.asyncio
+async def test_preserves_sparse_index_when_options_already_match():
+    """Idempotency carries through to options — a sparse-unique index that
+    matches the desired spec is preserved without drop+recreate churn."""
+    existing = [
+        {"name": "_id_", "key": {"_id": 1}},
+        {"name": "org_id_1", "key": {"org_id": 1}},
+        {
+            "name": "org_id_1_external_ref_1",
+            "key": {"org_id": 1, "external_ref": 1},
+            "unique": True,
+            "sparse": True,
+        },
+    ]
+    coll = _fake_collection(existing)
+    fields = {"external_ref": _field(unique=True, sparse=True)}
+    defn = _definition(fields=fields)
+    summary = await reconcile_indexes(coll, defn)
+    assert "org_id_1_external_ref_1" in summary["preserved"]
+    assert summary["dropped"] == []
+    coll.drop_index.assert_not_called()
