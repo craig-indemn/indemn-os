@@ -86,6 +86,85 @@ def _coerce_objectid_fields(entity_cls, data: dict) -> dict:
     return data
 
 
+def _is_objectid_field(field_info) -> bool:
+    """True if the given Pydantic field is typed as ObjectId (or Optional[ObjectId]).
+
+    Used by the list-filter parser to coerce hex strings to bson.ObjectId so
+    queries like `{"company": "69eb..."}` actually match the stored documents.
+    """
+    import typing
+
+    from bson import ObjectId as OId
+
+    annotation = field_info.annotation
+    origin = getattr(annotation, "__origin__", None)
+    args = getattr(annotation, "__args__", ())
+    if origin is typing.Union and type(None) in args:
+        annotation = next(a for a in args if a is not type(None))
+    return annotation is OId
+
+
+def _parse_list_filter(entity_cls, entity_name: str, filter_json: str) -> dict:
+    """Parse and validate a `--data`/`?filter=` JSON object for the list endpoint.
+
+    Returns a MongoDB filter dict ready to merge into the find_scoped() query.
+
+    Constraints (raise HTTPException 400 on violation):
+      - Must be a JSON object (top-level dict).
+      - Every key must be a defined field on the entity (safelist via
+        `entity_cls.model_fields`). Unknown fields are rejected so a typo
+        doesn't silently match nothing.
+      - Values are equality matches today. ObjectId fields auto-coerce
+        24-char hex strings to bson.ObjectId so the equality matches the
+        stored value. Operator dicts (`{"$in": [...]}`, `{"$gte": ...}`)
+        are not supported by this endpoint yet — the bulk-delete operator-filter
+        bug (#23) is tracked separately and a unified safelist of supported
+        operators will land with that fix.
+    """
+    import orjson
+    from bson import ObjectId as OId
+
+    try:
+        user_filter = orjson.loads(filter_json)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid JSON in filter: {e}")
+
+    if not isinstance(user_filter, dict):
+        raise HTTPException(400, "filter must be a JSON object (e.g. {\"field\": \"value\"})")
+
+    valid_fields = set(entity_cls.model_fields.keys())
+    parsed: dict = {}
+    for field_name, value in user_filter.items():
+        if field_name not in valid_fields:
+            sample = ", ".join(sorted(valid_fields)[:10])
+            raise HTTPException(
+                400,
+                f"Unknown field '{field_name}' on {entity_name}. "
+                f"Known fields include: {sample}"
+                + ("..." if len(valid_fields) > 10 else ""),
+            )
+        # Reject operator dicts (forward-compat: same parser will be extended).
+        if isinstance(value, dict) and any(k.startswith("$") for k in value):
+            raise HTTPException(
+                400,
+                f"Operator filters (e.g. $in, $gte) are not supported on list yet. "
+                f"Use equality match for '{field_name}' or fetch + filter client-side.",
+            )
+        # ObjectId hex-string coercion for relationship fields.
+        field_info = entity_cls.model_fields[field_name]
+        if _is_objectid_field(field_info) and isinstance(value, str):
+            try:
+                value = OId(value)
+            except Exception:
+                raise HTTPException(
+                    400,
+                    f"Field '{field_name}' is an ObjectId; expected a 24-char hex "
+                    f"string, got: {value!r}",
+                )
+        parsed[field_name] = value
+    return parsed
+
+
 def register_entity_routes(app, entity_name: str, entity_cls: type):
     """Register CRUD + transition + @exposed method + capability routes."""
     slug = entity_name.lower() + "s"
@@ -97,6 +176,14 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         offset: int = 0,
         status: Optional[str] = None,
         search: Optional[str] = None,
+        filter: Optional[str] = Query(
+            None,
+            description=(
+                'JSON object filtering by entity fields, e.g. '
+                '{"company":"69eb95f2...","status":"classified"}. '
+                "Equality match only; ObjectId fields auto-coerce hex strings."
+            ),
+        ),
         sort: str = "-created_at",
         actor=Depends(get_current_actor),
     ):
@@ -115,6 +202,16 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
                 {"name": {"$regex": pattern, "$options": "i"}},
                 {"title": {"$regex": pattern, "$options": "i"}},
             ]
+        if filter:
+            # Per-field equality filter — validates field names against the
+            # entity definition + coerces ObjectId hex strings.
+            user_filter = _parse_list_filter(entity_cls, entity_name, filter)
+            for field_name, value in user_filter.items():
+                # Don't let `filter` clobber `status`/`search`-derived clauses;
+                # if a caller passes both, the dedicated params take precedence
+                # (callers should use one or the other, not both).
+                if field_name not in filter_doc:
+                    filter_doc[field_name] = value
         entities = await entity_cls.find_scoped(filter_doc).skip(offset).limit(limit).to_list()
         return [to_dict(e) for e in entities]
 

@@ -161,6 +161,27 @@ def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str
         f"| `indemn {slug} list --search <text>` | "
         "Substring match on `name` or `title` field |"
     )
+    # Per-field equality filter via --data. Only emit a relationship-flavored
+    # example if the entity has a relationship field — otherwise the example
+    # would mislead.
+    relationship_field = next(
+        (
+            n
+            for n, f in definition.fields.items()
+            if f.is_relationship and f.relationship_target
+        ),
+        None,
+    )
+    if relationship_field:
+        lines.append(
+            f"| `indemn {slug} list --data '{{\"{relationship_field}\":\"<id>\"}}'` | "
+            "Filter by any field; equality match. ObjectId fields take 24-char hex strings. |"
+        )
+    else:
+        lines.append(
+            f"| `indemn {slug} list --data '{{\"<field>\":\"<value>\"}}'` | "
+            "Filter by any field; equality match. |"
+        )
     lines.append(
         f"| `indemn {slug} list --limit 50 --offset 100 --sort -created_at` | "
         "Pagination + sort (prefix `-` for descending) |"
@@ -172,9 +193,10 @@ def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str
     )
 
     lines.append(
-        "\n*Filtering by arbitrary fields on `list` is not yet supported. "
-        "For navigation between entities, prefer `--depth N --include-related` "
-        "on `get`.*\n"
+        "\n*`--data` filters are equality match only — operator filters "
+        "(`$in`, `$gte`, etc.) are not supported on `list` yet. For relationship "
+        "navigation, you can also use `--depth N --include-related` on `get` to "
+        "load forward-related entities inline.*\n"
     )
 
     # --- Write commands ---
