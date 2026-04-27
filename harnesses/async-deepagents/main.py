@@ -101,6 +101,11 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
     try:
         # Set causation message ID so downstream CLI calls propagate it
         os.environ["INDEMN_CAUSATION_MESSAGE_ID"] = str(input.message_id)
+        # Set effective-actor-id (Bug #22 forensics): all CLI calls from this
+        # activity will record this associate as the effective actor in the
+        # changes collection, while the auth token stays the runtime's
+        # Platform Admin equivalent. Cleaned up in finally below.
+        os.environ["INDEMN_EFFECTIVE_ACTOR_ID"] = str(input.associate_id)
 
         # Load associate config + context (harness orchestration, not agent tools)
         associate = indemn("actor", "get", input.associate_id)
@@ -209,6 +214,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
 
         # Clean up causation env var
         os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
+        os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
 
         if did_useful_work:
             indemn("queue", "complete", input.message_id)
@@ -234,6 +240,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
     except Exception as e:
         # Clean up causation env var
         os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
+        os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
         # Mark the message failed — harness owns failure reporting [Q1]
         try:
             indemn("queue", "fail", input.message_id, "--reason", str(e)[:500])

@@ -30,7 +30,13 @@ class ChangeRecord(Document):
     entity_type: str
     entity_id: ObjectId
     change_type: str  # create, update, delete, transition, auth.*
-    actor_id: str
+    actor_id: str  # The authenticated session identity (e.g., service token's actor)
+    # The actor on whose behalf the authenticated session was acting. Set when
+    # an inside-trust-boundary caller asserts via X-Effective-Actor-Id which
+    # associate is responsible for this mutation. Without it, all associates
+    # using the shared runtime token were indistinguishable in the audit
+    # trail (Bug #22 forensics gap, fixed 2026-04-27).
+    effective_actor_id: Optional[str] = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: Optional[str] = None
     changes: list[FieldChange] = Field(default_factory=list)
@@ -48,6 +54,9 @@ class ChangeRecord(Document):
             [("org_id", 1), ("timestamp", -1)],
             [("correlation_id", 1)],
             [("org_id", 1), ("actor_id", 1), ("timestamp", -1)],
+            # Forensics: "what did this associate do" — index lets us answer
+            # without scanning per-associate.
+            [("org_id", 1), ("effective_actor_id", 1), ("timestamp", -1)],
         ]
 
 
@@ -60,8 +69,15 @@ async def write_change_record(
     method_metadata: Optional[dict],
     correlation_id: Optional[str],
     session=None,
+    effective_actor_id: Optional[str] = None,
 ):
-    """Write a change record within the entity save transaction."""
+    """Write a change record within the entity save transaction.
+
+    `actor_id` is the authenticated session identity (the entity that owns
+    the auth token). `effective_actor_id`, when set, is the actor on whose
+    behalf the session is acting — typically the associate the harness is
+    running. Both are recorded; queries decide which to filter on.
+    """
     from kernel.changes.hash_chain import compute_hash, get_previous_hash
 
     record = ChangeRecord(
@@ -70,6 +86,7 @@ async def write_change_record(
         entity_id=entity.id,
         change_type=change_type,
         actor_id=actor_id,
+        effective_actor_id=effective_actor_id,
         correlation_id=correlation_id,
         changes=[FieldChange(**c) for c in changes],
         method=method,

@@ -19,7 +19,12 @@ from uuid import uuid4
 from bson import ObjectId
 
 from kernel.changes.collection import write_change_record
-from kernel.context import current_causation_message_id, current_correlation_id, current_depth
+from kernel.context import (
+    current_causation_message_id,
+    current_correlation_id,
+    current_depth,
+    current_effective_actor_id,
+)
 from kernel.entity.computed import evaluate_computed_fields
 from kernel.entity.flexible import validate_flexible_data
 from kernel.message.emit import evaluate_watches_and_emit
@@ -130,7 +135,9 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                                 f"{type(entity).__name__} {entity.id} was modified concurrently"
                             )
 
-                    # Write changes record (INSIDE transaction for atomicity)
+                    # Write changes record (INSIDE transaction for atomicity).
+                    # effective_actor_id flows from the auth-middleware contextvar
+                    # so we capture which associate (not just which token) did this.
                     await write_change_record(
                         entity=entity,
                         change_type="create" if is_new else "update",
@@ -140,6 +147,7 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
                         method_metadata=method_metadata,
                         correlation_id=correlation_id,
                         session=session,
+                        effective_actor_id=current_effective_actor_id.get(),
                     )
 
                     # Evaluate watches and emit messages (INSIDE transaction)

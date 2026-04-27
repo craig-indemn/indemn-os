@@ -33,6 +33,11 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
     # Causation message ID propagation
     if "INDEMN_CAUSATION_MESSAGE_ID" in os.environ:
         env["INDEMN_CAUSATION_MESSAGE_ID"] = os.environ["INDEMN_CAUSATION_MESSAGE_ID"]
+    # Effective-actor-id propagation (Bug #22): the harness sets this to the
+    # associate's actor_id before agent/CLI work, so the changes collection
+    # records which associate acted (vs just "the runtime token's actor").
+    if "INDEMN_EFFECTIVE_ACTOR_ID" in os.environ:
+        env["INDEMN_EFFECTIVE_ACTOR_ID"] = os.environ["INDEMN_EFFECTIVE_ACTOR_ID"]
 
     cmd = ["indemn", *args]
 

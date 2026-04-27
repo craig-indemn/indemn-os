@@ -15,6 +15,7 @@ from kernel.context import (
     current_causation_message_id,
     current_correlation_id,
     current_depth,
+    current_effective_actor_id,
     current_org_id,
 )
 from kernel.observability.tracing import create_span
@@ -86,6 +87,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
         causation_msg = request.headers.get("X-Causation-Message-ID")
         if causation_msg:
             current_causation_message_id.set(causation_msg)
+
+        # X-Effective-Actor-Id: the actor on whose behalf the authenticated
+        # session is acting. Set when the runtime harness asserts which
+        # associate is responsible for this request (Bug #22 forensics).
+        # Validated lightly: the asserted actor must exist and be type
+        # `associate`. We don't gate by who's allowed to assert — the
+        # mechanism is inside the trust boundary (the auth token holder
+        # already has Platform Admin equivalent), and any external caller
+        # can already mutate as Platform Admin without this header. The
+        # header turns an existing capability into something traceable;
+        # it doesn't grant new authority.
+        effective_actor_id_header = request.headers.get("X-Effective-Actor-Id")
+        if effective_actor_id_header:
+            asserted = await Actor.get(effective_actor_id_header)
+            if asserted and asserted.type == "associate":
+                current_effective_actor_id.set(str(asserted.id))
 
         # Load roles once per request for permission checks
         roles = await Role.find({"_id": {"$in": actor.role_ids}}).to_list()
