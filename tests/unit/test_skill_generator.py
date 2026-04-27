@@ -481,3 +481,107 @@ def test_does_not_claim_list_filter_unsupported():
     # truthful. The previous claim that *all arbitrary filters* aren't
     # supported is no longer accurate after the parser landed.
     assert "filtering by arbitrary fields on `list` is not yet supported" not in lower
+
+
+# --- entity_resolve section (Apr 27 entity-resolve work) ---
+
+
+def _resolve_capability(strategies: list):
+    """Build an entity_resolve activation stand-in matching the
+    CapabilityActivation Pydantic shape (capability + config)."""
+    return SimpleNamespace(
+        capability="entity_resolve",
+        config={"strategies": strategies},
+    )
+
+
+def test_resolve_section_emitted_when_capability_activated():
+    """When entity_resolve is in activated_capabilities, the skill output
+    has a Resolve section spelling out the contract."""
+    out = generate_entity_skill(
+        "Company",
+        _definition(
+            activated_capabilities=[
+                _resolve_capability(
+                    [
+                        {"type": "field_equality", "field": "domain", "normalizer": "domain"},
+                        {"type": "fuzzy_string", "field": "name", "threshold": 0.85},
+                    ]
+                )
+            ]
+        ),
+    )
+    assert "### Resolve" in out
+    # Configured fields appear so callers know what identity signals to send.
+    assert "domain" in out
+    assert "name" in out
+
+
+def test_resolve_section_includes_working_cli_example():
+    """The Resolve section emits a copy-pasteable CLI invocation using
+    the configured fields. Agents see the exact shape of `--data`."""
+    out = generate_entity_skill(
+        "Company",
+        _definition(
+            activated_capabilities=[
+                _resolve_capability(
+                    [{"type": "field_equality", "field": "domain"}]
+                )
+            ]
+        ),
+    )
+    # The candidate object uses the configured field name as a placeholder key.
+    # The CLI command name is `entity-resolve` (kernel auto-derives from
+    # cap_name `entity_resolve` via underscore-to-dash).
+    assert "indemn company entity-resolve --data" in out
+    assert '"candidate"' in out
+    assert '"domain"' in out
+
+
+def test_resolve_section_states_contract_explicitly():
+    """The 'never auto-picks' contract is the load-bearing thing to teach.
+    Without it agents will misuse the capability — picking the top-scored
+    candidate silently when it's a fuzzy match."""
+    out = generate_entity_skill(
+        "Company",
+        _definition(
+            activated_capabilities=[
+                _resolve_capability([{"type": "field_equality", "field": "domain"}])
+            ]
+        ),
+    )
+    lower = out.lower()
+    assert "never auto-picks" in lower
+    # Mentions both fuzzy (probabilistic) and tied-at-1.0 (ambiguous) cases
+    # so callers know how to handle each.
+    assert "fuzzy" in lower or "probabilistic" in lower
+    assert "ambiguous" in lower or "tied" in lower
+
+
+def test_no_resolve_section_when_capability_not_activated():
+    """Entities without entity_resolve activated don't get a Resolve section
+    (avoids confusing readers about a capability that's not on for them)."""
+    out = generate_entity_skill(
+        "Plain",
+        _definition(activated_capabilities=[]),
+    )
+    assert "### Resolve" not in out
+
+
+def test_resolve_section_appears_alongside_other_capabilities():
+    """If both auto_classify and entity_resolve are activated, the Resolve
+    section appears after the regular capabilities table."""
+    out = generate_entity_skill(
+        "Email",
+        _definition(
+            activated_capabilities=[
+                _capability("auto_classify"),
+                _resolve_capability([{"type": "fuzzy_string", "field": "subject"}]),
+            ]
+        ),
+    )
+    # Both auto-classify and resolve are present.
+    assert "auto-classify" in out
+    assert "### Resolve" in out
+    # The Resolve subsection comes after the Capabilities table header.
+    assert out.index("## Capabilities") < out.index("### Resolve")
