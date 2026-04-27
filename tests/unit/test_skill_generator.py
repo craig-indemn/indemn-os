@@ -29,6 +29,7 @@ def _field(
     enum_values: list | None = None,
     is_relationship: bool = False,
     relationship_target: str | None = None,
+    is_state_field: bool = False,
     **extra,
 ):
     return SimpleNamespace(
@@ -37,6 +38,7 @@ def _field(
         enum_values=enum_values,
         is_relationship=is_relationship,
         relationship_target=relationship_target,
+        is_state_field=is_state_field,
         **extra,
     )
 
@@ -235,3 +237,208 @@ def test_no_capability_section_when_none_activated():
     out = generate_entity_skill("Email", _definition(activated_capabilities=[]))
     assert "auto-classify" not in out
     assert "fetch-new" not in out
+
+
+# --- NEW: --data JSON-shape examples for create/update (Apr 27 trace) ---
+
+
+def _extract_create_data_payload(out: str) -> str:
+    """Pull the JSON between the single-quotes of `create --data '...'`.
+
+    The skill emits `... create --data '{"k":"v"}' ...` on a markdown table
+    line. We yank back the content between the first `--data '` and the
+    closing `'` so tests can assert against actual JSON shape.
+    """
+    marker = "create --data '"
+    idx = out.find(marker)
+    assert idx >= 0, f"No `create --data` line in skill output:\n{out}"
+    start = idx + len(marker)
+    end = out.find("'", start)
+    assert end > start, f"Unterminated --data quote in skill output:\n{out}"
+    return out[start:end]
+
+
+def _extract_update_data_payload(out: str) -> str:
+    """Pull the JSON between the single-quotes of `update <id> --data '...'`."""
+    marker = "update <id> --data '"
+    idx = out.find(marker)
+    assert idx >= 0, f"No `update <id> --data` line in skill output:\n{out}"
+    start = idx + len(marker)
+    end = out.find("'", start)
+    return out[start:end]
+
+
+def test_create_example_is_valid_json():
+    """The example payload between --data quotes parses as JSON. Without
+    this, an associate copy-pasting the example just gets a CLI error."""
+    import json
+
+    fields = {
+        "title": _field(type="str", required=True),
+        "company": _field(
+            type="objectid", required=True, is_relationship=True, relationship_target="Company"
+        ),
+    }
+    out = generate_entity_skill("Email", _definition(fields=fields))
+    payload = _extract_create_data_payload(out)
+    parsed = json.loads(payload)
+    assert isinstance(parsed, dict)
+
+
+def test_create_example_includes_required_fields():
+    """Every required field appears as a key in the create example."""
+    import json
+
+    fields = {
+        "title": _field(type="str", required=True),
+        "company": _field(
+            type="objectid", required=True, is_relationship=True, relationship_target="Company"
+        ),
+        "internal_notes": _field(type="str", required=False),  # optional — not required
+    }
+    out = generate_entity_skill("Email", _definition(fields=fields))
+    parsed = json.loads(_extract_create_data_payload(out))
+    assert "title" in parsed
+    assert "company" in parsed
+
+
+def test_create_example_excludes_optional_fields():
+    """Optional fields are not in the example payload — keeps it minimal so
+    associates know exactly what's required to instantiate."""
+    import json
+
+    fields = {
+        "title": _field(type="str", required=True),
+        "summary": _field(type="str", required=False),
+        "tags": _field(type="list", required=False),
+    }
+    out = generate_entity_skill("Email", _definition(fields=fields))
+    parsed = json.loads(_extract_create_data_payload(out))
+    assert "title" in parsed
+    assert "summary" not in parsed
+    assert "tags" not in parsed
+
+
+def test_create_example_uses_objectid_hex_for_relationship_fields():
+    """Bug #9 root: agents pass dicts for relationship fields. Example
+    must show a 24-char hex string so they copy that, not `{"name": ...}`.
+    """
+    import json
+    import re
+
+    fields = {
+        "company": _field(
+            type="objectid", required=True, is_relationship=True, relationship_target="Company"
+        ),
+    }
+    out = generate_entity_skill("Email", _definition(fields=fields))
+    parsed = json.loads(_extract_create_data_payload(out))
+    company_value = parsed["company"]
+    # 24-char lowercase hex.
+    assert isinstance(company_value, str)
+    assert re.fullmatch(r"[0-9a-f]{24}", company_value), (
+        f"company placeholder should be 24-char hex string, got: {company_value!r}"
+    )
+
+
+def test_create_example_uses_first_enum_value():
+    """For enum fields (e.g. priority: low|medium|high), the example uses
+    the first allowed value — guaranteed-valid by definition."""
+    import json
+
+    fields = {
+        "priority": _field(type="str", required=True, enum_values=["low", "medium", "high"]),
+    }
+    out = generate_entity_skill("Email", _definition(fields=fields))
+    parsed = json.loads(_extract_create_data_payload(out))
+    assert parsed["priority"] == "low"
+
+
+def test_create_example_excludes_state_field():
+    """The state field is set by the kernel default on create and is rejected
+    on update — including it in the create example would mislead. Bug-prone
+    because state field is required (e.g. `status: required=true,
+    is_state_field=true`) by convention but should not be in the create
+    payload."""
+    import json
+
+    fields = {
+        "title": _field(type="str", required=True),
+        "status": _field(
+            type="str",
+            required=True,
+            is_state_field=True,
+            enum_values=["received", "classified"],
+        ),
+    }
+    out = generate_entity_skill("Email", _definition(fields=fields))
+    parsed = json.loads(_extract_create_data_payload(out))
+    assert "title" in parsed
+    assert "status" not in parsed, "State field must not appear in create example"
+
+
+def test_create_example_uses_iso_datetime_placeholder():
+    """datetime fields get a real ISO 8601 placeholder, not a free-form
+    string the agent has to invent. Pydantic accepts ISO 8601 directly."""
+    import json
+    import re
+
+    fields = {
+        "date": _field(type="datetime", required=True),
+    }
+    out = generate_entity_skill("Meeting", _definition(fields=fields))
+    parsed = json.loads(_extract_create_data_payload(out))
+    # Must be ISO 8601 with timezone (Z or +00:00).
+    assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", parsed["date"])
+
+
+def test_create_example_uses_typed_placeholders():
+    """Each scalar type gets a JSON-typed placeholder (not a string for everything)."""
+    import json
+
+    fields = {
+        "n": _field(type="int", required=True),
+        "ratio": _field(type="float", required=True),
+        "active": _field(type="bool", required=True),
+        "items": _field(type="list", required=True),
+    }
+    out = generate_entity_skill("Sample", _definition(fields=fields))
+    parsed = json.loads(_extract_create_data_payload(out))
+    assert isinstance(parsed["n"], int)
+    assert isinstance(parsed["ratio"], float)
+    assert isinstance(parsed["active"], bool)
+    assert isinstance(parsed["items"], list)
+
+
+def test_update_example_is_valid_json_and_excludes_state_field():
+    """Update example is also a working JSON payload, and never includes
+    the state field — kernel rejects state changes via update endpoint."""
+    import json
+
+    fields = {
+        "title": _field(type="str", required=True),
+        "summary": _field(type="str", required=False),
+        "status": _field(
+            type="str",
+            required=True,
+            is_state_field=True,
+            enum_values=["received", "classified"],
+        ),
+    }
+    out = generate_entity_skill("Email", _definition(fields=fields))
+    payload = _extract_update_data_payload(out)
+    parsed = json.loads(payload)
+    assert isinstance(parsed, dict)
+    assert "status" not in parsed
+
+
+def test_create_example_falls_back_to_braces_when_no_required_fields():
+    """An entity with zero required fields falls back to `{...}` rather
+    than emitting `--data ''` (which is invalid)."""
+    fields = {
+        "summary": _field(type="str", required=False),
+    }
+    out = generate_entity_skill("Note", _definition(fields=fields))
+    # When no required fields, we still want a placeholder so the line is
+    # readable. `{...}` is the canonical placeholder.
+    assert "create --data '{...}'" in out

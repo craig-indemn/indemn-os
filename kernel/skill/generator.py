@@ -10,10 +10,110 @@ fetch_new) were rendered with `<id>` and `--auto` — both invalid for that
 shape. This module's `generate_entity_skill` teaches the actual CLI surface:
 real filter recipes, forward-relationship navigation, ObjectId guidance for
 relationship fields, and correct capability shapes per kind.
+
+Apr 27 Alliance trace surfaced an extension: the auto-generated skill
+documents a generic `--data '{...}'` for create/update but never shows what
+{...} should look like. Associates and humans had to guess the right
+payload. The `_example_*` helpers below render a working example payload
+per command, with required fields populated from type-appropriate
+placeholders (real-shaped 24-hex for ObjectId, first allowed value for
+enums, ISO 8601 for datetimes, etc.).
 """
 
+import json
+
 from kernel.capability import COLLECTION_LEVEL_CAPABILITIES
-from kernel.entity.definition import EntityDefinition
+from kernel.entity.definition import EntityDefinition, FieldDefinition
+
+# Placeholder values per field type. Chosen to be syntactically valid in JSON
+# AND visually obvious as placeholders (e.g. zeroes, a real-shaped ObjectId,
+# a fixed ISO datetime). Associates can copy-paste the example, swap the
+# placeholders for real values, and the payload validates.
+_OBJECTID_PLACEHOLDER = "69eb95f22b0a508618923977"
+_DATETIME_PLACEHOLDER = "2026-04-27T00:00:00Z"
+_DATE_PLACEHOLDER = "2026-04-27"
+
+_TYPE_PLACEHOLDERS: dict[str, object] = {
+    "int": 0,
+    "float": 0.0,
+    "decimal": 0.0,
+    "bool": False,
+    "list": [],
+    "dict": {},
+    "datetime": _DATETIME_PLACEHOLDER,
+    "date": _DATE_PLACEHOLDER,
+    "objectid": _OBJECTID_PLACEHOLDER,
+}
+
+
+def _placeholder_for_field(field_name: str, fdef: FieldDefinition) -> object:
+    """Return a JSON-serializable placeholder value for a field.
+
+    Priority:
+      1. enum_values present → first allowed value (most likely correct)
+      2. type-mapped placeholder (objectid/int/datetime/...)
+      3. fall back to a quoted angle-bracket hint using the field name
+
+    The field name is woven into the str fallback (e.g. `<title>`) so the
+    example self-documents what value the agent should provide.
+    """
+    if fdef.enum_values:
+        return fdef.enum_values[0]
+    if fdef.type in _TYPE_PLACEHOLDERS:
+        return _TYPE_PLACEHOLDERS[fdef.type]
+    # str (and any unknown type): hint with the field name.
+    return f"<{field_name}>"
+
+
+def _build_create_example(definition: EntityDefinition) -> dict:
+    """Build the example payload for a create command.
+
+    Includes every required field with a type-appropriate placeholder so the
+    associate can copy the JSON and swap placeholders for real values.
+    Excludes the state field — the kernel sets it to its default on create
+    and rejects state changes on update.
+    """
+    example: dict = {}
+    for name, fdef in definition.fields.items():
+        if not fdef.required:
+            continue
+        if fdef.is_state_field:
+            # State field is controlled by the state machine, not the create
+            # payload. Including it would mislead.
+            continue
+        example[name] = _placeholder_for_field(name, fdef)
+    return example
+
+
+def _build_update_example(definition: EntityDefinition) -> dict:
+    """Build the example payload for an update command.
+
+    Picks one to three writable, non-state, non-required fields as a
+    representative example. Update bodies are partial patches — showing
+    every field would imply they all need to be sent on every update.
+    """
+    example: dict = {}
+    for name, fdef in definition.fields.items():
+        if fdef.is_state_field:
+            continue
+        # Skip auto-managed fields. Pydantic v2 stores these as fields too,
+        # but they should not appear in user-edit examples.
+        if name in ("_id", "id", "org_id", "version", "created_at", "updated_at", "created_by"):
+            continue
+        example[name] = _placeholder_for_field(name, fdef)
+        if len(example) >= 3:
+            break
+    return example
+
+
+def _format_json_inline(payload: dict) -> str:
+    """Render a dict as compact single-line JSON suitable for `--data '...'`.
+
+    Compact (no spaces around separators) keeps the example fitting in
+    one CLI invocation copy-paste; agents commonly trip up when they have
+    to assemble multi-line JSON inside shell quoting.
+    """
+    return json.dumps(payload, separators=(",", ":"))
 
 
 def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str:
@@ -78,16 +178,21 @@ def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str
     )
 
     # --- Write commands ---
+    create_example = _build_create_example(definition)
+    update_example = _build_update_example(definition)
+
     lines.append("## Writing\n")
     lines.append("| Command | Description |")
     lines.append("|---------|-------------|")
+    create_payload = _format_json_inline(create_example) if create_example else "{...}"
     lines.append(
-        f"| `indemn {slug} create --data '{{...}}'` | "
-        "Create a new record. See **Fields** for required keys. |"
+        f"| `indemn {slug} create --data '{create_payload}'` | "
+        "Create a new record (example shows required fields). |"
     )
+    update_payload = _format_json_inline(update_example) if update_example else "{...}"
     lines.append(
-        f"| `indemn {slug} update <id> --data '{{...}}'` | "
-        "Patch fields. State field is rejected — use `transition` instead. |"
+        f"| `indemn {slug} update <id> --data '{update_payload}'` | "
+        "Patch fields (any subset). State field is rejected — use `transition`. |"
     )
     if definition.state_machine:
         lines.append(
