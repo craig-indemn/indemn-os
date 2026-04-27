@@ -30,8 +30,8 @@ from kernel.api._filter_safelist import parse_filter
 # --- Fixtures ---
 
 
-def _field(annotation):
-    return SimpleNamespace(annotation=annotation)
+def _field(annotation, alias=None):
+    return SimpleNamespace(annotation=annotation, alias=alias)
 
 
 def _cls(model_fields: dict):
@@ -396,3 +396,45 @@ def test_unknown_field_in_multi_field_filter_still_rejected():
         parse_filter(cls, "Email", {"status": "a", "unknown_field": "x"})
     assert exc.value.status_code == 400
     assert "Unknown field" in str(exc.value.detail)
+
+
+# --- Pydantic field aliases (e.g. id <-> _id) ---
+
+
+def test_alias_accepted_and_emits_alias_name():
+    """DomainBaseEntity declares `id: ObjectId = Field(alias="_id")`. Callers
+    naturally pass `_id` because that's the MongoDB-stored field name. The
+    safelist must accept `_id` AND emit it as the dict key so MongoDB matches
+    the stored document. Caught live during Bug #23 verification."""
+    cls = _cls({"id": _field(ObjectId, alias="_id")})
+    hex_id = "69eb95f22b0a508618923977"
+    result = parse_filter(cls, "Company", {"_id": hex_id})
+    assert "_id" in result
+    assert isinstance(result["_id"], ObjectId)
+
+
+def test_canonical_name_also_accepted_and_translated_to_alias():
+    """If the caller uses the Python canonical name (`id`), we accept it but
+    emit the alias (`_id`) — because that's the field name MongoDB indexes."""
+    cls = _cls({"id": _field(ObjectId, alias="_id")})
+    hex_id = "69eb95f22b0a508618923977"
+    result = parse_filter(cls, "Company", {"id": hex_id})
+    assert "_id" in result
+    assert "id" not in result
+
+
+def test_alias_works_with_in_operator():
+    cls = _cls({"id": _field(ObjectId, alias="_id")})
+    hex_a = "69eb95f22b0a508618923977"
+    hex_b = "69eb95f22b0a508618923988"
+    result = parse_filter(cls, "Company", {"_id": {"$in": [hex_a, hex_b]}})
+    assert "_id" in result
+    assert all(isinstance(x, ObjectId) for x in result["_id"]["$in"])
+
+
+def test_field_with_no_alias_uses_canonical_name():
+    """No-alias fields keep their canonical name in the output (no spurious
+    rewriting)."""
+    cls = _cls({"status": _field(str, alias=None)})
+    result = parse_filter(cls, "Email", {"status": "active"})
+    assert result == {"status": "active"}

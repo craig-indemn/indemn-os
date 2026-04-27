@@ -238,7 +238,24 @@ def parse_filter(entity_cls, entity_name: str, filter_input: Any) -> dict:
     if not user_filter:
         return {}
 
-    valid_fields = set(entity_cls.model_fields.keys())
+    # Build a lookup that accepts both canonical Python field names AND
+    # their MongoDB aliases. The most common case: DomainBaseEntity declares
+    # `id: Optional[ObjectId] = Field(default=None, alias="_id")` — callers
+    # naturally pass `_id` because that's what MongoDB stores. Without alias
+    # support the safelist would 400 on every `{"_id": ...}` filter.
+    field_info_by_name: dict = {}
+    mongo_name_by_user_name: dict = {}
+    for canonical_name, info in entity_cls.model_fields.items():
+        alias = getattr(info, "alias", None) or canonical_name
+        # Accept either name from the caller. Always emit the alias (= the
+        # actual MongoDB field name) in the parsed filter so MongoDB matches
+        # the stored document.
+        field_info_by_name[canonical_name] = info
+        field_info_by_name[alias] = info
+        mongo_name_by_user_name[canonical_name] = alias
+        mongo_name_by_user_name[alias] = alias
+    valid_fields = set(field_info_by_name)
+
     parsed: dict = {}
     for field_name, value in user_filter.items():
         # Top-level $-prefixed keys would be logical operators ($or/$and/$not)
@@ -258,7 +275,8 @@ def parse_filter(entity_cls, entity_name: str, filter_input: Any) -> dict:
                 f"Known fields include: {sample}"
                 + ("..." if len(valid_fields) > 10 else ""),
             )
-        annotation = entity_cls.model_fields[field_name].annotation
+        annotation = field_info_by_name[field_name].annotation
+        mongo_name = mongo_name_by_user_name[field_name]
         # Route between three shapes:
         #   1. Extended-JSON tag at leaf ({"$oid": ...} / {"$date": ...})
         #      -> coerce to typed value (handled by _coerce_value_for_field)
@@ -274,7 +292,7 @@ def parse_filter(entity_cls, entity_name: str, filter_input: Any) -> dict:
             and not _is_extended_json_shape(value)
             and all(isinstance(k, str) and k.startswith("$") for k in value)
         ):
-            parsed[field_name] = _parse_operator_value(field_name, annotation, value)
+            parsed[mongo_name] = _parse_operator_value(field_name, annotation, value)
         else:
-            parsed[field_name] = _coerce_value_for_field(field_name, annotation, value)
+            parsed[mongo_name] = _coerce_value_for_field(field_name, annotation, value)
     return parsed
