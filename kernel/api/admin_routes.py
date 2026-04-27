@@ -169,9 +169,13 @@ async def enable_capability(
 async def modify_entity_definition(
     name: str, data: dict, request: Request, actor=Depends(get_current_actor)
 ):
-    """Modify an entity definition — add/remove fields.
+    """Modify an entity definition — add/modify/remove fields.
 
-    Body: {"add_fields": {"field_name": {...}}, "remove_fields": ["field_name"]}
+    Body: {
+      "add_fields": {"field_name": {...}},
+      "modify_fields": {"field_name": {...}},  # full replacement of the field spec
+      "remove_fields": ["field_name"]
+    }
     """
     check_permission(actor, "EntityDefinition", "write")
     org_id = current_org_id.get()
@@ -181,6 +185,7 @@ async def modify_entity_definition(
         raise HTTPException(404, f"Entity definition '{name}' not found")
 
     added = []
+    modified = []
     removed = []
 
     add_fields = data.get("add_fields", {})
@@ -188,13 +193,26 @@ async def modify_entity_definition(
         defn.fields[field_name] = FieldDefinition(**field_spec)
         added.append(field_name)
 
+    modify_fields = data.get("modify_fields", {})
+    for field_name, field_spec in modify_fields.items():
+        if field_name not in defn.fields:
+            raise HTTPException(
+                404,
+                f"Field '{field_name}' is not defined on entity '{name}'. "
+                f"Use add_fields to create it.",
+            )
+        # Full replacement of the field's spec. Reconcile_indexes will see
+        # any unique/indexed/sparse changes and drop+recreate the index.
+        defn.fields[field_name] = FieldDefinition(**field_spec)
+        modified.append(field_name)
+
     remove_fields = data.get("remove_fields", [])
     for field_name in remove_fields:
         if field_name in defn.fields:
             del defn.fields[field_name]
             removed.append(field_name)
 
-    if added or removed:
+    if added or modified or removed:
         from datetime import datetime, timezone
 
         defn.updated_at = datetime.now(timezone.utc)
@@ -228,7 +246,7 @@ async def modify_entity_definition(
             )
             await skill.insert()
 
-    return {"status": "modified", "added": added, "removed": removed}
+    return {"status": "modified", "added": added, "modified": modified, "removed": removed}
 
 
 # --- Entity Migration ---
