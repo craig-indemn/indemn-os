@@ -442,3 +442,42 @@ def test_create_example_falls_back_to_braces_when_no_required_fields():
     # When no required fields, we still want a placeholder so the line is
     # readable. `{...}` is the canonical placeholder.
     assert "create --data '{...}'" in out
+
+
+# --- NEW: list --data filter recipes (Apr 27 list-endpoint filter work) ---
+
+
+def test_teaches_list_data_filter_with_relationship_field_example():
+    """When an entity has a relationship field, the `list --data` example
+    uses that field name so agents see how to filter by relationship —
+    the most common case."""
+    fields = {
+        "company": _field(
+            type="objectid", is_relationship=True, relationship_target="Company"
+        ),
+        "subject": _field(type="str"),
+    }
+    out = generate_entity_skill("Email", _definition(fields=fields))
+    # Should emit a list example using the relationship field.
+    assert "list --data '{\"company\":" in out
+
+
+def test_teaches_list_data_filter_generic_when_no_relationship():
+    """Entities without relationship fields get a generic <field>/<value> example."""
+    fields = {"subject": _field(type="str"), "body": _field(type="str")}
+    out = generate_entity_skill("Note", _definition(fields=fields))
+    # Generic placeholder used.
+    assert "list --data '{\"<field>\":\"<value>\"}'" in out
+
+
+def test_does_not_claim_list_filter_unsupported():
+    """Old skill output said arbitrary filter was 'not yet supported' —
+    after the list-filter feature lands, the disclaimer is updated to
+    'equality match only' (rather than 'unsupported')."""
+    fields = {"subject": _field(type="str")}
+    out = generate_entity_skill("Email", _definition(fields=fields))
+    lower = out.lower()
+    # The disclaimer about *operators* not being supported is fine — that's
+    # truthful. The previous claim that *all arbitrary filters* aren't
+    # supported is no longer accurate after the parser landed.
+    assert "filtering by arbitrary fields on `list` is not yet supported" not in lower

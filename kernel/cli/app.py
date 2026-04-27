@@ -101,12 +101,25 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         limit: int = 20,
         offset: int = 0,
         status: str = None,
+        search: str = None,
+        sort: str = "-created_at",
+        data: str = typer.Option(
+            None,
+            "--data",
+            help='JSON object filtering by entity fields (equality match). '
+            'Example: --data \'{"company":"69eb95f2...","status":"classified"}\'. '
+            "ObjectId fields take 24-char hex strings.",
+        ),
         fmt: str = typer.Option("json", "--format"),
     ):
         """List entities with filters."""
-        params = {"limit": limit, "offset": offset}
+        params = {"limit": limit, "offset": offset, "sort": sort}
         if status:
             params["status"] = status
+        if search:
+            params["search"] = search
+        if data:
+            params["filter"] = data
         result = client.get(f"/api/{slug}s", params=params)
         render(result, fmt)
 
