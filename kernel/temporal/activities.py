@@ -309,9 +309,15 @@ async def preview_bulk_operation(spec_dict: dict) -> dict:
         typed_filter = _coerce_bulk_filter(entity_cls, spec.entity_type, spec.filter_query)
         count = await entity_cls.find_scoped(typed_filter).count()
         sample = await entity_cls.find_scoped(typed_filter).limit(5).to_list()
+        # Sample entities must be JSON-safe before crossing the Temporal data
+        # converter — raw model_dump() returns ObjectId/datetime which choke
+        # Pydantic v2's default JSON encoder. Use the API's to_dict() helper
+        # which knows about ObjectId/datetime/Decimal. Latent bug exposed
+        # by the org_id-context fix in this same change (Bug #32).
+        from kernel.api.serialize import to_dict
         return {
             "count": count,
-            "sample": [e.model_dump() for e in sample],
+            "sample": [to_dict(e) for e in sample],
             "operation": spec.operation,
             "dry_run": True,
         }

@@ -232,6 +232,12 @@ class BulkExecuteWorkflow:
                 preview_bulk_operation,
                 args=[spec_dict],
                 start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=2),
+                    # Filter validation failures are deterministic — don't retry.
+                    non_retryable_error_types=["PermanentProcessingError"],
+                ),
             )
             return {"status": "dry_run", "preview": preview}
 
