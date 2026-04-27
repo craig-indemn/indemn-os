@@ -125,8 +125,16 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         activity_id = f"act-{input.message_id[:12]}"
         skill_paths = _write_skills_to_filesystem(associate.get("skills", []), activity_id)
 
-        # Build agent (thin — deepagents handles everything once backend is set)
-        agent = build_agent(associate=associate, skill_paths=skill_paths, llm_config=llm_config)
+        # Build agent (thin — deepagents handles everything once backend is set).
+        # Bug #3 fix: pass activity_id so the sandbox root_dir is scoped per
+        # activity, preventing cross-invocation tool-cache leaks where one
+        # agent's grep matched another agent's cached results.
+        agent = build_agent(
+            associate=associate,
+            skill_paths=skill_paths,
+            llm_config=llm_config,
+            activity_id=activity_id,
+        )
 
         # Heartbeat before the potentially long agent run
         activity.heartbeat("starting_agent")
@@ -213,6 +221,24 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         except CLIError:
             log.warning("Failed to report message failure via CLI: %s", e)
         raise  # Re-raise so Temporal marks the activity failed
+
+    finally:
+        # Bug #3 fix: tear down the per-activity sandbox directory so /workspace
+        # doesn't accumulate state across invocations on long-running runtimes.
+        # Recomputed from input rather than relying on a closure so this runs
+        # even if an early exception happened before activity_id was bound.
+        activity_dir = f"/workspace/act-{input.message_id[:12]}"
+        if os.path.exists(activity_dir):
+            try:
+                import shutil
+
+                shutil.rmtree(activity_dir)
+            except Exception as cleanup_error:  # noqa: BLE001
+                log.warning(
+                    "Failed to cleanup activity directory %s: %s",
+                    activity_dir,
+                    cleanup_error,
+                )
 
 
 def _setup_gcp_credentials():
