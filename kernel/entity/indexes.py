@@ -7,12 +7,17 @@ creates missing ones, preserves operator-added custom indexes (those not
 matching the kernel naming convention) and the `_id_` primary index.
 
 Closes a kernel gap surfaced 2026-04-27 by the Alliance trace: Meeting
-create returned a 500 with a MongoDB DuplicateKeyError on a stale
-`org_id_1_external_ref_1` unique index. The current Meeting entity
-definition does not declare unique on external_ref — the index was a
-relic of a prior version of the definition. The kernel only ever ADDED
-indexes (idempotent `create_index`); it never removed ones the operator
-had stopped requesting. This module fixes that.
+create returned a 500 with a MongoDB DuplicateKeyError on the
+`org_id_1_external_ref_1` unique index. external_ref is nullable (manual
+meetings have no external system source), but a unique index treats
+explicit null as a value, so only one manual meeting per org was allowed.
+
+The fix is a partial filter index: `sparse=True` on a FieldDefinition
+translates to `partialFilterExpression: {<field>: {$type: <bson_type>}}`
+so the index only covers documents where the field is set to a value of
+the declared type — null and missing both get excluded. (Plain MongoDB
+`sparse=True` only excludes MISSING; null still gets indexed because
+Pydantic explicitly writes null fields.)
 
 Naming convention: the kernel uses MongoDB's default index-name pattern
 (`<field>_<direction>(_<field>_<direction>)*`) and always prefixes with
@@ -23,9 +28,27 @@ not. Custom names are preserved; auto-pattern names are reconciled.
 
 import logging
 
-from kernel.entity.definition import EntityDefinition
+from kernel.entity.definition import EntityDefinition, FieldDefinition
 
 logger = logging.getLogger(__name__)
+
+
+# Map FieldDefinition.type strings to MongoDB BSON $type names.
+# Used to build a partialFilterExpression that excludes both null and
+# missing for fields with sparse=True. See module docstring for why
+# `sparse=True` alone isn't sufficient.
+_BSON_TYPE_FOR_FIELD: dict[str, str] = {
+    "str": "string",
+    "int": "long",
+    "float": "double",
+    "decimal": "decimal",
+    "bool": "bool",
+    "datetime": "date",
+    "date": "date",
+    "objectid": "objectId",
+    "list": "array",
+    "dict": "object",
+}
 
 
 def _kernel_index_name(keys: list[tuple[str, int]]) -> str:
@@ -38,37 +61,74 @@ def _kernel_index_name(keys: list[tuple[str, int]]) -> str:
     return "_".join(f"{f}_{d}" for f, d in keys)
 
 
+def _partial_filter_for_field(fname: str, fdef: FieldDefinition) -> dict | None:
+    """Translate a FieldDefinition's `sparse=True` into a MongoDB
+    partialFilterExpression using the field's declared type.
+
+    Plain `sparse=True` only excludes MISSING fields, not null ones — but
+    Pydantic writes `field: null` explicitly when an Optional field is
+    unset, so plain sparse never helps. A `$type` filter excludes both
+    null AND missing because null is not of any concrete type.
+
+    Returns None if sparse=False or the field type isn't known to the
+    BSON map; the caller should then fall back to no filter.
+    """
+    if not getattr(fdef, "sparse", False):
+        return None
+    bson_type = _BSON_TYPE_FOR_FIELD.get(fdef.type)
+    if not bson_type:
+        return None
+    return {fname: {"$type": bson_type}}
+
+
 def _desired_indexes(defn: EntityDefinition) -> dict[str, dict]:
     """Compute the set of indexes the kernel would create for this entity.
 
     Returns name -> spec where spec has `keys` (list of (field, dir)),
-    `unique` (bool), and `sparse` (bool). Names are deterministic from the
-    definition so we can diff against `coll.list_indexes()`.
+    `unique` (bool), and `partialFilter` (dict | None — partialFilterExpression
+    when the field is sparse). Names are deterministic from the definition
+    so we can diff against `coll.list_indexes()`.
+
+    The reason we use partialFilterExpression instead of `sparse=True`:
+    plain sparse excludes only MISSING fields, but Pydantic writes nulls
+    explicitly. A $type partial filter excludes both null and missing.
     """
     desired: dict[str, dict] = {}
 
     # Always-on org_id index (every entity collection scopes by org).
     keys = [("org_id", 1)]
-    desired[_kernel_index_name(keys)] = {"keys": keys, "unique": False, "sparse": False}
+    desired[_kernel_index_name(keys)] = {"keys": keys, "unique": False, "partialFilter": None}
 
     # Compound indexes from the definition's IndexDef list. Always prepend
     # org_id so cross-org queries cannot accidentally use the index path.
+    # Compound indexes don't carry per-field type metadata here, so they
+    # don't get a partial filter — operators wanting a partial compound
+    # index can use the future explicit-partial API (not built yet).
     for idx in defn.indexes:
         keys = [("org_id", 1)] + list(idx.fields)
         desired[_kernel_index_name(keys)] = {
             "keys": keys,
             "unique": idx.unique,
-            "sparse": getattr(idx, "sparse", False),
+            "partialFilter": None,
         }
 
-    # Field-level flags become (org_id, field) compound indexes.
+    # Field-level flags become (org_id, field) compound indexes. Sparse
+    # field flags translate to a partial filter on the field.
     for fname, fdef in defn.fields.items():
         keys = [("org_id", 1), (fname, 1)]
-        sparse = getattr(fdef, "sparse", False)
+        partial = _partial_filter_for_field(fname, fdef)
         if fdef.unique:
-            desired[_kernel_index_name(keys)] = {"keys": keys, "unique": True, "sparse": sparse}
+            desired[_kernel_index_name(keys)] = {
+                "keys": keys,
+                "unique": True,
+                "partialFilter": partial,
+            }
         elif fdef.indexed:
-            desired[_kernel_index_name(keys)] = {"keys": keys, "unique": False, "sparse": sparse}
+            desired[_kernel_index_name(keys)] = {
+                "keys": keys,
+                "unique": False,
+                "partialFilter": partial,
+            }
 
     return desired
 
@@ -76,16 +136,17 @@ def _desired_indexes(defn: EntityDefinition) -> dict[str, dict]:
 def _options_match(existing: dict, desired_spec: dict) -> bool:
     """True if an existing MongoDB index has the same options as the desired spec.
 
-    Compares `unique` and `sparse` flags. MongoDB's `list_indexes()` omits
-    these keys when they're false, so missing == False. Other options
-    (collation, partial filter expressions, TTL) are not currently managed
-    by the kernel, so we don't compare them.
+    Compares `unique` flag and `partialFilterExpression`. MongoDB's
+    `list_indexes()` omits these keys when they're absent. Other options
+    (collation, TTL, sparse-without-partial) are not currently managed
+    by the kernel.
     """
     existing_unique = bool(existing.get("unique", False))
-    existing_sparse = bool(existing.get("sparse", False))
+    existing_partial = existing.get("partialFilterExpression")
+    desired_partial = desired_spec.get("partialFilter")
     return (
         existing_unique == desired_spec["unique"]
-        and existing_sparse == desired_spec["sparse"]
+        and existing_partial == desired_partial
     )
 
 
@@ -135,8 +196,11 @@ async def reconcile_indexes(coll, defn: EntityDefinition) -> dict:
     logger.info(
         "reconcile_indexes(%s): existing=%s desired=%s",
         coll.name,
-        {n: {"unique": v.get("unique"), "sparse": v.get("sparse")} for n, v in current_by_name.items()},
-        {n: {"unique": v["unique"], "sparse": v["sparse"]} for n, v in desired.items()},
+        {
+            n: {"unique": v.get("unique"), "partialFilter": v.get("partialFilterExpression")}
+            for n, v in current_by_name.items()
+        },
+        {n: {"unique": v["unique"], "partialFilter": v.get("partialFilter")} for n, v in desired.items()},
     )
 
     summary: dict[str, list[str]] = {"created": [], "dropped": [], "preserved": []}
@@ -167,13 +231,18 @@ async def reconcile_indexes(coll, defn: EntityDefinition) -> dict:
             # Already there with matching options — leave it alone.
             continue
         try:
-            await coll.create_index(
-                spec["keys"],
-                unique=spec["unique"],
-                sparse=spec["sparse"],
-            )
+            kwargs: dict = {"unique": spec["unique"]}
+            if spec.get("partialFilter"):
+                kwargs["partialFilterExpression"] = spec["partialFilter"]
+            await coll.create_index(spec["keys"], **kwargs)
             summary["created"].append(name)
-            logger.info("Created kernel index %s on %s", name, coll.name)
+            logger.info(
+                "Created kernel index %s on %s (unique=%s, partialFilter=%s)",
+                name,
+                coll.name,
+                spec["unique"],
+                spec.get("partialFilter"),
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("Could not create index %s on %s: %s", name, coll.name, e)
 

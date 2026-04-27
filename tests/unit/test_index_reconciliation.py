@@ -230,7 +230,7 @@ async def test_creates_missing_org_id_index():
     defn = _definition()
     summary = await reconcile_indexes(coll, defn)
     assert "org_id_1" in summary["created"]
-    coll.create_index.assert_called_once_with([("org_id", 1)], unique=False, sparse=False)
+    coll.create_index.assert_called_once_with([("org_id", 1)], unique=False)
 
 
 @pytest.mark.asyncio
@@ -243,7 +243,7 @@ async def test_creates_missing_unique_field_index():
     defn = _definition(fields={"email": _field(unique=True)})
     summary = await reconcile_indexes(coll, defn)
     assert "org_id_1_email_1" in summary["created"]
-    coll.create_index.assert_called_once_with([("org_id", 1), ("email", 1)], unique=True, sparse=False)
+    coll.create_index.assert_called_once_with([("org_id", 1), ("email", 1)], unique=True)
 
 
 @pytest.mark.asyncio
@@ -304,52 +304,68 @@ async def test_summary_keys_present_even_when_empty():
 # --- Sparse and option-mismatch (Apr 27 Alliance trace second-order finding) ---
 
 
-def test_desired_passes_through_sparse_on_field():
-    """Field-level sparse=True flows into the desired index spec."""
-    fields = {"external_ref": _field(unique=True, sparse=True)}
+def test_desired_translates_field_sparse_to_partial_filter_by_type():
+    """Field-level sparse=True translates to a partialFilterExpression that
+    excludes both null and missing — using the field's BSON $type.
+    """
+    fields = {"external_ref": _field(type="str", unique=True, sparse=True)}
     desired = _desired_indexes(_definition(fields=fields))
     spec = desired["org_id_1_external_ref_1"]
     assert spec["unique"] is True
-    assert spec["sparse"] is True
+    assert spec["partialFilter"] == {"external_ref": {"$type": "string"}}
 
 
-def test_desired_passes_through_sparse_on_indexdef():
+def test_desired_partial_filter_uses_correct_bson_type_per_field_type():
+    """Each scalar field type maps to its corresponding BSON $type."""
+    fields = {
+        "ref": _field(type="objectid", unique=True, sparse=True),
+    }
+    desired = _desired_indexes(_definition(fields=fields))
+    assert desired["org_id_1_ref_1"]["partialFilter"] == {"ref": {"$type": "objectId"}}
+
+
+def test_desired_indexdef_does_not_get_partial_filter():
+    """Compound IndexDef indexes don't carry per-field type metadata in
+    the spec, so they're not translated to partial filters in this build.
+    The IndexDef.sparse flag is recorded but no partialFilter emitted."""
     indexes = [_index_def(fields=[("external_ref", 1)], unique=True, sparse=True)]
     desired = _desired_indexes(_definition(indexes=indexes))
     spec = desired["org_id_1_external_ref_1"]
     assert spec["unique"] is True
-    assert spec["sparse"] is True
+    assert spec["partialFilter"] is None
 
 
-def test_desired_sparse_defaults_false():
-    """Fields/indexes that don't specify sparse default to non-sparse."""
-    fields = {"email": _field(unique=True)}
+def test_desired_partial_filter_none_when_field_not_sparse():
+    """Non-sparse fields don't get a partial filter."""
+    fields = {"email": _field(type="str", unique=True)}
     desired = _desired_indexes(_definition(fields=fields))
-    assert desired["org_id_1_email_1"]["sparse"] is False
+    assert desired["org_id_1_email_1"]["partialFilter"] is None
 
 
 @pytest.mark.asyncio
-async def test_create_pass_passes_sparse_to_motor():
-    """When the definition requests sparse, create_index gets sparse=True."""
+async def test_create_pass_passes_partial_filter_to_motor():
+    """When the field is sparse, create_index gets partialFilterExpression
+    instead of (the broken-for-explicit-null) sparse=True."""
     existing = [{"name": "_id_", "key": {"_id": 1}}]
     coll = _fake_collection(existing)
-    fields = {"external_ref": _field(unique=True, sparse=True)}
+    fields = {"external_ref": _field(type="str", unique=True, sparse=True)}
     defn = _definition(fields=fields)
     await reconcile_indexes(coll, defn)
-    # Two create calls expected — org_id_1 (non-sparse) and the sparse-unique one.
     create_calls = coll.create_index.call_args_list
-    sparse_calls = [c for c in create_calls if c.kwargs.get("sparse") is True]
-    assert len(sparse_calls) == 1, f"Expected one sparse create call, got: {create_calls}"
-    assert sparse_calls[0].args[0] == [("org_id", 1), ("external_ref", 1)]
-    assert sparse_calls[0].kwargs["unique"] is True
+    partial_calls = [c for c in create_calls if "partialFilterExpression" in c.kwargs]
+    assert len(partial_calls) == 1, f"Expected one partial-filter create, got: {create_calls}"
+    assert partial_calls[0].args[0] == [("org_id", 1), ("external_ref", 1)]
+    assert partial_calls[0].kwargs["unique"] is True
+    assert partial_calls[0].kwargs["partialFilterExpression"] == {"external_ref": {"$type": "string"}}
+    # Ensure the kernel does NOT send sparse= alongside (MongoDB rejects both).
+    assert "sparse" not in partial_calls[0].kwargs
 
 
 @pytest.mark.asyncio
-async def test_drops_and_recreates_index_when_sparse_flips_from_false_to_true():
-    """The Meeting case after the sparse-flag fix: existing
-    `org_id_1_external_ref_1` is unique-not-sparse; the new definition asks
-    for unique-and-sparse. Same name, different options. Reconciler must
-    drop+recreate, not preserve.
+async def test_drops_and_recreates_index_when_partial_filter_flips_in():
+    """The Meeting case: existing `org_id_1_external_ref_1` has no
+    partialFilterExpression; the new definition's sparse flag adds one.
+    Reconciler must drop+recreate, not preserve.
     """
     existing = [
         {"name": "_id_", "key": {"_id": 1}},
@@ -358,21 +374,24 @@ async def test_drops_and_recreates_index_when_sparse_flips_from_false_to_true():
             "name": "org_id_1_external_ref_1",
             "key": {"org_id": 1, "external_ref": 1},
             "unique": True,
-            # sparse not set in MongoDB metadata → defaults to false
+            # No partialFilterExpression set → defaults to None
         },
     ]
     coll = _fake_collection(existing)
-    fields = {"external_ref": _field(unique=True, sparse=True)}
+    fields = {"external_ref": _field(type="str", unique=True, sparse=True)}
     defn = _definition(fields=fields)
     summary = await reconcile_indexes(coll, defn)
     # Drop happened.
     assert "org_id_1_external_ref_1" in summary["dropped"]
     coll.drop_index.assert_called_once_with("org_id_1_external_ref_1")
-    # Recreate happened — with sparse=True this time.
+    # Recreate happened — with partialFilterExpression this time.
     create_calls = coll.create_index.call_args_list
     rebuild = [c for c in create_calls if c.args[0] == [("org_id", 1), ("external_ref", 1)]]
     assert len(rebuild) == 1
-    assert rebuild[0].kwargs == {"unique": True, "sparse": True}
+    assert rebuild[0].kwargs == {
+        "unique": True,
+        "partialFilterExpression": {"external_ref": {"$type": "string"}},
+    }
 
 
 @pytest.mark.asyncio
@@ -397,9 +416,9 @@ async def test_drops_and_recreates_when_unique_flips():
 
 
 @pytest.mark.asyncio
-async def test_preserves_sparse_index_when_options_already_match():
-    """Idempotency carries through to options — a sparse-unique index that
-    matches the desired spec is preserved without drop+recreate churn."""
+async def test_preserves_partial_filter_index_when_options_already_match():
+    """Idempotency carries through to options — a partial-filter unique
+    index that matches the desired spec is preserved without churn."""
     existing = [
         {"name": "_id_", "key": {"_id": 1}},
         {"name": "org_id_1", "key": {"org_id": 1}},
@@ -407,11 +426,11 @@ async def test_preserves_sparse_index_when_options_already_match():
             "name": "org_id_1_external_ref_1",
             "key": {"org_id": 1, "external_ref": 1},
             "unique": True,
-            "sparse": True,
+            "partialFilterExpression": {"external_ref": {"$type": "string"}},
         },
     ]
     coll = _fake_collection(existing)
-    fields = {"external_ref": _field(unique=True, sparse=True)}
+    fields = {"external_ref": _field(type="str", unique=True, sparse=True)}
     defn = _definition(fields=fields)
     summary = await reconcile_indexes(coll, defn)
     assert "org_id_1_external_ref_1" in summary["preserved"]
