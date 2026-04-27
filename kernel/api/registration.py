@@ -2,6 +2,15 @@
 
 Every entity type gets CRUD + transition + @exposed methods + capability routes.
 This is the self-evidence property: define an entity, its API exists.
+
+Bug #29 (os-bugs-and-shakeout): replacing an entity definition (modify field
+types, change enum values, etc.) used to leave the OLD route closures in
+`app.router.routes`. FastAPI matches the first registered route, so write
+operations kept validating against the stale class — silent correctness
+bug. The fix: `_evict_routes_for_prefix()` removes any route whose path
+matches `/api/{slug}` or starts with `/api/{slug}/` before
+`app.include_router()` re-adds the new ones. This makes live
+entity-definition iteration safe without a process restart.
 """
 
 import asyncio
@@ -12,6 +21,30 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
+
+
+def _evict_routes_for_prefix(app, prefix: str) -> int:
+    """Remove all routes from `app.router.routes` whose path matches `prefix`
+    or starts with `prefix + "/"`. Returns the number of evicted routes.
+
+    `prefix` is the unslashed entity prefix, e.g. `/api/companys`. The
+    matched routes include `/api/companys/`, `/api/companys/{entity_id}`,
+    `/api/companys/bulk`, etc. Other prefixes (`/api/companies` — different
+    entity, or `/api/companys2` — different entity that happens to start
+    with the same letters) are NOT matched because the check requires a
+    `/` separator after the prefix.
+    """
+    suffix_marker = prefix + "/"
+    kept = []
+    evicted = 0
+    for r in app.router.routes:
+        path = getattr(r, "path", None)
+        if path is not None and (path == prefix or path.startswith(suffix_marker)):
+            evicted += 1
+            continue
+        kept.append(r)
+    app.router.routes = kept
+    return evicted
 
 
 def _fire_dispatch(created_messages):
@@ -207,6 +240,10 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
     # Register integration dispatch route
     _register_integration_route(router, entity_cls, entity_name)
 
+    # Bug #29: evict stale routes from a prior registration of this entity
+    # before include_router (which appends, not replaces). Without this,
+    # write operations keep validating against the stale dynamic class.
+    _evict_routes_for_prefix(app, f"/api/{slug}")
     app.include_router(router)
 
 
