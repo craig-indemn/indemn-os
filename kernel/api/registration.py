@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
+from kernel.db import ENTITY_REGISTRY
 
 
 def _evict_routes_for_prefix(app, prefix: str) -> int:
@@ -86,83 +87,16 @@ def _coerce_objectid_fields(entity_cls, data: dict) -> dict:
     return data
 
 
-def _is_objectid_field(field_info) -> bool:
-    """True if the given Pydantic field is typed as ObjectId (or Optional[ObjectId]).
-
-    Used by the list-filter parser to coerce hex strings to bson.ObjectId so
-    queries like `{"company": "69eb..."}` actually match the stored documents.
-    """
-    import typing
-
-    from bson import ObjectId as OId
-
-    annotation = field_info.annotation
-    origin = getattr(annotation, "__origin__", None)
-    args = getattr(annotation, "__args__", ())
-    if origin is typing.Union and type(None) in args:
-        annotation = next(a for a in args if a is not type(None))
-    return annotation is OId
-
-
 def _parse_list_filter(entity_cls, entity_name: str, filter_json: str) -> dict:
-    """Parse and validate a `--data`/`?filter=` JSON object for the list endpoint.
+    """Thin wrapper around the shared filter safelist for the list endpoint.
 
-    Returns a MongoDB filter dict ready to merge into the find_scoped() query.
-
-    Constraints (raise HTTPException 400 on violation):
-      - Must be a JSON object (top-level dict).
-      - Every key must be a defined field on the entity (safelist via
-        `entity_cls.model_fields`). Unknown fields are rejected so a typo
-        doesn't silently match nothing.
-      - Values are equality matches today. ObjectId fields auto-coerce
-        24-char hex strings to bson.ObjectId so the equality matches the
-        stored value. Operator dicts (`{"$in": [...]}`, `{"$gte": ...}`)
-        are not supported by this endpoint yet — the bulk-delete operator-filter
-        bug (#23) is tracked separately and a unified safelist of supported
-        operators will land with that fix.
+    Kept as a named function for back-compat with existing tests + import
+    sites; the actual parsing logic lives in `kernel/api/_filter_safelist.py`
+    and is shared with the per-entity bulk route.
     """
-    import orjson
-    from bson import ObjectId as OId
+    from kernel.api._filter_safelist import parse_filter
 
-    try:
-        user_filter = orjson.loads(filter_json)
-    except Exception as e:
-        raise HTTPException(400, f"Invalid JSON in filter: {e}")
-
-    if not isinstance(user_filter, dict):
-        raise HTTPException(400, "filter must be a JSON object (e.g. {\"field\": \"value\"})")
-
-    valid_fields = set(entity_cls.model_fields.keys())
-    parsed: dict = {}
-    for field_name, value in user_filter.items():
-        if field_name not in valid_fields:
-            sample = ", ".join(sorted(valid_fields)[:10])
-            raise HTTPException(
-                400,
-                f"Unknown field '{field_name}' on {entity_name}. "
-                f"Known fields include: {sample}"
-                + ("..." if len(valid_fields) > 10 else ""),
-            )
-        # Reject operator dicts (forward-compat: same parser will be extended).
-        if isinstance(value, dict) and any(k.startswith("$") for k in value):
-            raise HTTPException(
-                400,
-                f"Operator filters (e.g. $in, $gte) are not supported on list yet. "
-                f"Use equality match for '{field_name}' or fetch + filter client-side.",
-            )
-        # ObjectId hex-string coercion for relationship fields.
-        field_info = entity_cls.model_fields[field_name]
-        if _is_objectid_field(field_info) and isinstance(value, str):
-            try:
-                value = OId(value)
-            except Exception:
-                raise HTTPException(
-                    400,
-                    f"Field '{field_name}' is an ObjectId; expected a 24-char hex "
-                    f"string, got: {value!r}",
-                )
-        parsed[field_name] = value
-    return parsed
+    return parse_filter(entity_cls, entity_name, filter_json)
 
 
 def register_entity_routes(app, entity_name: str, entity_cls: type):
@@ -493,6 +427,20 @@ def _register_bulk_route(router, entity_name: str):
         check_permission(actor, entity_name, "write")
         spec["entity_type"] = entity_name
         spec["org_id"] = str(current_org_id.get())
+
+        # Validate filter_query at the API boundary so callers get 400 with
+        # field-level error detail BEFORE the workflow is even started, instead
+        # of an opaque workflow failure to chase down. The activity re-runs
+        # parse_filter with the raw dict to produce typed values for MongoDB
+        # — bson.ObjectId / datetime don't cross the Temporal boundary cleanly,
+        # so we keep the typed coercion out of workflow input. (Bug #23.)
+        if spec.get("filter_query") is not None:
+            from kernel.api._filter_safelist import parse_filter
+
+            entity_cls = ENTITY_REGISTRY.get(entity_name)
+            if entity_cls is not None:
+                parse_filter(entity_cls, entity_name, spec["filter_query"])
+
         from kernel.temporal.client import get_temporal_client
         from kernel.temporal.workflows import BulkExecuteWorkflow
 

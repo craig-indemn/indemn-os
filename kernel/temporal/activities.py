@@ -149,6 +149,30 @@ async def fail_message(message_id: str, error: str) -> None:
 # --- Bulk operation activities ---
 
 
+def _coerce_bulk_filter(entity_cls, entity_type: str, filter_query: dict) -> dict:
+    """Apply parse_filter to a bulk activity's raw filter_query (Bug #23).
+
+    The API boundary validates the filter shape (and 400s on bad input
+    before the workflow starts), but typed values like bson.ObjectId and
+    datetime don't cross the Temporal serialization boundary cleanly —
+    so the workflow input carries the raw JSON-safe dict and the activity
+    re-runs the parser to get MongoDB-typed values for find_scoped().
+
+    On failure (which should be impossible if the API validated), raise
+    PermanentProcessingError so Temporal doesn't retry a bad filter forever.
+    """
+    from fastapi import HTTPException
+
+    from kernel.api._filter_safelist import parse_filter
+
+    try:
+        return parse_filter(entity_cls, entity_type, filter_query)
+    except HTTPException as e:
+        raise PermanentProcessingError(
+            f"Invalid bulk filter for {entity_type}: {e.detail}"
+        )
+
+
 @activity.defn
 async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
     """Process one batch of a bulk operation within a MongoDB transaction."""
@@ -170,8 +194,11 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
 
         # Query entities
         if spec.filter_query:
+            typed_filter = _coerce_bulk_filter(
+                entity_cls, spec.entity_type, spec.filter_query
+            )
             entities = (
-                await entity_cls.find_scoped(spec.filter_query)
+                await entity_cls.find_scoped(typed_filter)
                 .skip(offset)
                 .limit(spec.batch_size)
                 .to_list()
@@ -276,8 +303,12 @@ async def preview_bulk_operation(spec_dict: dict) -> dict:
         return {"count": 0, "error": f"Entity type {spec.entity_type} not found"}
 
     if spec.filter_query:
-        count = await entity_cls.find_scoped(spec.filter_query).count()
-        sample = await entity_cls.find_scoped(spec.filter_query).limit(5).to_list()
+        # Restore org_id context for find_scoped (same reason as process_bulk_batch)
+        if spec.org_id:
+            current_org_id.set(ObjectId(spec.org_id))
+        typed_filter = _coerce_bulk_filter(entity_cls, spec.entity_type, spec.filter_query)
+        count = await entity_cls.find_scoped(typed_filter).count()
+        sample = await entity_cls.find_scoped(typed_filter).limit(5).to_list()
         return {
             "count": count,
             "sample": [e.model_dump() for e in sample],

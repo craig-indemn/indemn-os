@@ -184,11 +184,36 @@ class BulkOperationSpec:
 
 @dataclass
 class BulkResult:
-    status: str  # completed, completed_with_errors, failed
-    total: int
-    processed: int
-    skipped: int
+    """Counts surfaced from BulkExecuteWorkflow (Bug #24).
+
+    matched   = how many entities matched the filter / source_data length.
+                A bulk-delete with no matches has matched == 0, which the
+                operator needs to see — previously this looked indistinguishable
+                from a successful delete in the status endpoint.
+    succeeded = how many save_tracked()/delete_one calls actually committed.
+    errored   = how many entities raised StateMachine/Validation/Permission
+                errors (= len(errors)). The full per-entity error records
+                live in `errors` for diagnosis.
+    """
+
+    status: str  # completed | completed_no_match | completed_with_errors | failed | dry_run
+    matched: int
+    succeeded: int
+    errored: int
     errors: list
+
+
+def summarize_bulk_status(matched: int, errors: list) -> str:
+    """Pick the right terminal status string given the counts (Bug #24).
+
+    Extracted from BulkExecuteWorkflow.run so unit tests can exercise the
+    status-determination logic without spinning up a workflow environment.
+    """
+    if matched == 0:
+        return "completed_no_match"
+    if errors:
+        return "completed_with_errors"
+    return "completed"
 
 
 @workflow.defn
@@ -210,14 +235,14 @@ class BulkExecuteWorkflow:
             )
             return {"status": "dry_run", "preview": preview}
 
-        processed = 0
-        total_errors = []
-        total_count = 0
+        succeeded = 0
+        all_errors: list = []
+        matched = 0
 
         while True:
             batch_result = await workflow.execute_activity(
                 process_bulk_batch,
-                args=[spec_dict, processed],
+                args=[spec_dict, succeeded + len(all_errors)],
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=RetryPolicy(
                     maximum_attempts=3,
@@ -226,31 +251,21 @@ class BulkExecuteWorkflow:
                 ),
             )
 
-            processed += batch_result["batch_processed"]
-            total_count = batch_result.get("total_count", total_count)
-            total_errors.extend(batch_result.get("errors", []))
+            succeeded += batch_result["batch_processed"]
+            matched = batch_result.get("total_count", matched)
+            all_errors.extend(batch_result.get("errors", []))
 
             if batch_result["done"]:
                 break
 
-            workflow.logger.info(f"Bulk progress: {processed}/{total_count}")
+            workflow.logger.info(f"Bulk progress: succeeded={succeeded} matched={matched}")
 
-        status = "completed"
-        if total_errors:
-            status = "completed_with_errors"
-
-        result = BulkResult(
-            status=status,
-            total=total_count,
-            processed=processed,
-            skipped=len(total_errors),
-            errors=total_errors,
-        )
-
+        # Distinguish "did nothing because filter matched no entities" from
+        # "completed with errors" from "completed cleanly" — Bug #24.
         return {
-            "status": result.status,
-            "total": result.total,
-            "processed": result.processed,
-            "skipped": result.skipped,
-            "errors": result.errors,
+            "status": summarize_bulk_status(matched, all_errors),
+            "matched": matched,
+            "succeeded": succeeded,
+            "errored": len(all_errors),
+            "errors": all_errors,
         }
