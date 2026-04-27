@@ -75,6 +75,13 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup():
+        # Configure structured JSON logging at INFO so kernel info messages
+        # (index reconciliation, registration, etc.) reach Grafana Cloud /
+        # Railway logs. Previously the API service inherited Python's
+        # default WARNING level and silently dropped all kernel.* logs.
+        from kernel.observability.logging import setup_logging
+
+        setup_logging()
         init_tracing()
 
         # Import adapters and capabilities so they self-register
