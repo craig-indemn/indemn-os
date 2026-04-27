@@ -17,6 +17,7 @@ import logging
 import os
 from datetime import timedelta
 
+from completion_logic import agent_did_useful_work
 from harness.agent import build_agent
 from harness_common.cli import CLIError, indemn
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
@@ -192,17 +193,35 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
 
         log.info("Agent completed: %d messages, tools=%s", len(messages), tools_used)
 
-        # Mark the message complete — harness owns completion [Q1]
-        indemn("queue", "complete", input.message_id)
+        # Bug #2: detect agent that ran-but-did-nothing. Without this check the
+        # harness used to silently mark complete even when the agent produced
+        # no output and made no mutating CLI calls — message stayed in
+        # `processing` indefinitely (Apr 24 GR Little Extractor trace).
+        did_useful_work, no_work_reason = agent_did_useful_work(messages)
 
         # Clean up causation env var
         os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
 
-        return AgentExecutionResult(
-            status="complete",
-            iterations=len(messages),
-            tools_used=tools_used,
-        )
+        if did_useful_work:
+            indemn("queue", "complete", input.message_id)
+            return AgentExecutionResult(
+                status="complete",
+                iterations=len(messages),
+                tools_used=tools_used,
+            )
+        else:
+            log.warning(
+                "Agent produced no useful work for message %s: %s",
+                input.message_id,
+                no_work_reason,
+            )
+            indemn("queue", "fail", input.message_id, "--reason", no_work_reason)
+            return AgentExecutionResult(
+                status="failed",
+                iterations=len(messages),
+                tools_used=tools_used,
+                error=no_work_reason,
+            )
 
     except Exception as e:
         # Clean up causation env var
