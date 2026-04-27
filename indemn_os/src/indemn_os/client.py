@@ -33,6 +33,13 @@ class CLIClient:
         causation = os.environ.get("INDEMN_CAUSATION_MESSAGE_ID")
         if causation:
             h["X-Causation-Message-ID"] = causation
+        # Effective actor id (Bug #22 forensics): the runtime harness sets
+        # this env var to the associate it's running on behalf of, so the
+        # changes collection can record which associate acted — separate
+        # from the auth token's actor identity.
+        effective_actor = os.environ.get("INDEMN_EFFECTIVE_ACTOR_ID")
+        if effective_actor:
+            h["X-Effective-Actor-Id"] = effective_actor
         return h
 
     def _handle_error(self, response: httpx.Response):

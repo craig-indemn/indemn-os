@@ -11,6 +11,15 @@ from bson import ObjectId
 
 current_org_id: ContextVar[Optional[ObjectId]] = ContextVar("current_org_id", default=None)
 current_actor_id: ContextVar[Optional[str]] = ContextVar("current_actor_id", default=None)
+# The associate (or other actor) on whose behalf the authenticated session is
+# acting. Set when an inside-trust-boundary caller (typically the runtime
+# harness) asserts via X-Effective-Actor-Id header that this request runs for
+# a specific associate, even though the auth token belongs to the runtime /
+# Platform Admin. Without this, every associate's mutations look identical
+# in the changes collection (Bug #22 forensics gap).
+current_effective_actor_id: ContextVar[Optional[str]] = ContextVar(
+    "current_effective_actor_id", default=None
+)
 current_correlation_id: ContextVar[Optional[str]] = ContextVar(
     "current_correlation_id", default=None
 )
