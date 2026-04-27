@@ -167,6 +167,12 @@ async def trace_entity(
                 "timestamp": c.timestamp.isoformat() if c.timestamp else None,
                 "type": c.change_type,
                 "actor_id": str(c.actor_id) if c.actor_id else None,
+                # The associate the harness was running on behalf of; null
+                # means the mutation came from outside a harness (CLI / UI /
+                # direct API) so actor_id is the relevant identity.
+                "effective_actor_id": (
+                    str(c.effective_actor_id) if c.effective_actor_id else None
+                ),
                 "correlation_id": c.correlation_id,
                 "method": c.method,
                 "changes": field_changes,
