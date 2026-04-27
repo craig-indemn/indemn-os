@@ -176,7 +176,7 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
             _register_exposed_route(router, entity_cls, entity_name, method_name, attr)
 
     # Register capability-activated methods
-    _COLLECTION_LEVEL_CAPABILITIES = {"fetch_new"}
+    from kernel.capability import COLLECTION_LEVEL_CAPABILITIES as _COLLECTION_LEVEL_CAPABILITIES
     for cap_activation in getattr(entity_cls, "_activated_capabilities", []):
         cap_name = (
             cap_activation.capability
