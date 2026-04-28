@@ -189,14 +189,18 @@ def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str
     lines.append(f"| `indemn {slug} get <id>` | Get a single record by ObjectId |")
     lines.append(
         f"| `indemn {slug} get <id> --depth 2 --include-related` | "
-        "Get with forward-related entities resolved inline |"
+        "Get with related entities resolved inline (forward AND reverse refs) |"
     )
 
     lines.append(
         "\n*`--data` filters are equality match only — operator filters "
         "(`$in`, `$gte`, etc.) are not supported on `list` yet. For relationship "
-        "navigation, you can also use `--depth N --include-related` on `get` to "
-        "load forward-related entities inline.*\n"
+        "navigation use `--depth N --include-related` on `get` — the response's "
+        "`_related` is a flat list of entities related in either direction; each "
+        "entry carries `_entity_type`, `_relationship_direction` "
+        "(`\"forward\"` if this entity declared the field, `\"reverse\"` if some "
+        "other entity points at this one), and `_via_field` (the field name on "
+        "the source side of the relationship).*\n"
     )
 
     # --- Write commands ---
