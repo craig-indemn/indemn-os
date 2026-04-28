@@ -697,12 +697,40 @@ def _register_bulk_route(router, entity_name: str):
         # parse_filter with the raw dict to produce typed values for MongoDB
         # — bson.ObjectId / datetime don't cross the Temporal boundary cleanly,
         # so we keep the typed coercion out of workflow input. (Bug #23.)
-        if spec.get("filter_query") is not None:
+        operation = spec.get("operation")
+        filter_query = spec.get("filter_query")
+        if filter_query is not None:
             from kernel.api._filter_safelist import parse_filter
 
             entity_cls = ENTITY_REGISTRY.get(entity_name)
             if entity_cls is not None:
-                parse_filter(entity_cls, entity_name, spec["filter_query"])
+                parse_filter(entity_cls, entity_name, filter_query)
+
+        # Bug #4 — reject empty filter for destructive ops unless `match_all`
+        # was set explicitly. Pre-fix `bulk-delete --filter '{}'` reported
+        # `started → completed` with 0 deleted (because the org-scoping clause
+        # being injected at activity-time meant the empty user filter merged
+        # to just `{org_id: ...}` — which would have matched EVERY entity in
+        # the org for delete, a footgun the silent no-op was masking). Empty
+        # filter is now an explicit error for delete + bulk-update; callers
+        # who really mean "all entities in the org" pass `"match_all": true`
+        # alongside (which the per-entity CLI exposes via `--all`).
+        destructive = operation in ("delete", "update")
+        if (
+            destructive
+            and filter_query == {}
+            and not spec.get("match_all")
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Empty filter on bulk {operation} would match every "
+                    f"{entity_name} in the org. Pass an explicit filter "
+                    "(e.g. `{\"_id\": {\"$in\": [...]}}`), or pass "
+                    "`match_all: true` alongside if you really mean all "
+                    f"{entity_name}s."
+                ),
+            )
 
         from kernel.temporal.client import get_temporal_client
         from kernel.temporal.workflows import BulkExecuteWorkflow
