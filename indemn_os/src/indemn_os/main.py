@@ -199,7 +199,11 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
     # because Typer treats every function parameter as a CLI option,
     # underscored or not. Factories close over the values without exposing
     # them on the command's signature.
-    _COLLECTION_LEVEL_CAPS = {"fetch_new"}
+    # MUST stay in sync with kernel/capability/__init__.py::COLLECTION_LEVEL_CAPABILITIES.
+    # Capabilities listed here are routed to /api/{collection}/{cap} (collection-level);
+    # everything else routes to /api/{collection}/{id}/{cap} (entity-level) and the
+    # CLI requires an entity_id.
+    _COLLECTION_LEVEL_CAPS = {"fetch_new", "entity_resolve"}
 
     def _make_entity_cap_cmd(cap_name: str, slug_name: str):
         capability_kebab = cap_name.replace("_", "-")
