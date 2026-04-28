@@ -216,6 +216,80 @@ def _coerce_objectid_fields(entity_cls, data: dict) -> dict:
     return data
 
 
+def _coerce_datetime_fields(entity_cls, data: dict) -> dict:
+    """Convert ISO-8601 string values to datetime for fields typed as datetime.
+
+    Bug #19: API JSON payloads carry datetime values as ISO-8601 strings.
+    Entity construction (POST /create) goes through Pydantic __init__, which
+    coerces them. The PUT update path uses setattr() field-by-field, which
+    does NOT trigger validation by default — so a payload like
+    `{"date": "2026-02-11T22:00:00"}` was being stored as a STRING in
+    MongoDB on a `datetime`-typed field, corrupting:
+
+      * the stored entity (string vs Date — sort/filter against `date` fields
+        silently misbehaves)
+      * the changes-collection record (the audit captured the post-setattr
+        string while the previous load was a Date — same logical value, two
+        types, two different hashes via `hash_chain._normalize_value`'s
+        type-conditional branches; tamper-evidence noise)
+
+    Fix: peer to `_coerce_objectid_fields`. Walk Pydantic field annotations,
+    find datetime-typed (or Optional[datetime] / list[datetime]) fields, and
+    parse string values into `datetime` via `fromisoformat`. Naive strings
+    (no `Z`/offset) are accepted as-is — same lenience Pydantic v2 grants —
+    so callers passing `"2026-02-11T22:00:00"` continue to work; the typed
+    value is what reaches MongoDB now.
+
+    Idempotent: real `datetime` instances pass through. Bad strings raise
+    `HTTPException 400` with the field name and the unparseable value, so
+    the caller learns at the boundary instead of the audit chain showing it
+    later.
+    """
+    import typing
+    from datetime import datetime as _dt
+
+    def _parse(field_name: str, raw):
+        if isinstance(raw, _dt):
+            return raw
+        if not isinstance(raw, str):
+            return raw  # let Pydantic surface a real type error downstream
+        # Pydantic v2 / Python 3.11+ fromisoformat handles trailing 'Z'
+        # via 3.11+. On 3.10 we'd need a fallback. The runtime here is
+        # 3.12 so plain fromisoformat suffices; supporting 'Z' explicitly
+        # adds belt-and-suspenders.
+        candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            return _dt.fromisoformat(candidate)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Field '{field_name}' expects ISO 8601 datetime, got "
+                    f"{raw!r}. Parse error: {exc}"
+                ),
+            )
+
+    for field_name, field_info in entity_cls.model_fields.items():
+        if field_name not in data:
+            continue
+        annotation = field_info.annotation
+        origin = getattr(annotation, "__origin__", None)
+        args = getattr(annotation, "__args__", ())
+        # Unwrap Optional
+        if origin is typing.Union and type(None) in args:
+            annotation = next(a for a in args if a is not type(None))
+            origin = getattr(annotation, "__origin__", None)
+            args = getattr(annotation, "__args__", ())
+
+        if annotation is _dt:
+            data[field_name] = _parse(field_name, data[field_name])
+        elif origin is list and args and args[0] is _dt:
+            value = data[field_name]
+            if isinstance(value, list):
+                data[field_name] = [_parse(field_name, v) for v in value]
+    return data
+
+
 def _parse_list_filter(entity_cls, entity_name: str, filter_json: str) -> dict:
     """Thin wrapper around the shared filter safelist for the list endpoint.
 
@@ -314,6 +388,7 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         check_permission(actor, entity_name, "write")
         data = await _resolve_relationship_dict_inputs(entity_cls, entity_name, data)
         data = _coerce_objectid_fields(entity_cls, data)
+        data = _coerce_datetime_fields(entity_cls, data)
         entity = entity_cls(org_id=current_org_id.get(), **data)
         created_messages = await entity.save_tracked(method="create")
         _fire_dispatch(created_messages)
@@ -344,6 +419,7 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
             )
         data = await _resolve_relationship_dict_inputs(entity_cls, entity_name, data)
         data = _coerce_objectid_fields(entity_cls, data)
+        data = _coerce_datetime_fields(entity_cls, data)
         for key, value in data.items():
             if key not in ("id", "_id", "org_id", "version"):
                 setattr(entity, key, value)
