@@ -1,10 +1,31 @@
 """Entity management commands — create, modify, enable, migrate, cleanup."""
 
+import inflect
 import typer
 
 from indemn_os.client import CLIClient, render
 
 entity_app = typer.Typer(name="entity", help="Entity definition management")
+
+# Shared inflect engine — pluralizes English words properly:
+#   Company    -> companies (not "companys")
+#   Opportunity-> opportunities (not "opportunitys")
+#   Email      -> emails  (no change vs naive)
+#   Person     -> people   (no change but the naive +s would say "persons")
+# Pre-fix the CLI did `name.lower() + "s"`, so existing collections in dev
+# are `companys` and `opportunitys`. Per the 2026-04-28 decision
+# (Bug #15: "accept and fix forward"), existing collection names are NOT
+# migrated — operators set `collection_name` explicitly when they need the
+# old typo'd name on a re-clone, or the proper plural for new entities.
+_INFLECT = inflect.engine()
+
+
+def _default_collection_name(entity_name: str) -> str:
+    """Auto-derive a MongoDB collection name from an entity name.
+    Operators should pass `--collection-name` explicitly when the entity
+    needs to land in an existing collection (e.g. cross-org re-clone of a
+    pre-2026-04-28 typo'd name like `companys`)."""
+    return _INFLECT.plural(entity_name.lower())
 
 
 @entity_app.command("create")
@@ -13,7 +34,15 @@ def create_entity_def(
     fields: str = typer.Option(..., "--fields", help="JSON field definitions"),
     state_machine: str = typer.Option(None, "--state-machine", help="JSON state machine"),
     computed_fields: str = typer.Option(None, "--computed-fields", help="JSON computed fields"),
-    collection_name: str = typer.Option(None, help="MongoDB collection name"),
+    collection_name: str = typer.Option(
+        None,
+        help=(
+            "MongoDB collection name. Auto-derived via the `inflect` library "
+            "if omitted (Company -> companies). Pass explicitly when you need "
+            "to land in an existing collection — e.g. cross-org clones of a "
+            "pre-2026-04-28 typo'd name like `companys`."
+        ),
+    ),
     description: str = typer.Option(None),
 ):
     """Create a new domain entity definition."""
@@ -21,7 +50,7 @@ def create_entity_def(
 
     data = {
         "name": name,
-        "collection_name": collection_name or name.lower() + "s",
+        "collection_name": collection_name or _default_collection_name(name),
         "fields": orjson.loads(fields),
     }
     if state_machine:

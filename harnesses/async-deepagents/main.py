@@ -46,21 +46,39 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
     }
 
 
-def _write_skills_to_filesystem(skill_refs: list[str], activity_id: str) -> list[str]:
-    """Fetch associate skills and write to per-activity directory.
+def _write_skills_to_filesystem(skill_refs: list[str], activity_id: str) -> str | None:
+    """Fetch associate skills and write them as proper deepagents skills under
+    a per-activity skills library directory. Returns the LIBRARY DIRECTORY path
+    (deepagents discovers skills by scanning the library for subdirectories
+    with a SKILL.md inside), or None if no skills were written.
 
-    Only writes associate-type skills (behavioral instructions).
-    Entity skills are NOT pre-loaded — the agent reads them on demand
-    via execute("indemn skill get <EntityName>").
+    Layout — required by deepagents:
+        /workspace/{activity_id}/skills/                        ← library dir (passed to deepagents)
+                                       /{skill-slug}/SKILL.md   ← individual skill
+
+    Apr 28 finding (Diana@CKSpecialty trace 019dd5f3-…): the previous version
+    of this function passed each individual skill subdirectory to deepagents
+    instead of the parent library dir. deepagents interpreted the per-skill
+    path as a library and looked inside it for skill subdirs, found none, and
+    surfaced "(No skills available yet. You can create skills in <path>)" in
+    the agent's system prompt — meaning the agent never loaded the associate
+    skill content. Every iteration of email-classifier (v3 → v7) was thus
+    ineffective: the agent only ever followed the harness DEFAULT_PROMPT.
+
+    Fix: pass the parent library dir, not the per-skill dir.
+
+    Only writes associate-type skills (behavioral instructions). Entity skills
+    are NOT pre-loaded — the agent reads them on demand via
+    execute("indemn skill get <EntityName>").
     """
     if not skill_refs:
-        return []
+        return None
 
-    # Per-activity directory to avoid contention between concurrent agents
-    skills_dir = f"/workspace/{activity_id}/skills"
-    os.makedirs(skills_dir, exist_ok=True)
+    # Per-activity library dir — this is what gets passed to deepagents.
+    skills_lib_dir = f"/workspace/{activity_id}/skills"
+    os.makedirs(skills_lib_dir, exist_ok=True)
 
-    skill_paths = []
+    written = 0
     for ref in skill_refs:
         try:
             skill = indemn("skill", "get", ref)
@@ -68,12 +86,11 @@ def _write_skills_to_filesystem(skill_refs: list[str], activity_id: str) -> list
             log.warning("Skill not found: %s", ref)
             continue
 
-        # Only write associate skills, not entity skills
         if skill.get("type") == "entity":
             continue
 
         slug = ref.lower().replace(" ", "-")
-        skill_dir = os.path.join(skills_dir, slug)
+        skill_dir = os.path.join(skills_lib_dir, slug)
         os.makedirs(skill_dir, exist_ok=True)
 
         content = skill.get("content", "")
@@ -84,11 +101,18 @@ def _write_skills_to_filesystem(skill_refs: list[str], activity_id: str) -> list
         with open(skill_file, "w") as f:
             f.write(f"---\nname: {name}\ndescription: {description}\n---\n\n")
             f.write(content)
+        written += 1
 
-        skill_paths.append(f"{activity_id}/skills/{slug}")
+    if written == 0:
+        return None
 
-    log.info("Wrote %d associate skills for agent", len(skill_paths))
-    return skill_paths
+    log.info(
+        "Wrote %d associate skill(s) to library %s for deepagents to discover",
+        written,
+        skills_lib_dir,
+    )
+    # Return the LIBRARY dir — deepagents scans inside for skill subdirs.
+    return f"{activity_id}/skills"
 
 
 @activity.defn
@@ -126,10 +150,13 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # Three-layer LLM config merge [Q3, G-50]
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Write associate skill(s) to filesystem for deepagents progressive disclosure.
-        # Entity skills are NOT pre-loaded — agent reads them via indemn skill get.
+        # Write associate skill(s) to the per-activity skills library dir for
+        # deepagents progressive disclosure. Returns the library dir path (NOT
+        # per-skill subdir paths — see _write_skills_to_filesystem docstring
+        # for the Apr 28 fix). Entity skills are NOT pre-loaded — the agent
+        # reads them on demand via execute("indemn skill get <EntityName>").
         activity_id = f"act-{input.message_id[:12]}"
-        skill_paths = _write_skills_to_filesystem(associate.get("skills", []), activity_id)
+        skills_lib_dir = _write_skills_to_filesystem(associate.get("skills", []), activity_id)
 
         # Build agent (thin — deepagents handles everything once backend is set).
         # Bug #3 fix: pass activity_id so the sandbox root_dir is scoped per
@@ -137,7 +164,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # agent's grep matched another agent's cached results.
         agent = build_agent(
             associate=associate,
-            skill_paths=skill_paths,
+            skills_lib_dir=skills_lib_dir,
             llm_config=llm_config,
             activity_id=activity_id,
         )
