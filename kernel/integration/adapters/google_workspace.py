@@ -25,8 +25,54 @@ from datetime import datetime
 from kernel.integration.adapter import (
     Adapter,
     AdapterAuthError,
+    AdapterError,
 )
 from kernel.integration.registry import register_adapter
+
+
+class _PerUserErrorTracker:
+    """Tracks per-user successes and failures across an N-user iteration to
+    distinguish transient per-user issues (one user has no inbox, mailbox is
+    locked, etc. — keep going) from systemic failures (every user fails with
+    the same error class — fail loudly).
+
+    Bug #8: pre-fix the adapter caught every per-user `Exception` with `log
+    warning + continue`, so a systemic bug (Bug #1: every user failed because
+    the date filter was wrong format) returned `fetched: 0` silently. The
+    caller saw no error and assumed there was simply no data.
+
+    Decision rule on `maybe_raise`: if ZERO users succeeded AND ≥3 (or ≥50%
+    of attempted users, whichever is greater) failed with the SAME error
+    class, raise an AdapterError summarizing the situation. Lets one-off
+    per-user issues stay quiet but surfaces every-user-failed-the-same-way
+    as the fetch-blocking event it actually is.
+    """
+
+    def __init__(self, total: int, op: str):
+        self.total = total
+        self.op = op  # "list user conferences" / "list user gmail messages"
+        self.success = 0
+        self.errors_by_class: dict[type, list[tuple[str, str]]] = {}
+
+    def record_success(self) -> None:
+        self.success += 1
+
+    def record_failure(self, user: str, exc: Exception) -> None:
+        self.errors_by_class.setdefault(type(exc), []).append((user, str(exc)))
+
+    def maybe_raise(self) -> None:
+        if self.success > 0 or self.total == 0:
+            return
+        threshold = max(3, self.total // 2 + (1 if self.total % 2 else 0))
+        for exc_class, errors in self.errors_by_class.items():
+            if len(errors) >= threshold:
+                sample_user, sample_msg = errors[0]
+                raise AdapterError(
+                    f"All {len(errors)}/{self.total} attempted users failed to "
+                    f"{self.op} with {exc_class.__name__}. "
+                    f"Sample ({sample_user}): {sample_msg}. "
+                    "This looks systemic, not per-user."
+                )
 
 logger = logging.getLogger(__name__)
 
@@ -154,11 +200,16 @@ class GoogleWorkspaceAdapter(Adapter):
 
         logger.info("Scanning %d users for conference records", len(real_users))
 
-        # Collect conference records — dedup by conference name
+        # Collect conference records — dedup by conference name.
+        # Per-user errors are recorded; if every attempted user fails with
+        # the same class (Bug #8 — Bug #1 was hidden by this), the tracker
+        # raises after the loop instead of silently returning 0.
         all_conferences: dict[str, dict] = {}
+        tracker = _PerUserErrorTracker(len(real_users), op="list user conferences")
         for email in real_users:
             try:
                 conferences = await self._list_user_conferences(email, since)
+                tracker.record_success()
                 for conf in conferences:
                     conf_id = conf["name"]
                     if conf_id not in all_conferences:
@@ -167,8 +218,11 @@ class GoogleWorkspaceAdapter(Adapter):
                             "discovered_via": email,
                         }
             except Exception as e:
+                tracker.record_failure(email, e)
                 logger.warning("Skipping %s: %s", email, e)
                 continue
+
+        tracker.maybe_raise()
 
         logger.info(
             "Found %d unique conference records across %d users",
@@ -256,12 +310,14 @@ class GoogleWorkspaceAdapter(Adapter):
 
         all_emails = []
         seen_message_ids = set()
+        tracker = _PerUserErrorTracker(len(real_users), op="list user gmail messages")
 
         for email_addr in real_users:
             if len(all_emails) >= limit:
                 break
             try:
                 messages = await self._list_gmail_messages(email_addr, since, limit - len(all_emails))
+                tracker.record_success()
                 for msg_meta in messages:
                     msg_id = msg_meta["id"]
                     if msg_id in seen_message_ids:
@@ -274,8 +330,11 @@ class GoogleWorkspaceAdapter(Adapter):
                     except Exception as e:
                         logger.warning("Failed to get message %s for %s: %s", msg_id, email_addr, e)
             except Exception as e:
+                tracker.record_failure(email_addr, e)
                 logger.warning("Skipping %s: %s", email_addr, e)
                 continue
+
+        tracker.maybe_raise()
 
         logger.info("Fetched %d emails across %d users", len(all_emails), len(real_users))
         return all_emails
@@ -595,13 +654,20 @@ class GoogleWorkspaceAdapter(Adapter):
             except Exception as e:
                 logger.warning("Failed to export transcript doc: %s", e)
 
-        # Download notes content (separate doc from transcript)
+        # Download notes content. Note doc and transcript doc may be:
+        #   (a) different non-empty IDs   -> export notes separately
+        #   (b) the same non-empty ID     -> export once for notes
+        #   (c) both empty                -> SKIP (Bug #7: pre-fix this fell into
+        #       the elif because "" == "" is True, then called the Drive API
+        #       with an empty fileId which produced 50+ "Missing required
+        #       parameter 'fileId'" warnings per fetch for meetings without
+        #       any docs. Truthy guards on both branches now).
         if notes_doc_id and notes_doc_id != transcript_doc_id:
             try:
                 notes_text = await self._export_doc(discovered_via, notes_doc_id)
             except Exception as e:
                 logger.warning("Failed to export notes doc: %s", e)
-        elif notes_doc_id == transcript_doc_id:
+        elif notes_doc_id and notes_doc_id == transcript_doc_id:
             # Same doc for both — export it for notes
             try:
                 notes_text = await self._export_doc(discovered_via, notes_doc_id)
@@ -869,6 +935,15 @@ class GoogleWorkspaceAdapter(Adapter):
         return await asyncio.to_thread(_sync)
 
     async def _export_doc(self, email: str, doc_id: str) -> str:
+        # Defense-in-depth (Bug #7): the call sites above truthy-guard
+        # transcript_doc_id / notes_doc_id, but if a future caller forgets,
+        # short-circuit instead of asking the Drive API to export "" — that
+        # produces a "Missing required parameter 'fileId'" warning per call
+        # and used to flood the logs (50+ per fetch on meetings that had no
+        # docs). Empty in -> empty out, no API call.
+        if not doc_id:
+            return ""
+
         def _sync():
             service = self._drive_service(email)
             return service.files().export(fileId=doc_id, mimeType="text/plain").execute()

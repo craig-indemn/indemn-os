@@ -156,17 +156,32 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             )
             render(result, "json")
 
-    # Register capability commands
-    for cap in meta.get("capabilities", []):
-        cap_slug = cap["name"].replace("_", "-")
+    # Register capability commands.
+    # NOTE: closure values for cap_name + slug are bound via a factory
+    # function rather than default-parameter capture. The default-parameter
+    # idiom (e.g. `_cap=cap["name"]`) leaks the params into Typer's option
+    # parser and renders them as `---cap` / `---slug` in --help (Bug #5),
+    # because Typer treats every function parameter as a CLI option,
+    # underscored or not. The factory closes over the values without
+    # exposing them on the command's signature.
+    def _make_cap_cmd(cap_name: str, slug_name: str):
+        capability_kebab = cap_name.replace("_", "-")
 
-        @entity_app.command(cap_slug)
         def cap_cmd(
-            entity_id: str = typer.Argument(None),
-            auto: bool = False,
-            data: str = None,
-            _cap=cap["name"],
-            _slug=slug,
+            entity_id: str = typer.Argument(
+                None, help="Entity ObjectId. Omit to apply to ALL entities of this type."
+            ),
+            auto: bool = typer.Option(
+                False, help="Try configured rules first; LLM fallback only if needed."
+            ),
+            data: str = typer.Option(
+                None,
+                help=(
+                    "JSON body for the capability. Shape depends on the "
+                    f"capability — see `indemn skill get {slug_name.capitalize()}` "
+                    "for accepted keys."
+                ),
+            ),
         ):
             """Invoke a capability on an entity (or all if no ID given)."""
             import orjson
@@ -175,29 +190,33 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             body = orjson.loads(data) if data else {}
 
             if entity_id:
-                # Single entity
                 result = client.post(
-                    f"/api/{_slug}s/{entity_id}/{_cap.replace('_', '-')}",
+                    f"/api/{slug_name}s/{entity_id}/{capability_kebab}",
                     json=body,
                     params=params,
                 )
                 render(result, "json")
             else:
-                # Batch: run on all entities of this type
-                entities = client.get(f"/api/{_slug}s", params={"limit": 1000})
+                entities = client.get(f"/api/{slug_name}s", params={"limit": 1000})
                 processed = 0
                 for entity in entities:
                     eid = entity.get("_id") or entity.get("id")
                     if not eid:
                         continue
                     result = client.post(
-                        f"/api/{_slug}s/{eid}/{_cap.replace('_', '-')}",
+                        f"/api/{slug_name}s/{eid}/{capability_kebab}",
                         json=body,
                         params=params,
                     )
                     if result.get("matched") or result.get("result"):
                         processed += 1
-                typer.echo(f"Processed {processed}/{len(entities)} {_slug}s")
+                typer.echo(f"Processed {processed}/{len(entities)} {slug_name}s")
+
+        return cap_cmd
+
+    for cap in meta.get("capabilities", []):
+        cap_slug = cap["name"].replace("_", "-")
+        entity_app.command(cap_slug)(_make_cap_cmd(cap["name"], slug))
 
     # Register bulk commands for this entity type
     from kernel.cli.bulk_commands import register_bulk_commands
