@@ -16,9 +16,10 @@ from kernel.message.schema import Message
 queue_router = APIRouter(tags=["queue"])
 
 
-@queue_router.get("/api/_meta/queue-stats")
-async def queue_stats(actor=Depends(get_current_actor)):
-    """Aggregate queue statistics by role and status."""
+async def _aggregate_queue_stats():
+    """Run the role × status aggregation against message_queue. Shared
+    between the canonical /api/_meta/queue-stats endpoint and the
+    intuitive /api/queue/stats alias (Bug #11)."""
     pipeline = [
         {
             "$group": {
@@ -30,16 +31,30 @@ async def queue_stats(actor=Depends(get_current_actor)):
     ]
     coll = Message.get_motor_collection()
     results = await coll.aggregate(pipeline).to_list(length=100)
-    stats = []
-    for r in results:
-        stats.append(
-            {
-                "role": r["_id"]["target_role"],
-                "status": r["_id"]["status"],
-                "count": r["count"],
-            }
-        )
-    return stats
+    return [
+        {
+            "role": r["_id"]["target_role"],
+            "status": r["_id"]["status"],
+            "count": r["count"],
+        }
+        for r in results
+    ]
+
+
+@queue_router.get("/api/_meta/queue-stats")
+async def queue_stats(actor=Depends(get_current_actor)):
+    """Aggregate queue statistics by role and status."""
+    return await _aggregate_queue_stats()
+
+
+@queue_router.get("/api/queue/stats")
+async def queue_stats_alias(actor=Depends(get_current_actor)):
+    """Bug #11: the docs (CLAUDE.md, others) referenced /api/queue/stats but
+    the actual handler was registered at /api/_meta/queue-stats. Operators
+    hitting the documented path got 404. Aliased so both work; the
+    /api/queue/stats path is now canonical for human use (matches the
+    `indemn queue stats` CLI's mental model)."""
+    return await _aggregate_queue_stats()
 
 
 @queue_router.get("/api/message_queues")

@@ -129,10 +129,12 @@ curl -X POST $INDEMN_API_URL/api/submissions/ \
   -H "Content-Type: application/json" \
   -d '{"title": "Acme GL", "named_insured": "Acme Corp"}'
 
-# Transition
+# Transition (Bug #21 — the canonical body field is `to`, matching the
+# CLI's --to flag. Older docs referenced `target_state` but that never
+# worked; the API has only ever accepted `to`.)
 curl -X POST $INDEMN_API_URL/api/submissions/<id>/transition \
   -H "Content-Type: application/json" \
-  -d '{"target_state": "triaging", "reason": "Initial triage"}'
+  -d '{"to": "triaging", "reason": "Initial triage"}'
 ```
 
 ### Skill documentation
