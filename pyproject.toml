@@ -29,6 +29,7 @@ dependencies = [
     "google-auth>=2.0",
     "google-api-python-client>=2.0",
     "rapidfuzz>=3.9",
+    "inflect>=7.0",
     "indemn-os",
 ]
 

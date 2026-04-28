@@ -40,6 +40,16 @@ Before touching the CLI, answer these questions on paper:
 
 Use `indemn entity create --data` with a JSON blob containing the full definition:
 
+> **`collection_name` is recommended-explicit.** When omitted, the CLI
+> auto-derives via the `inflect` library (`Company` → `companies`,
+> `Opportunity` → `opportunities`). Pre-2026-04-28 the auto-derive was
+> naive `name.lower() + "s"`, producing typo'd plurals; existing
+> collections in dev (`companys`, `opportunitys`) retain their typo'd
+> names by design ("accept and fix forward" — no rename migration). Pass
+> `--collection-name <name>` explicitly when you need to land in one of
+> those existing collections during a cross-org clone, or any time the
+> auto-plural would surprise you.
+
 ```bash
 indemn entity create --data '{
   "name": "Submission",

@@ -9,6 +9,7 @@ dependencies = [
     "orjson>=3.10",
     "pydantic>=2.7",
     "pyjwt>=2.8",
+    "inflect>=7.0",
 ]
 
 [project.scripts]
