@@ -84,6 +84,16 @@ def create_entity_class(definition: EntityDefinition) -> type[DomainBaseEntity]:
         for fname, fdef in definition.fields.items()
         if fdef.is_relationship and fdef.relationship_target
     }
+    # Bug #9: which relationship fields opt into entity_resolve fallback when
+    # the API receives a dict-shaped value (e.g. LLM passing {"name": "Acme"}
+    # instead of an _id hex). The boundary handler in registration.py reads
+    # this set + the target entity's activated_capabilities to decide whether
+    # to run the resolve or 400 with a shape hint.
+    DynamicEntity._auto_resolve_fields = {
+        fname
+        for fname, fdef in definition.fields.items()
+        if fdef.is_relationship and fdef.relationship_target and fdef.auto_resolve
+    }
 
     # Identify the state field from is_state_field flag in definition
     state_field_name = None
