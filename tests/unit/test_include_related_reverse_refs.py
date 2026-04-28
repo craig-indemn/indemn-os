@@ -430,6 +430,61 @@ async def test_forward_field_with_null_value_is_skipped():
 
 
 @pytest.mark.asyncio
+async def test_related_entries_are_json_safe():
+    """Regression: every entry must be JSON-safe (ObjectId → str, datetime → ISO).
+
+    First deploy of this fix returned 500s in prod with a
+    `'ObjectId' object is not iterable` ValidationError because the helper
+    used `_serialize_for_context` (which preserves raw ObjectId / datetime)
+    and the FastAPI response serializer choked when handing the payload off
+    to the JSON encoder. The fix: route every related entity through
+    `kernel.api.serialize.to_dict` — same path every other API route uses.
+    This test pins that contract: anything we surface via `_related` must
+    pass `json.dumps` without raising.
+    """
+    import json
+    from datetime import datetime
+
+    company_id = ObjectId()
+    email_id = ObjectId()
+    email = _entity("Email", id=email_id, company=company_id)
+    company = _entity(
+        "Company",
+        id=company_id,
+        name="Acme",
+        # Concrete ObjectId + datetime values — to_dict must convert these.
+        owner_actor=ObjectId(),
+        last_seen_at=datetime(2026, 4, 28, 12, 0, 0),
+    )
+
+    own_defn = _defn(
+        "Email",
+        {"company": _field(is_relationship=True, relationship_target="Company")},
+    )
+    company_cls = _cls_with_results([company])
+    registry = {"Company": company_cls, "Email": _cls_with_results([])}
+    ed = SimpleNamespace(
+        find_one=AsyncMock(return_value=own_defn),
+        find_all=lambda: _FakeQuery([own_defn]),
+    )
+
+    with patch("kernel.entity.definition.EntityDefinition", ed), patch(
+        "kernel.db.ENTITY_REGISTRY", registry
+    ):
+        out = await _build_related_entities(email, depth=2)
+
+    # Must be json.dumps-able without TypeError — the regression check.
+    json.dumps(out)
+    assert len(out) == 1
+    # Concrete shape: ObjectId came back as a 24-char hex string,
+    # datetime came back as an ISO string.
+    assert isinstance(out[0]["owner_actor"], str)
+    assert len(out[0]["owner_actor"]) == 24
+    assert isinstance(out[0]["last_seen_at"], str)
+    assert "2026-04-28" in out[0]["last_seen_at"]
+
+
+@pytest.mark.asyncio
 async def test_metadata_keys_overwrite_collision_safely():
     """If a related entity happens to have a field literally named `_entity_type`
     (extremely unlikely — leading-underscore Pydantic names are reserved by

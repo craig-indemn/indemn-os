@@ -187,6 +187,7 @@ async def _build_related_entities(entity, depth: int) -> list[dict]:
     if depth <= 1:
         return []
 
+    from kernel.api.serialize import to_dict
     from kernel.db import ENTITY_REGISTRY
     from kernel.entity.definition import EntityDefinition
 
@@ -210,7 +211,7 @@ async def _build_related_entities(entity, depth: int) -> list[dict]:
             target_entity = await target_cls.get(related_id)
             if target_entity is None:
                 continue
-            d = _serialize_for_context(target_entity)
+            d = to_dict(target_entity)
             d["_entity_type"] = target_name
             d["_relationship_direction"] = "forward"
             d["_via_field"] = field_name
@@ -236,7 +237,7 @@ async def _build_related_entities(entity, depth: int) -> list[dict]:
                 query["_id"] = {"$ne": entity.id}
             inbound = await source_cls.find_scoped(query).to_list()
             for inbound_entity in inbound:
-                d = _serialize_for_context(inbound_entity)
+                d = to_dict(inbound_entity)
                 d["_entity_type"] = source_defn.name
                 d["_relationship_direction"] = "reverse"
                 d["_via_field"] = field_name
