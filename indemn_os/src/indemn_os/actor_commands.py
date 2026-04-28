@@ -94,13 +94,24 @@ def create_actor(
 @actor_app.command("list")
 def list_actors(
     type: str = typer.Option(None, "--type", help="Filter by type"),
+    status: str = typer.Option(None, "--status", help="Filter by status"),
     fmt: str = typer.Option("json", "--format"),
 ):
-    """List actors."""
+    """List actors.
+
+    Bug #28: --type used to send `?type=...` as a top-level query param,
+    which the auto-list endpoint ignored. Now sends through the standard
+    `?filter={"type": "..."}` safelist (Bug #23) so the filter actually
+    applies. Same for --status.
+    """
+    import orjson
+
     client = CLIClient()
-    params = {"limit": 100}
+    params: dict = {"limit": 100}
+    if status:
+        params["status"] = status
     if type:
-        params["type"] = type
+        params["filter"] = orjson.dumps({"type": type}).decode()
     result = client.get("/api/actors/", params=params)
     render(result, fmt)
 
@@ -120,6 +131,59 @@ def update_actor(actor_id: str, data: str = typer.Option(..., "--data")):
 
     client = CLIClient()
     result = client.put(f"/api/actors/{actor_id}", json=orjson.loads(data))
+    render(result, "json")
+
+
+@actor_app.command("transition")
+def transition_actor(
+    actor_id: str,
+    to: str = typer.Option(..., "--to", help="Target state (e.g., active, suspended)"),
+    reason: str = typer.Option(None, "--reason"),
+):
+    """Transition an actor's state (Bug #20 — was missing despite documented usage).
+
+    Example: indemn actor transition <actor_id> --to suspended --reason "off duty"
+    """
+    client = CLIClient()
+    body = {"to": to}
+    if reason is not None:
+        body["reason"] = reason
+    result = client.post(f"/api/actors/{actor_id}/transition", json=body)
+    render(result, "json")
+
+
+@actor_app.command("delete")
+def delete_actor(
+    actor_id: str,
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
+):
+    """Delete an actor (Bug #20).
+
+    Hard-deletes the Actor document. For most cases prefer
+    `indemn actor transition <id> --to suspended` (or deprovisioned) — that
+    keeps the audit trail intact. Use delete only for actors created by
+    mistake or never used.
+    """
+    if not yes:
+        confirm = typer.confirm(
+            f"Hard-delete actor {actor_id}? This is irreversible. Prefer `transition --to suspended` for retired actors.",
+            default=False,
+        )
+        if not confirm:
+            typer.echo("Cancelled.")
+            raise typer.Exit(0)
+    client = CLIClient()
+    # Routes through bulk-delete with a single-_id filter so it goes through
+    # the same kernel path as every other delete (audit, watch evaluation
+    # for the `deleted` event). The Bug #23 fix made $oid coercion reliable.
+    result = client.post(
+        "/api/actors/bulk",
+        json={
+            "operation": "delete",
+            "filter_query": {"_id": actor_id},
+            "dry_run": False,
+        },
+    )
     render(result, "json")
 
 
