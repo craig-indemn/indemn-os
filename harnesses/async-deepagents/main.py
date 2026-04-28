@@ -111,8 +111,13 @@ def _write_skills_to_filesystem(skill_refs: list[str], activity_id: str) -> str 
         written,
         skills_lib_dir,
     )
-    # Return the LIBRARY dir — deepagents scans inside for skill subdirs.
-    return f"{activity_id}/skills"
+    # Return the LIBRARY dir as an ABSOLUTE path. deepagents' FilesystemBackend
+    # (parent of LocalShellBackend) resolves relative paths against root_dir,
+    # which is also /workspace/{activity_id} — so a relative "{activity_id}/skills"
+    # would double-nest to /workspace/{activity_id}/{activity_id}/skills and
+    # find nothing (Bug #35, confirmed via deepagents 0.5.3 source +
+    # repro on 2026-04-29). Absolute paths bypass cwd resolution.
+    return skills_lib_dir
 
 
 @activity.defn
