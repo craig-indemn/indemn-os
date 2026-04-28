@@ -36,6 +36,27 @@ MAX_CASCADE_DEPTH = 10
 logger = logging.getLogger(__name__)
 
 
+def _resolve_created_by(actor_id: str) -> str:
+    """The identity to record on an entity's `created_by` at insert time.
+
+    Bug #27: pre-fix the field was always None on every entity in dev
+    because save_tracked never touched it. Auto-populate now reads:
+
+      1. `current_effective_actor_id` — the associate the harness is
+         running as (set by the X-Effective-Actor-Id header per Bug #22).
+         Preferred because it matches the changes-collection's
+         `effective_actor_id` field — same convention, same per-associate
+         forensics granularity.
+      2. `actor_id` — the authenticated session identity (e.g. the
+         human user's actor_id, or the service-token actor for
+         non-harness machine callers).
+
+    Caller-set values are NOT overwritten (seed data / migrations may
+    carry authoritative provenance like 'imported from Apollo').
+    """
+    return current_effective_actor_id.get() or actor_id
+
+
 class VersionConflictError(Exception):
     """Raised when optimistic concurrency check fails."""
 
@@ -71,6 +92,10 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
         # Compute field-level changes
         is_new = entity.id is None
         changes = _compute_changes(entity) if not is_new else []
+
+        # Auto-populate created_by on insert (Bug #27).
+        if is_new and hasattr(entity, "created_by") and entity.created_by is None:
+            entity.created_by = _resolve_created_by(actor_id)
 
         # Update metadata
         entity.updated_at = datetime.now(timezone.utc)
