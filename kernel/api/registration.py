@@ -230,6 +230,53 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         _fire_dispatch(created_messages)
         return to_dict(entity)
 
+    @router.post("/{entity_id}/reprocess")
+    async def reprocess_entity(
+        entity_id: str,
+        data: dict = {},
+        actor=Depends(get_current_actor),
+    ):
+        """Re-emit a message for an existing entity to one role's queue.
+
+        Bug #10: when a watch is added to a role, only future entity changes
+        fire it. This endpoint backfills against existing entities — operator
+        names the role, the kernel emits one message scoped to that role's
+        watch. The receiving actor sees the same shape it would have seen
+        organically (same context_depth, same scope resolution), with
+        event_metadata.reprocess=true marking it as a backfill.
+
+        Body: {"role": "<role_name>", "event_type": "created" (default)}.
+        Read permission is sufficient — reprocess doesn't mutate the entity,
+        it just emits a message. Mutating the entity is the receiving
+        actor's job and is gated by THAT role's write permissions.
+        """
+        check_permission(actor, entity_name, "read")
+        entity = await entity_cls.get_scoped(entity_id)
+        if not entity:
+            raise HTTPException(404)
+        role_name = data.get("role")
+        if not role_name:
+            raise HTTPException(400, "'role' is required (the role whose watch should fire)")
+        event_type = data.get("event_type", "created")
+
+        from kernel.message.reprocess import ReprocessError, reprocess_for_role
+
+        try:
+            message = await reprocess_for_role(entity, role_name, event_type)
+        except ReprocessError as e:
+            raise HTTPException(400, str(e))
+
+        _fire_dispatch([message])
+        return {
+            "message_id": str(message.id),
+            "entity_type": entity_name,
+            "entity_id": str(entity.id),
+            "role": role_name,
+            "event_type": event_type,
+            "correlation_id": message.correlation_id,
+            "causation_id": message.causation_id,
+        }
+
     # Register @exposed methods as additional routes
     for attr_name in dir(entity_cls):
         if attr_name.startswith("_"):
