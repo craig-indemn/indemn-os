@@ -61,19 +61,58 @@ def _kernel_index_name(keys: list[tuple[str, int]]) -> str:
     return "_".join(f"{f}_{d}" for f, d in keys)
 
 
-def _partial_filter_for_field(fname: str, fdef: FieldDefinition) -> dict | None:
-    """Translate a FieldDefinition's `sparse=True` into a MongoDB
-    partialFilterExpression using the field's declared type.
+def _is_effectively_nullable(fdef: FieldDefinition) -> bool:
+    """True if the field can legitimately be null in stored documents.
 
-    Plain `sparse=True` only excludes MISSING fields, not null ones — but
-    Pydantic writes `field: null` explicitly when an Optional field is
+    Effectively nullable means: not required to be set at create time, and
+    no positive default that would fill in a value. In Pydantic terms,
+    `Optional[X]` with no default — the field becomes `null` in MongoDB
+    when the create payload omits it.
+
+    Required fields are never effectively nullable (the create handler
+    rejects unset values). Fields with a non-None default also aren't
+    effectively nullable in practice — every document gets a real value.
+
+    Defensive on missing attrs so partial test mocks (SimpleNamespace
+    without `required`/`default`) don't crash — same pattern as
+    `getattr(fdef, "sparse", False)` below. The defaults match
+    FieldDefinition's: `required=False`, `default=None`.
+    """
+    if getattr(fdef, "required", False):
+        return False
+    return getattr(fdef, "default", None) is None
+
+
+def _partial_filter_for_field(fname: str, fdef: FieldDefinition) -> dict | None:
+    """Translate a FieldDefinition into a MongoDB partialFilterExpression
+    when the index needs to exclude null/missing documents.
+
+    Plain MongoDB `sparse=True` only excludes MISSING fields, not null ones —
+    but Pydantic writes `field: null` explicitly when an Optional field is
     unset, so plain sparse never helps. A `$type` filter excludes both
     null AND missing because null is not of any concrete type.
 
-    Returns None if sparse=False or the field type isn't known to the
-    BSON map; the caller should then fall back to no filter.
+    Two paths emit a partial filter:
+
+    1. **Explicit `sparse=True` on the FieldDefinition.** Operator opts in.
+       Works for any field including `indexed=True` non-unique ones.
+
+    2. **Auto-emit on `unique=True` + effectively-nullable.** The "unique
+       with null counted as a value" semantic is MongoDB's surprising default
+       but rarely what anyone wants — and it caused Bug #30 (Meeting create
+       500, Company create 500, Email.external_ref collision). The kernel
+       takes a stand: `unique: true` on a nullable field means "unique when
+       set" and we automatically partial-filter the null/missing rows out.
+       Operators wanting the legacy "null is a value" semantic must use a
+       different field shape (a sentinel string or required+default value).
+
+    Returns None when no filter applies, or when the field type isn't in
+    the BSON map (rare — the type strings are validated at definition write
+    time, but defensive in case of schema drift).
     """
-    if not getattr(fdef, "sparse", False):
+    explicit_sparse = bool(getattr(fdef, "sparse", False))
+    auto_sparse = bool(fdef.unique and _is_effectively_nullable(fdef))
+    if not (explicit_sparse or auto_sparse):
         return None
     bson_type = _BSON_TYPE_FOR_FIELD.get(fdef.type)
     if not bson_type:
