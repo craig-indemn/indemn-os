@@ -234,29 +234,34 @@ async def test_creates_missing_org_id_index():
 
 
 @pytest.mark.asyncio
-async def test_creates_missing_unique_field_index():
+async def test_creates_missing_unique_required_field_index():
+    """A REQUIRED+unique field gets a plain unique index — no partial filter
+    needed because the field is never null. (Auto-sparse only fires for
+    nullable+unique fields; see test_desired_auto_sparse_unique_nullable.)"""
     existing = [
         {"name": "_id_", "key": {"_id": 1}},
         {"name": "org_id_1", "key": {"org_id": 1}},
     ]
     coll = _fake_collection(existing)
-    defn = _definition(fields={"email": _field(unique=True)})
+    defn = _definition(fields={"email": _field(required=True, unique=True)})
     summary = await reconcile_indexes(coll, defn)
     assert "org_id_1_email_1" in summary["created"]
     coll.create_index.assert_called_once_with([("org_id", 1), ("email", 1)], unique=True)
 
 
 @pytest.mark.asyncio
-async def test_idempotent_on_already_correct_state():
+async def test_idempotent_on_already_correct_state_required_field():
     """Indexes that already match the desired set are not dropped, not
-    re-created. Reconciliation is idempotent."""
+    re-created. Reconciliation is idempotent. Uses required=True so the
+    auto-sparse rule (nullable+unique → partial filter) doesn't fire and
+    the existing plain-unique index matches the desired plain-unique spec."""
     existing = [
         {"name": "_id_", "key": {"_id": 1}},
         {"name": "org_id_1", "key": {"org_id": 1}},
         {"name": "org_id_1_email_1", "key": {"org_id": 1, "email": 1}, "unique": True},
     ]
     coll = _fake_collection(existing)
-    defn = _definition(fields={"email": _field(unique=True)})
+    defn = _definition(fields={"email": _field(required=True, unique=True)})
     summary = await reconcile_indexes(coll, defn)
     assert summary["created"] == []
     assert summary["dropped"] == []
@@ -335,11 +340,58 @@ def test_desired_indexdef_does_not_get_partial_filter():
     assert spec["partialFilter"] is None
 
 
-def test_desired_partial_filter_none_when_field_not_sparse():
-    """Non-sparse fields don't get a partial filter."""
-    fields = {"email": _field(type="str", unique=True)}
+def test_desired_partial_filter_none_when_field_not_sparse_and_required():
+    """Required+unique field: no partial filter (the field is never null,
+    no nulls to exclude). Required is the lever that disables the
+    auto-sparse rule for unique fields."""
+    fields = {"email": _field(type="str", required=True, unique=True)}
     desired = _desired_indexes(_definition(fields=fields))
     assert desired["org_id_1_email_1"]["partialFilter"] is None
+
+
+def test_desired_auto_sparse_unique_nullable_field():
+    """Nullable+unique field auto-emits partialFilterExpression even without
+    sparse=True on the FieldDefinition. This is the Bug #30 root fix:
+    `unique: true` on an Optional field means "unique-when-set" — the kernel
+    no longer requires the operator to also remember `sparse: true`. The
+    "null counts as a value" semantic was never what anyone wanted and
+    caused every Bug #30-class create-500 incident."""
+    fields = {"external_ref": _field(type="str", required=False, unique=True)}
+    desired = _desired_indexes(_definition(fields=fields))
+    spec = desired["org_id_1_external_ref_1"]
+    assert spec["unique"] is True
+    assert spec["partialFilter"] == {"external_ref": {"$type": "string"}}
+
+
+def test_desired_auto_sparse_does_not_fire_for_indexed_only():
+    """Non-unique indexed nullable fields don't auto-sparse — duplication
+    was never a problem there. Sparse is still useful (smaller index) but
+    that's an explicit operator choice via sparse=True."""
+    fields = {"name": _field(type="str", required=False, indexed=True, unique=False)}
+    desired = _desired_indexes(_definition(fields=fields))
+    assert desired["org_id_1_name_1"]["partialFilter"] is None
+
+
+def test_desired_auto_sparse_does_not_fire_when_default_provided():
+    """Field with a non-None default gets a real value in every doc — never
+    null in practice — so auto-sparse is unnecessary. The default value
+    is the lever that opts out of auto-sparse."""
+    fields = {
+        "status": _field(type="str", required=False, unique=True),
+    }
+    fields["status"].default = "pending"
+    desired = _desired_indexes(_definition(fields=fields))
+    assert desired["org_id_1_status_1"]["partialFilter"] is None
+
+
+def test_desired_auto_sparse_objectid_relationship_field():
+    """The most common nullable+unique pattern: `external_ref` style fields
+    on Meeting/Email/Document. ObjectId fields get $type "objectId"."""
+    fields = {"slot_id": _field(type="objectid", required=False, unique=True)}
+    desired = _desired_indexes(_definition(fields=fields))
+    spec = desired["org_id_1_slot_id_1"]
+    assert spec["unique"] is True
+    assert spec["partialFilter"] == {"slot_id": {"$type": "objectId"}}
 
 
 @pytest.mark.asyncio
