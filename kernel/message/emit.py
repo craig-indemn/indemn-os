@@ -142,6 +142,109 @@ def _serialize_for_context(entity) -> dict:
     return data
 
 
+async def _build_related_entities(entity, depth: int) -> list[dict]:
+    """Build the list of entities related to `entity` for the API
+    `?include_related=true` response.
+
+    Walks BOTH directions:
+      * Forward — fields on `entity`'s own EntityDefinition where
+        `is_relationship=true`. Loads the target entity by id.
+      * Reverse — fields on OTHER EntityDefinitions whose
+        `relationship_target == type(entity).__name__`. Queries each source
+        collection for entities pointing at this one.
+
+    Different shape from `_build_context` (which the watch-emit path uses to
+    enrich messages and keys by lowercase target-entity-name). The API needs
+    a flat list because (a) reverse refs can produce many entities of the
+    same type for one source entity (a Company has many Touchpoints), and
+    (b) consumers need to know HOW each entity is related — both the
+    direction and the field that declared the relationship — to navigate
+    the constellation.
+
+    Each returned dict carries the entity's serialized fields plus three
+    metadata keys leading-underscored to avoid collision with entity fields:
+      * `_entity_type`            — name of the related entity's type
+      * `_relationship_direction` — "forward" or "reverse"
+      * `_via_field`              — the field name on whichever entity
+                                    declares the relationship (always lives
+                                    on the SOURCE side of the ref)
+
+    Self-relationships (e.g. `Proposal.supersedes -> Proposal`) appear as
+    BOTH a forward ref (the entity I supersede) and a reverse ref (the
+    entity that supersedes me) without duplicating the current entity into
+    its own related list.
+
+    Limitation (MVP): domain entities pointing at a kernel entity DO
+    appear; kernel entities pointing at this entity do NOT (no
+    EntityDefinition row to walk). Adding Pydantic-class introspection to
+    cover that path is a follow-on if it surfaces in practice.
+
+    Depth contract matches `_build_context`: depth <= 1 returns []
+    (entity-only); depth >= 2 returns directly-related entities. Higher
+    depths are not yet implemented; capping at 2 matches the
+    `--include-related` design intent in the Phase 0+1 spec.
+    """
+    if depth <= 1:
+        return []
+
+    from kernel.db import ENTITY_REGISTRY
+    from kernel.entity.definition import EntityDefinition
+
+    related: list[dict] = []
+    entity_type_name = type(entity).__name__
+
+    # ---- Forward refs: walk this entity's own definition ----
+    own_defn = await EntityDefinition.find_one({"name": entity_type_name})
+    if own_defn:
+        entity_data = entity.model_dump(by_alias=True)
+        for field_name, field_def in own_defn.fields.items():
+            if not (field_def.is_relationship and field_def.relationship_target):
+                continue
+            target_name = field_def.relationship_target
+            related_id = entity_data.get(field_name)
+            if not related_id:
+                continue
+            target_cls = ENTITY_REGISTRY.get(target_name)
+            if target_cls is None:
+                continue
+            target_entity = await target_cls.get(related_id)
+            if target_entity is None:
+                continue
+            d = _serialize_for_context(target_entity)
+            d["_entity_type"] = target_name
+            d["_relationship_direction"] = "forward"
+            d["_via_field"] = field_name
+            related.append(d)
+
+    # ---- Reverse refs: walk every other EntityDefinition for fields pointing here ----
+    all_defns = await EntityDefinition.find_all().to_list()
+    for source_defn in all_defns:
+        source_cls = ENTITY_REGISTRY.get(source_defn.name)
+        if source_cls is None:
+            continue
+        for field_name, field_def in source_defn.fields.items():
+            if not (field_def.is_relationship and field_def.relationship_target):
+                continue
+            if field_def.relationship_target != entity_type_name:
+                continue
+            # Self-relationship — exclude the entity itself from its own
+            # reverse-ref list (the forward walk already surfaced what it
+            # supersedes; only OTHER instances of this type that point
+            # at us are reverse refs).
+            query = {field_name: entity.id}
+            if source_defn.name == entity_type_name:
+                query["_id"] = {"$ne": entity.id}
+            inbound = await source_cls.find_scoped(query).to_list()
+            for inbound_entity in inbound:
+                d = _serialize_for_context(inbound_entity)
+                d["_entity_type"] = source_defn.name
+                d["_relationship_direction"] = "reverse"
+                d["_via_field"] = field_name
+                related.append(d)
+
+    return related
+
+
 def _build_summary(entity, event_type: str) -> dict:
     """Build a minimal summary for queue display."""
     return {

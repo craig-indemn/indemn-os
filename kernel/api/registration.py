@@ -291,12 +291,21 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
             raise HTTPException(404)
         result = to_dict(entity)
 
-        # Resolve related entities per depth parameter
+        # Resolve related entities per depth parameter.
+        # `_build_related_entities` walks both forward refs (this entity's own
+        # is_relationship fields) and reverse refs (other entity definitions
+        # whose fields point at this entity's type). Returns a flat list with
+        # `_entity_type` / `_relationship_direction` / `_via_field` metadata so
+        # consumers can navigate the constellation in either direction.
+        # NOTE: do NOT use `_build_context` here — that helper produces a
+        # dict-keyed-by-target-entity-name shape for watch-emit message
+        # enrichment, which (a) loses multiplicity (a Company has many
+        # Touchpoints) and (b) the API caller has no way to tell forward from
+        # reverse without a direction marker.
         if include_related and depth >= 2:
-            from kernel.message.emit import _build_context
+            from kernel.message.emit import _build_related_entities
 
-            context = await _build_context(entity, depth=depth, session=None)
-            result["_related"] = context.get("related_entities", [])
+            result["_related"] = await _build_related_entities(entity, depth=depth)
 
         return result
 
