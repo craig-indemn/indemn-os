@@ -168,7 +168,24 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                             "content": f"Process this work:\n\n{context}",
                         }
                     ],
-                }
+                },
+                config={
+                    "metadata": {
+                        "associate_id": str(input.associate_id),
+                        "associate_name": associate.get("name"),
+                        "message_id": str(input.message_id),
+                        "entity_type": input.entity_type,
+                        "entity_id": str(input.entity_id),
+                        "runtime_id": str(runtime_id),
+                        "correlation_id": os.environ.get("INDEMN_CAUSATION_MESSAGE_ID"),
+                    },
+                    "tags": [
+                        f"associate:{associate.get('name', 'unknown')}",
+                        f"entity_type:{input.entity_type}",
+                        f"runtime:{RUNTIME_ID}",
+                    ],
+                    "run_name": f"{associate.get('name', 'agent')} → {input.entity_type} {str(input.entity_id)[:8]}",
+                },
             )
         finally:
             if heartbeat_task:
