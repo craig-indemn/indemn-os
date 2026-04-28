@@ -30,15 +30,17 @@ DEFAULT_PROMPT = (
 
 def build_agent(
     associate: dict,
-    skill_paths: list[str],
+    skills_lib_dir: str | None,
     llm_config: dict,
     activity_id: str | None = None,
 ):
-    """Construct the agent from merged LLM config + skill paths.
+    """Construct the agent from merged LLM config + skills library dir.
 
-    skill_paths: paths to the associate's own skill(s) on the backend filesystem.
-    deepagents handles progressive disclosure — metadata in prompt, full content
-    read on demand.
+    skills_lib_dir: path to the per-activity skills library directory (which
+    contains one subdirectory per skill, each holding its own SKILL.md).
+    deepagents discovers skills by scanning this dir for subdirectories with
+    a SKILL.md inside; metadata is surfaced in the system prompt and the
+    agent loads full content on demand via read_file.
 
     activity_id: per-invocation identifier passed to build_backend so the
     sandbox is scoped per-activity, preventing cross-invocation tool-cache
@@ -56,5 +58,5 @@ def build_agent(
         model=init_chat_model(model_id, **llm_config),
         system_prompt=system_prompt,
         backend=build_backend(activity_id=activity_id),
-        skills=skill_paths if skill_paths else None,
+        skills=[skills_lib_dir] if skills_lib_dir else None,
     )
