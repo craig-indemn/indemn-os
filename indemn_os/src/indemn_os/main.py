@@ -191,6 +191,42 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         )
         render(result, "json")
 
+    @entity_app.command("delete")
+    def delete_cmd(
+        entity_id: str,
+        yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
+    ):
+        """Delete a single entity by id (Bug #2).
+
+        Hard-deletes the document. Routes through `bulk-delete` with a
+        single-_id filter so it goes through the same kernel path as every
+        other delete (audit trail in the changes collection, watch
+        evaluation for the `deleted` event). Use this for one-off cleanups
+        where `bulk-delete --filter ...` is overkill.
+
+        For entities that have a state machine, prefer
+        `indemn {entity} transition <id> --to <terminal-state>` — that
+        keeps the audit trail intact and signals intent more clearly than
+        a hard delete.
+        """
+        if not yes:
+            confirm = typer.confirm(
+                f"Hard-delete {slug} {entity_id}? This is irreversible.",
+                default=False,
+            )
+            if not confirm:
+                typer.echo("Cancelled.")
+                raise typer.Exit(0)
+        result = client.post(
+            f"/api/{slug}s/bulk",
+            json={
+                "operation": "delete",
+                "filter_query": {"_id": entity_id},
+                "dry_run": False,
+            },
+        )
+        render(result, "json")
+
     # Register capability commands.
     # NOTE: closure values (cap_name, slug_name) are bound via factory
     # functions rather than default-parameter capture. The default-param

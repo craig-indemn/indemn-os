@@ -124,19 +124,35 @@ def register_bulk_commands(entity_name: str, entity_app: typer.Typer):
         filter: str = typer.Option(..., "--filter", help="JSON filter query"),
         batch_size: int = 50,
         dry_run: bool = True,  # True by default for safety
+        all_records: bool = typer.Option(
+            False,
+            "--all",
+            help=(
+                "Required when filter is `{}` — explicit opt-in to matching "
+                "every entity in the org. Use with extreme caution; pair with "
+                "the dry-run default to verify match count before --no-dry-run."
+            ),
+        ),
     ):
         """Delete entities in bulk. Emits deletion events.
-        Dry-run is TRUE by default for safety."""
+        Dry-run is TRUE by default for safety.
+
+        Bug #4 — empty filter `{}` was a footgun pre-fix: it silently
+        no-op'd OR (post-burst-#4 with org_id correctly injected) would
+        have matched every entity in the org. The API now rejects empty
+        filter on delete unless `match_all: true` is set; the `--all`
+        flag here surfaces that opt-in.
+        """
         import orjson
 
         client = CLIClient()
-        result = client.post(
-            f"/api/{slug}s/bulk",
-            json={
-                "operation": "delete",
-                "filter_query": orjson.loads(filter),
-                "batch_size": batch_size,
-                "dry_run": dry_run,
-            },
-        )
+        body = {
+            "operation": "delete",
+            "filter_query": orjson.loads(filter),
+            "batch_size": batch_size,
+            "dry_run": dry_run,
+        }
+        if all_records:
+            body["match_all"] = True
+        result = client.post(f"/api/{slug}s/bulk", json=body)
         render(result, "json")

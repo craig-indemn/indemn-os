@@ -116,19 +116,25 @@ def register_bulk_commands(entity_name: str, entity_app: typer.Typer):
         filter: str = typer.Option(..., "--filter", help="JSON filter query"),
         batch_size: int = 50,
         dry_run: bool = True,  # True by default for safety
+        all_records: bool = typer.Option(
+            False,
+            "--all",
+            help="Required for empty filter — explicit opt-in to match-all (Bug #4).",
+        ),
     ):
         """Delete entities in bulk. Emits deletion events.
-        Dry-run is TRUE by default for safety."""
+        Dry-run is TRUE by default for safety. `--all` is required when
+        passing an empty filter to opt into match-all behavior."""
         import orjson
 
         client = CLIClient()
-        result = client.post(
-            f"/api/{slug}s/bulk",
-            json={
-                "operation": "delete",
-                "filter_query": orjson.loads(filter),
-                "batch_size": batch_size,
-                "dry_run": dry_run,
-            },
-        )
+        body = {
+            "operation": "delete",
+            "filter_query": orjson.loads(filter),
+            "batch_size": batch_size,
+            "dry_run": dry_run,
+        }
+        if all_records:
+            body["match_all"] = True
+        result = client.post(f"/api/{slug}s/bulk", json=body)
         render(result, "json")
