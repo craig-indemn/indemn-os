@@ -15,16 +15,39 @@ class CLIClient:
     """HTTP client for CLI API-mode. All CLI commands go through the API."""
 
     def __init__(self):
-        self.base_url = os.environ.get("INDEMN_API_URL", "http://localhost:8000")
-        self.token = os.environ.get("INDEMN_SERVICE_TOKEN", "")
-        if not self.token:
-            import json as _json
-            from pathlib import Path
+        # Resolution order for both base_url and token:
+        #   1. environment variable (highest priority — service tokens, dev override)
+        #   2. ~/.indemn/credentials  (set by `indemn auth login`)
+        #   3. fallback default     (localhost — useful for local dev with no creds)
+        # Pre-fix: base_url ignored credentials, defaulting to localhost:8000.
+        # Users authenticated via `indemn auth login` against api.os.indemn.ai
+        # then ran `indemn <anything>` and got cryptic 401s because the request
+        # silently routed to localhost. The credentials file already carried
+        # `api_url` — we just weren't reading it.
+        creds_data = self._load_credentials()
+        self.base_url = (
+            os.environ.get("INDEMN_API_URL")
+            or creds_data.get("api_url")
+            or "http://localhost:8000"
+        )
+        self.token = (
+            os.environ.get("INDEMN_SERVICE_TOKEN")
+            or creds_data.get("access_token")
+            or ""
+        )
 
-            token_file = Path.home() / ".indemn" / "credentials"
-            if token_file.exists():
-                creds = _json.loads(token_file.read_text())
-                self.token = creds.get("access_token", "")
+    @staticmethod
+    def _load_credentials() -> dict:
+        import json as _json
+        from pathlib import Path
+
+        token_file = Path.home() / ".indemn" / "credentials"
+        if not token_file.exists():
+            return {}
+        try:
+            return _json.loads(token_file.read_text())
+        except (OSError, ValueError):
+            return {}
 
     def _headers(self):
         h = {"Content-Type": "application/json"}
