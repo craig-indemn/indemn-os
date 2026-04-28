@@ -345,27 +345,63 @@ In summary:
 
 ## 8. Deploying to Railway
 
-The production deployment pipeline:
-
-```
-push to main -> GitHub Actions CI -> Railway auto-deploy
-```
+Deployment is **manual** via the Railway CLI. Pushing to `main` does NOT
+trigger a deploy on its own — there is no GitHub Actions CI pipeline
+configured for this repo, and Railway's GitHub integration is not set
+up to deploy `main` automatically. (An earlier version of this doc
+described an auto-deploy flow that never actually existed; corrected
+2026-04-28.)
 
 ### The flow
 
-1. **Push to `main`**: All code merges go through PRs. Direct pushes to main are blocked.
-2. **GitHub Actions**: Runs unit and integration tests. If tests fail, the deploy is blocked.
-3. **Railway**: On successful CI, Railway detects the push and deploys automatically.
+1. **Land code on `main`** via PR. Branches are merged; the merge commit lives on `main`.
+2. **Pick the service to deploy.** Six Railway services share two image flavors:
+   - `indemn-api`, `indemn-queue-processor`, `indemn-temporal-worker` — kernel image (anything in `kernel/`)
+   - `indemn-runtime-async`, `indemn-runtime-chat` — harness images (anything in `harnesses/<kind>-deepagents/`)
+   - `indemn-ui` — UI image (anything in `ui/`)
+3. **Run `railway up --service <name>`.** Railway uploads the working tree, builds the image, and rolls it out. Health-checks pass when the new instance is serving.
 
-### Manual deploy (emergency only)
+### Deploy commands
 
 ```bash
-# Check current deployment status
+# Check current status across all services
 railway status
 
-# Force redeploy from current main
-railway up
+# Deploy a specific service from the current working tree
+railway up --service indemn-api
+railway up --service indemn-temporal-worker
+
+# Deploy in background (non-blocking — useful when chaining)
+railway up --service indemn-api --detach
 ```
+
+### Which services to deploy after a kernel change
+
+| Touched | Deploy |
+|---|---|
+| `kernel/api/*`, `kernel/auth/*`, anything API surface | `indemn-api` |
+| `kernel/temporal/*`, bulk activities, workflow logic | `indemn-temporal-worker` (+ `indemn-api` if API also touched) |
+| `kernel/integration/adapters/*` | both `indemn-api` and `indemn-temporal-worker` (adapter runs in either depending on capability invocation path) |
+| `kernel/queue_processor.py` | `indemn-queue-processor` |
+| `harnesses/async-deepagents/*` | `indemn-runtime-async` |
+| `harnesses/chat-deepagents/*` | `indemn-runtime-chat` |
+| `ui/*` | `indemn-ui` |
+| `indemn_os/*` (the user-facing CLI package) | none — runs on user laptops |
+
+### Verify after deploy
+
+```bash
+# Wait for health to come back up
+until curl -fsS https://indemn-api-production.up.railway.app/health | grep -q '"status":"healthy"'; do sleep 5; done
+
+# Check the actual rollout took effect (e.g., hit an endpoint that exercises the change)
+```
+
+Note that during a Railway rolling deploy the OLD instance can keep
+serving traffic for several seconds AFTER `/health` reports healthy on
+the new instance. If you're doing live verification of a fix, give the
+deploy 30s of buffer beyond the first healthy response before testing
+behavior changes.
 
 ### Environment variables on Railway
 

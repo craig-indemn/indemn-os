@@ -119,6 +119,30 @@ Railway provides a WireGuard-based private network. Internal services communicat
 
 All kernel services share these environment variables, configured in Railway's service settings:
 
+> **Operator note (2026-04-28): the dev `mongodb-uri` AWS secret currently
+> stores a stale hostname.** The secret at
+> `arn:aws:secretsmanager:...:secret:indemn/dev/shared/mongodb-uri` contains
+> the host `dev-indemn-pl-0.mifra5.mongodb.net`, which no longer resolves
+> (DNS not-found). The actual reachable cluster is at
+> `dev-indemn.mifra5.mongodb.net` — what every doc and the runtime env vars
+> already reference. Railway services are unaffected because they read
+> `MONGODB_URI` from their own env config (correct host). Only callers that
+> read the secret directly (`scripts/secrets-proxy/mongosh-connect.sh` in
+> the operating-system repo, ad-hoc mongosh sessions) are affected.
+>
+> **Workaround until the secret is updated:**
+> ```bash
+> URI=$(aws secretsmanager get-secret-value --secret-id 'indemn/dev/shared/mongodb-uri' \
+>   --query 'SecretString' --output text \
+>   | sed 's|dev-indemn-pl-0\.mifra5\.mongodb\.net|dev-indemn.mifra5.mongodb.net|g')
+> mongosh "${URI}/indemn_os" --quiet --eval '...'
+> ```
+>
+> **The fix is a single `aws secretsmanager update-secret`** with the
+> corrected URI; held until an operator with `indemn/dev/shared/*` write
+> permission lands it. Tracked as Bug #12 in
+> `customer-system/os-learnings.md`.
+
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `MONGODB_URI` | Atlas connection string | `mongodb+srv://...@dev-indemn.mifra5.mongodb.net` |
