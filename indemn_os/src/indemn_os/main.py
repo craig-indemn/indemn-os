@@ -168,6 +168,29 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             )
             render(result, "json")
 
+    @entity_app.command("reprocess")
+    def reprocess_cmd(
+        entity_id: str,
+        role: str = typer.Option(..., "--role", help="Role whose watch should fire"),
+        event_type: str = typer.Option(
+            "created",
+            "--event-type",
+            help="Event type to simulate (default: 'created'; use 'transitioned:<state>' or 'method:<name>' for non-creation watches)",
+        ),
+    ):
+        """Re-emit a message for this entity to a specific role's queue.
+
+        Bug #10 — backfill historical entities against newly-added watches.
+        The named role MUST already have a watch on this entity type matching
+        the event type, otherwise the request 400s with the role's actual
+        watches listed.
+        """
+        result = client.post(
+            f"/api/{slug}s/{entity_id}/reprocess",
+            json={"role": role, "event_type": event_type},
+        )
+        render(result, "json")
+
     # Register capability commands
     _COLLECTION_LEVEL_CAPS = {"fetch_new"}
     for cap in meta.get("capabilities", []):
