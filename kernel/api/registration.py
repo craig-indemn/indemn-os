@@ -56,6 +56,135 @@ def _fire_dispatch(created_messages):
         asyncio.create_task(optimistic_dispatch(created_messages))
 
 
+async def _resolve_relationship_dict_inputs(
+    entity_cls, entity_name: str, data: dict
+) -> dict:
+    """Reject (or auto-resolve) dict-shaped values for relationship fields (Bug #9).
+
+    LLMs routinely pass `{"company": {"name": "Acme"}}` for an ObjectId-typed
+    relationship field instead of the canonical `{"company": "<24-char hex>"}`.
+    Pre-fix the kernel raised a Pydantic `is_instance_of` error and the
+    associate's message dead-lettered. This helper catches that case at the
+    API boundary so the caller (CLI / harness / UI) gets a 400 with a shape
+    hint and can self-correct, rather than the message disappearing into the
+    dead-letter queue.
+
+    Two paths:
+
+    - **Default (no opt-in):** raise HTTPException 400 with the shape hint
+      and a pointer to `entity-resolve` so the caller can look up the
+      relationship target's _id.
+
+    - **Opt-in via `auto_resolve=true` on the FieldDefinition:** call the
+      target entity's `entity_resolve` capability with the dict as the
+      candidate. Auto-link only when there's exactly ONE candidate at score
+      1.0 — anything else (zero, multiple at 1.0, or only fuzzy matches) is
+      surfaced as 400 so ambiguity is never silently picked. This preserves
+      Bug #31's "never auto-pick" contract on entity_resolve.
+
+    Idempotent: non-dict values pass through unchanged. Fields that don't
+    appear in `data` are skipped.
+    """
+    relationship_targets = getattr(entity_cls, "_relationship_targets", {}) or {}
+    auto_resolve_fields = getattr(entity_cls, "_auto_resolve_fields", set()) or set()
+
+    for field_name, target_name in relationship_targets.items():
+        if field_name not in data:
+            continue
+        value = data[field_name]
+        if not isinstance(value, dict):
+            continue  # String hex, ObjectId, None, etc. handled elsewhere
+
+        if field_name not in auto_resolve_fields:
+            raise HTTPException(
+                400,
+                f"Field '{field_name}' on {entity_name} is a relationship to "
+                f"{target_name!r} — pass the target entity's `_id` (24-char hex "
+                f"string), not a dict. Got: {value!r}. Resolve the target first "
+                f"via `indemn {target_name.lower()} list --filter '...'` or "
+                f"`indemn {target_name.lower()} entity-resolve --data "
+                f"'{{\"candidate\": ...}}'`, then pass the returned _id.",
+            )
+
+        # auto_resolve path: dispatch to entity_resolve capability on the target.
+        target_cls = ENTITY_REGISTRY.get(target_name)
+        if target_cls is None:
+            raise HTTPException(
+                400,
+                f"Field '{field_name}' has auto_resolve=true but its target "
+                f"entity type {target_name!r} is not registered in this org. "
+                f"Pass _id directly or register the target entity first.",
+            )
+        # Find entity_resolve config on the target's activated capabilities.
+        cap_config = None
+        for cap in getattr(target_cls, "_activated_capabilities", []) or []:
+            cap_name = cap.capability if hasattr(cap, "capability") else cap.get("capability")
+            if cap_name == "entity_resolve":
+                cap_config = cap.config if hasattr(cap, "config") else cap.get("config")
+                break
+        if cap_config is None:
+            raise HTTPException(
+                400,
+                f"Field '{field_name}' has auto_resolve=true but {target_name!r} "
+                f"does not have entity_resolve activated. Activate it via "
+                f"`indemn entity enable {target_name} entity_resolve --config "
+                f"'{{\"strategies\": [...]}}'` or pass _id directly.",
+            )
+        from kernel.capability.registry import get_capability
+
+        resolve_fn = get_capability("entity_resolve")
+        result = await resolve_fn(
+            target_cls,
+            cap_config,
+            current_org_id.get(),
+            params={"candidate": value, "limit": 5},
+        )
+        candidates = result.get("candidates", []) or []
+        exact = [c for c in candidates if c.get("score") == 1.0]
+
+        if len(exact) == 1:
+            from bson import ObjectId as _OId
+
+            data[field_name] = _OId(exact[0]["_id"])
+            continue
+
+        # Surface ambiguity / no-match honestly — Bug #31 contract.
+        if not candidates:
+            raise HTTPException(
+                400,
+                f"Field '{field_name}': auto_resolve found no {target_name!r} "
+                f"matches for {value!r}. Pass _id directly, or create the "
+                f"{target_name} entity first.",
+            )
+        if len(exact) > 1:
+            ambiguous = [
+                {"_id": c["_id"], "summary": c.get("summary", {})} for c in exact
+            ]
+            raise HTTPException(
+                400,
+                f"Field '{field_name}': auto_resolve found {len(exact)} "
+                f"{target_name!r} candidates at score 1.0 — ambiguous, refusing "
+                f"to pick. Pass _id directly. Candidates: {ambiguous}",
+            )
+        # Only fuzzy matches.
+        fuzzy_top = [
+            {
+                "_id": c["_id"],
+                "score": c["score"],
+                "summary": c.get("summary", {}),
+            }
+            for c in candidates[:3]
+        ]
+        raise HTTPException(
+            400,
+            f"Field '{field_name}': auto_resolve found {len(candidates)} fuzzy "
+            f"{target_name!r} candidates (no score 1.0) for {value!r}. "
+            f"Pass _id directly. Top candidates: {fuzzy_top}",
+        )
+
+    return data
+
+
 def _coerce_objectid_fields(entity_cls, data: dict) -> dict:
     """Convert string values to ObjectId for fields typed as objectid.
 
@@ -174,6 +303,7 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
     @router.post("/")
     async def create_entity(data: dict, actor=Depends(get_current_actor)):
         check_permission(actor, entity_name, "write")
+        data = await _resolve_relationship_dict_inputs(entity_cls, entity_name, data)
         data = _coerce_objectid_fields(entity_cls, data)
         entity = entity_cls(org_id=current_org_id.get(), **data)
         created_messages = await entity.save_tracked(method="create")
@@ -203,6 +333,7 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
                 f"Cannot set '{state_field}' via update. "
                 f"Use POST /{slug}/{{id}}/transition instead.",
             )
+        data = await _resolve_relationship_dict_inputs(entity_cls, entity_name, data)
         data = _coerce_objectid_fields(entity_cls, data)
         for key, value in data.items():
             if key not in ("id", "_id", "org_id", "version"):
