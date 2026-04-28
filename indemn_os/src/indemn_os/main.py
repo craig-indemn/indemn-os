@@ -191,20 +191,33 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         )
         render(result, "json")
 
-    # Register capability commands
+    # Register capability commands.
+    # NOTE: closure values (cap_name, slug_name) are bound via factory
+    # functions rather than default-parameter capture. The default-param
+    # idiom (e.g. `_cap=cap["name"]`) leaks the params into Typer's option
+    # parser and renders them as `---cap` / `---slug` in --help (Bug #5),
+    # because Typer treats every function parameter as a CLI option,
+    # underscored or not. Factories close over the values without exposing
+    # them on the command's signature.
     _COLLECTION_LEVEL_CAPS = {"fetch_new"}
-    for cap in meta.get("capabilities", []):
-        if cap["name"] in _COLLECTION_LEVEL_CAPS:
-            continue  # Handled below
-        cap_slug = cap["name"].replace("_", "-")
 
-        @entity_app.command(cap_slug)
+    def _make_entity_cap_cmd(cap_name: str, slug_name: str):
+        capability_kebab = cap_name.replace("_", "-")
+
         def cap_cmd(
-            entity_id: str = typer.Argument(None),
-            auto: bool = False,
-            data: str = None,
-            _cap=cap["name"],
-            _slug=slug,
+            entity_id: str = typer.Argument(
+                None, help="Entity ObjectId. Omit to apply to ALL entities of this type."
+            ),
+            auto: bool = typer.Option(
+                False, help="Try configured rules first; LLM fallback only if needed."
+            ),
+            data: str = typer.Option(
+                None,
+                help=(
+                    "JSON body for the capability. Shape depends on the "
+                    f"capability — see `indemn skill get {slug_name.capitalize()}`."
+                ),
+            ),
         ):
             """Invoke a capability on an entity (or all if no ID given)."""
             import orjson
@@ -213,44 +226,67 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             body = orjson.loads(data) if data else {}
 
             if entity_id:
-                # Single entity
                 result = client.post(
-                    f"/api/{_slug}s/{entity_id}/{_cap.replace('_', '-')}",
+                    f"/api/{slug_name}s/{entity_id}/{capability_kebab}",
                     json=body,
                     params=params,
                 )
                 render(result, "json")
             else:
-                # Batch: run on all entities of this type
-                entities = client.get(f"/api/{_slug}s/", params={"limit": 1000})
+                entities = client.get(f"/api/{slug_name}s/", params={"limit": 1000})
                 processed = 0
                 for entity in entities:
                     eid = entity.get("_id") or entity.get("id")
                     if not eid:
                         continue
                     result = client.post(
-                        f"/api/{_slug}s/{eid}/{_cap.replace('_', '-')}",
+                        f"/api/{slug_name}s/{eid}/{capability_kebab}",
                         json=body,
                         params=params,
                     )
                     if result.get("matched") or result.get("result"):
                         processed += 1
-                typer.echo(f"Processed {processed}/{len(entities)} {_slug}s")
+                typer.echo(f"Processed {processed}/{len(entities)} {slug_name}s")
 
-    # Register collection-level capability commands (no entity_id — creates entities)
-    for cap in meta.get("capabilities", []):
-        if cap["name"] not in _COLLECTION_LEVEL_CAPS:
-            continue
-        cap_slug = cap["name"].replace("_", "-")
+        return cap_cmd
 
-        @entity_app.command(cap_slug)
-        def collection_cap_cmd(data: str = None, _cap=cap["name"], _slug=slug):
+    def _make_collection_cap_cmd(cap_name: str, slug_name: str):
+        capability_kebab = cap_name.replace("_", "-")
+
+        def collection_cap_cmd(
+            data: str = typer.Option(
+                None,
+                help=(
+                    f"JSON body for {cap_name}. Shape varies by capability — "
+                    f"e.g. `fetch_new` accepts {{\"since\": \"<ISO 8601>\", "
+                    "\"user_emails\": [\"x@y\"], \"limit\": <int>}}. "
+                    f"See `indemn skill get {slug_name.capitalize()}`."
+                ),
+            ),
+        ):
             """Invoke a collection-level capability (e.g., fetch-new)."""
             import orjson
 
             body = orjson.loads(data) if data else {}
-            result = client.post(f"/api/{_slug}s/{_cap.replace('_', '-')}", json=body)
+            result = client.post(
+                f"/api/{slug_name}s/{capability_kebab}", json=body
+            )
             render(result, "json")
+
+        return collection_cap_cmd
+
+    for cap in meta.get("capabilities", []):
+        if cap["name"] in _COLLECTION_LEVEL_CAPS:
+            continue  # Handled below
+        cap_slug = cap["name"].replace("_", "-")
+        entity_app.command(cap_slug)(_make_entity_cap_cmd(cap["name"], slug))
+
+    # Collection-level capability commands (no entity_id — creates entities)
+    for cap in meta.get("capabilities", []):
+        if cap["name"] not in _COLLECTION_LEVEL_CAPS:
+            continue
+        cap_slug = cap["name"].replace("_", "-")
+        entity_app.command(cap_slug)(_make_collection_cap_cmd(cap["name"], slug))
 
     # Register bulk commands for this entity type
     from indemn_os.bulk_commands import register_bulk_commands
