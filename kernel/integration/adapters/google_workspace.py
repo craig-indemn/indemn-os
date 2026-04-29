@@ -26,6 +26,7 @@ from kernel.integration.adapter import (
     Adapter,
     AdapterAuthError,
     AdapterError,
+    AdapterValidationError,
 )
 from kernel.integration.registry import register_adapter
 
@@ -161,18 +162,32 @@ class GoogleWorkspaceAdapter(Adapter):
     async def fetch(
         self,
         since: str = None,
+        until: str = None,
         user_emails: list = None,
         limit: int = 500,
-        **params,
+        **unknown_params,
     ) -> list[dict]:
         """Fetch meetings via Google Meet API across all domain users.
 
         Captures everything: conference metadata, participants with IDs/emails,
         recordings, transcripts (doc + structured entries), smart notes.
 
-        `since` accepts 'YYYY-MM-DD' or full RFC3339 datetime — normalized here.
+        `since` / `until` accept 'YYYY-MM-DD' or full RFC3339 datetime — normalized here.
+        Combined, they constrain the Meet conference filter to records that
+        OVERLAP the [since, until] window: `end_time>=since AND start_time<=until`.
         """
+        # Bug #36: previously `**params` silently absorbed any unknown kwargs
+        # (operators passed `until=...` and the adapter dropped it without warning,
+        # leading to 500-message ingestion for what was meant to be a 4-hour window).
+        # Reject unknown params explicitly so callers learn what's supported.
+        if unknown_params:
+            raise AdapterValidationError(
+                f"Unknown params for GoogleWorkspaceAdapter.fetch: "
+                f"{sorted(unknown_params.keys())}. "
+                f"Supported: since, until, user_emails, limit."
+            )
         since = _normalize_rfc3339(since)
+        until = _normalize_rfc3339(until)
         if not user_emails:
             try:
                 user_emails = await self._list_domain_users()
@@ -208,7 +223,7 @@ class GoogleWorkspaceAdapter(Adapter):
         tracker = _PerUserErrorTracker(len(real_users), op="list user conferences")
         for email in real_users:
             try:
-                conferences = await self._list_user_conferences(email, since)
+                conferences = await self._list_user_conferences(email, since, until)
                 tracker.record_success()
                 for conf in conferences:
                     conf_id = conf["name"]
@@ -282,15 +297,30 @@ class GoogleWorkspaceAdapter(Adapter):
     async def fetch_emails(
         self,
         since: str = None,
+        until: str = None,
         user_emails: list = None,
         limit: int = 500,
-        **params,
+        **unknown_params,
     ) -> list[dict]:
         """Fetch emails via Gmail API across specified users.
 
         Returns list of dicts matching Email entity fields.
         Uses domain-wide delegation to impersonate each user.
+
+        `since` / `until` accept 'YYYY-MM-DD' or full RFC3339 datetime.
+        Gmail's filter is DATE-precision (`after:` / `before:` use YYYY/MM/DD),
+        so for sub-day windows the API returns extra messages and we filter
+        client-side by the parsed `Date:` header against `until`.
         """
+        # Bug #36: see GoogleWorkspaceAdapter.fetch — same rationale.
+        if unknown_params:
+            raise AdapterValidationError(
+                f"Unknown params for GoogleWorkspaceAdapter.fetch_emails: "
+                f"{sorted(unknown_params.keys())}. "
+                f"Supported: since, until, user_emails, limit."
+            )
+        since = _normalize_rfc3339(since)
+        until = _normalize_rfc3339(until)
         if not user_emails:
             try:
                 user_emails = await self._list_domain_users()
@@ -312,11 +342,25 @@ class GoogleWorkspaceAdapter(Adapter):
         seen_message_ids = set()
         tracker = _PerUserErrorTracker(len(real_users), op="list user gmail messages")
 
+        # Bug #36: Gmail's `before:` filter is date-precision, so sub-day
+        # `until` windows can't be expressed in the API filter. Compare the
+        # parsed `Date:` header against `until` post-fetch; drop messages past
+        # the cutoff. `until` is RFC3339 (normalized above); email_data["date"]
+        # is also RFC3339 (parsed via email.utils.parsedate_to_datetime).
+        until_dt = None
+        if until:
+            try:
+                until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            except ValueError:
+                until_dt = None  # Fall through; only date-precision filter applies.
+
         for email_addr in real_users:
             if len(all_emails) >= limit:
                 break
             try:
-                messages = await self._list_gmail_messages(email_addr, since, limit - len(all_emails))
+                messages = await self._list_gmail_messages(
+                    email_addr, since, until, limit - len(all_emails)
+                )
                 tracker.record_success()
                 for msg_meta in messages:
                     msg_id = msg_meta["id"]
@@ -326,6 +370,15 @@ class GoogleWorkspaceAdapter(Adapter):
                     try:
                         email_data = await self._get_gmail_message(email_addr, msg_id)
                         if email_data:
+                            if until_dt and email_data.get("date"):
+                                try:
+                                    msg_dt = datetime.fromisoformat(
+                                        email_data["date"].replace("Z", "+00:00")
+                                    )
+                                    if msg_dt > until_dt:
+                                        continue  # past sub-day cutoff
+                                except ValueError:
+                                    pass  # unparseable date — keep the message
                             all_emails.append(email_data)
                     except Exception as e:
                         logger.warning("Failed to get message %s for %s: %s", msg_id, email_addr, e)
@@ -339,15 +392,31 @@ class GoogleWorkspaceAdapter(Adapter):
         logger.info("Fetched %d emails across %d users", len(all_emails), len(real_users))
         return all_emails
 
-    async def _list_gmail_messages(self, user_email: str, since: str = None, max_results: int = 500) -> list[dict]:
-        """List message IDs from a user's Gmail inbox."""
+    async def _list_gmail_messages(
+        self,
+        user_email: str,
+        since: str = None,
+        until: str = None,
+        max_results: int = 500,
+    ) -> list[dict]:
+        """List message IDs from a user's Gmail inbox.
+
+        Bug #36: Gmail query is DATE-precision via `after:YYYY/MM/DD` and
+        `before:YYYY/MM/DD`. Sub-day precision is not expressible in the API
+        — `fetch_emails()` does post-fetch filtering on the parsed `Date:`
+        header for that case.
+        """
         def _sync():
             service = self._gmail_service(user_email)
-            query = ""
+            query_parts = []
             if since:
-                # Gmail query uses YYYY/MM/DD format
-                date_str = since[:10].replace("-", "/")
-                query = f"after:{date_str}"
+                query_parts.append(f"after:{since[:10].replace('-', '/')}")
+            if until:
+                # Gmail `before:` is exclusive of the date — to include all of
+                # the `until` day, callers need to pass until = next day.
+                # We document that here and don't auto-round; explicit > implicit.
+                query_parts.append(f"before:{until[:10].replace('-', '/')}")
+            query = " ".join(query_parts)
 
             all_messages = []
             page_token = None
@@ -789,12 +858,20 @@ class GoogleWorkspaceAdapter(Adapter):
 
         return await asyncio.to_thread(_sync)
 
-    async def _list_user_conferences(self, email: str, since: str = None) -> list[dict]:
+    async def _list_user_conferences(
+        self, email: str, since: str = None, until: str = None
+    ) -> list[dict]:
         def _sync():
             service = self._meet_service(email)
-            filter_str = ""
+            # Bug #36: AND-combine since (lower bound on end_time) and until
+            # (upper bound on start_time). Together this means: "conferences
+            # that overlap the [since, until] window".
+            clauses = []
             if since:
-                filter_str = f'end_time>="{since}"'
+                clauses.append(f'end_time>="{since}"')
+            if until:
+                clauses.append(f'start_time<="{until}"')
+            filter_str = " AND ".join(clauses)
             records = []
             page_token = None
             while True:
