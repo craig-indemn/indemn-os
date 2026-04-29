@@ -17,8 +17,6 @@ import logging
 import os
 from datetime import timedelta
 
-import yaml
-
 from harness.agent import build_agent
 from harness.completion_logic import agent_did_useful_work
 from harness_common.cli import CLIError, indemn
@@ -46,93 +44,6 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
         **(associate.get("llm_config") or {}),
         **((deployment.get("llm_override") or {}) if deployment else {}),
     }
-
-
-def _write_skills_to_filesystem(skill_refs: list[str], activity_id: str) -> str | None:
-    """Fetch associate skills and write them as proper deepagents skills under
-    a per-activity skills library directory. Returns the LIBRARY DIRECTORY path
-    (deepagents discovers skills by scanning the library for subdirectories
-    with a SKILL.md inside), or None if no skills were written.
-
-    Layout — required by deepagents:
-        /workspace/{activity_id}/skills/                        ← library dir (passed to deepagents)
-                                       /{skill-slug}/SKILL.md   ← individual skill
-
-    Apr 28 finding (Diana@CKSpecialty trace 019dd5f3-…): the previous version
-    of this function passed each individual skill subdirectory to deepagents
-    instead of the parent library dir. deepagents interpreted the per-skill
-    path as a library and looked inside it for skill subdirs, found none, and
-    surfaced "(No skills available yet. You can create skills in <path>)" in
-    the agent's system prompt — meaning the agent never loaded the associate
-    skill content. Every iteration of email-classifier (v3 → v7) was thus
-    ineffective: the agent only ever followed the harness DEFAULT_PROMPT.
-
-    Fix: pass the parent library dir, not the per-skill dir.
-
-    Only writes associate-type skills (behavioral instructions). Entity skills
-    are NOT pre-loaded — the agent reads them on demand via
-    execute("indemn skill get <EntityName>").
-    """
-    if not skill_refs:
-        return None
-
-    # Per-activity library dir — this is what gets passed to deepagents.
-    skills_lib_dir = f"/workspace/{activity_id}/skills"
-    os.makedirs(skills_lib_dir, exist_ok=True)
-
-    written = 0
-    for ref in skill_refs:
-        try:
-            skill = indemn("skill", "get", ref)
-        except CLIError:
-            log.warning("Skill not found: %s", ref)
-            continue
-
-        if skill.get("type") == "entity":
-            continue
-
-        slug = ref.lower().replace(" ", "-")
-        skill_dir = os.path.join(skills_lib_dir, slug)
-        os.makedirs(skill_dir, exist_ok=True)
-
-        content = skill.get("content", "")
-        name = skill.get("name", ref)
-        # Fallback string contains a colon — keep as-is, yaml.safe_dump will quote it.
-        description = skill.get("description") or f"Skill: {name}"
-
-        # Build frontmatter via yaml.safe_dump so values with colons / quotes /
-        # newlines / unicode are properly escaped. Hand-rolled f-string of
-        # `description: {value}` failed YAML parse on values containing ':'
-        # (e.g. fallback "Skill: email-classifier") and broke deepagents skill
-        # discovery — the agent saw "(No skills available yet)" even after the
-        # path fix in 8141a80. Surfaced 2026-04-29 Diana@CKSpecialty trace.
-        frontmatter = yaml.safe_dump(
-            {"name": name, "description": description},
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False,
-        )
-        skill_file = os.path.join(skill_dir, "SKILL.md")
-        with open(skill_file, "w") as f:
-            f.write(f"---\n{frontmatter}---\n\n")
-            f.write(content)
-        written += 1
-
-    if written == 0:
-        return None
-
-    log.info(
-        "Wrote %d associate skill(s) to library %s for deepagents to discover",
-        written,
-        skills_lib_dir,
-    )
-    # Return the LIBRARY dir as an ABSOLUTE path. deepagents' FilesystemBackend
-    # (parent of LocalShellBackend) resolves relative paths against root_dir,
-    # which is also /workspace/{activity_id} — so a relative "{activity_id}/skills"
-    # would double-nest to /workspace/{activity_id}/{activity_id}/skills and
-    # find nothing (Bug #35, confirmed via deepagents 0.5.3 source +
-    # repro on 2026-04-29). Absolute paths bypass cwd resolution.
-    return skills_lib_dir
 
 
 @activity.defn
@@ -170,21 +81,15 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # Three-layer LLM config merge [Q3, G-50]
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Write associate skill(s) to the per-activity skills library dir for
-        # deepagents progressive disclosure. Returns the library dir path (NOT
-        # per-skill subdir paths — see _write_skills_to_filesystem docstring
-        # for the Apr 28 fix). Entity skills are NOT pre-loaded — the agent
-        # reads them on demand via execute("indemn skill get <EntityName>").
+        # Per-activity sandbox dir for the LocalShellBackend (Bug #3 fix:
+        # scopes /workspace/{activity_id}/ so one agent's tool-cache doesn't
+        # leak into another's). The agent loads its operating + entity skills
+        # at runtime via `execute('indemn skill get <name>')` per the
+        # build_system_prompt directive — no filesystem SKILL.md writes here.
         activity_id = f"act-{input.message_id[:12]}"
-        skills_lib_dir = _write_skills_to_filesystem(associate.get("skills", []), activity_id)
 
-        # Build agent (thin — deepagents handles everything once backend is set).
-        # Bug #3 fix: pass activity_id so the sandbox root_dir is scoped per
-        # activity, preventing cross-invocation tool-cache leaks where one
-        # agent's grep matched another agent's cached results.
         agent = build_agent(
             associate=associate,
-            skills_lib_dir=skills_lib_dir,
             llm_config=llm_config,
             activity_id=activity_id,
         )
