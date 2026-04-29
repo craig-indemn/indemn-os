@@ -8,12 +8,15 @@ Both share the same interface: org_id, version, save_tracked(), find_scoped(), g
 transition_to(). The API/CLI layer doesn't care which base class is used.
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Optional
 
 from beanie import Document
 from bson import ObjectId
 from pydantic import BaseModel, Field
+
+_logger = logging.getLogger(__name__)
 
 # --- Shared mixin for common behavior ---
 
@@ -200,7 +203,28 @@ class _DomainQuery:
         self._limit_n = n
         return self
 
-    async def to_list(self, length: int = None):
+    async def to_list(self, length: int = None, skip_invalid: bool = False):
+        """Materialize the query into a list of entity instances.
+
+        Args:
+            length: cap on number of docs to fetch (Motor passthrough). Usually
+                bounded already via `.limit()`; defaults to 1000 if neither is set.
+            skip_invalid: when True, individual docs that fail Pydantic
+                construction are skipped with a warning log naming the entity
+                type and bad doc `_id`. When False (default — the historical
+                strict behavior), one bad doc raises and the entire list call
+                fails with a Pydantic ValidationError.
+
+        Bug #37 (2026-04-29 Armadillo trace): a single Email document with
+        `company={"name":"Oneleet"}` (a stringified dict left over from a
+        pre-Bug-#9-fix associate run) made `_DomainQuery.to_list()` raise
+        `Input should be an instance of ObjectId`, which propagated through
+        the user-facing list endpoint and returned HTTP 400 for every caller.
+        One bad row poisoned the whole endpoint. The list route now opts in
+        to `skip_invalid=True` so the API stays usable while the malformed
+        rows are surfaced via logs for cleanup. Migrations / audit code that
+        need to know about every doc keep the strict default.
+        """
         coll = self._cls._db_ref[self._cls._collection_name]
         cursor = coll.find(self._filter)
         if self._sort_key:
@@ -215,7 +239,19 @@ class _DomainQuery:
         docs = await cursor.to_list(length=limit or 1000)
         entities = []
         for doc in docs:
-            entity = self._cls(**doc)
+            try:
+                entity = self._cls(**doc)
+            except Exception as e:
+                if skip_invalid:
+                    _logger.warning(
+                        "Skipping malformed %s document _id=%s in to_list "
+                        "(skip_invalid=True): %s",
+                        self._cls.__name__,
+                        doc.get("_id"),
+                        e,
+                    )
+                    continue
+                raise
             entity._loaded_state = entity.model_dump(by_alias=True)
             entities.append(entity)
         return entities

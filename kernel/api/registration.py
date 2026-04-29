@@ -22,6 +22,7 @@ from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
 from kernel.context import current_org_id
 from kernel.db import ENTITY_REGISTRY
+from kernel.entity.base import DomainBaseEntity
 
 
 def _evict_routes_for_prefix(app, prefix: str) -> int:
@@ -349,7 +350,20 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
                 # (callers should use one or the other, not both).
                 if field_name not in filter_doc:
                     filter_doc[field_name] = value
-        entities = await entity_cls.find_scoped(filter_doc).skip(offset).limit(limit).to_list()
+        # Bug #37: domain entities use _DomainQuery which supports
+        # skip_invalid — a single malformed doc (e.g. `company` containing a
+        # stringified dict from a pre-Bug-#9 associate run) used to make
+        # `entity_cls(**doc)` raise Pydantic ValidationError, propagate up,
+        # and return HTTP 400 for every caller. Opt in to tolerant
+        # construction here so the user-facing list endpoint stays usable
+        # while the malformed rows are surfaced in logs for cleanup.
+        # Kernel entities use Beanie's `find().to_list()` which doesn't
+        # accept the kwarg — keep the existing path for those.
+        query = entity_cls.find_scoped(filter_doc).skip(offset).limit(limit)
+        if isinstance(entity_cls, type) and issubclass(entity_cls, DomainBaseEntity):
+            entities = await query.to_list(skip_invalid=True)
+        else:
+            entities = await query.to_list()
         return [to_dict(e) for e in entities]
 
     @router.get("/{entity_id}")
