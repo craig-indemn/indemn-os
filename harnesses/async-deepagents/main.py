@@ -17,6 +17,8 @@ import logging
 import os
 from datetime import timedelta
 
+import yaml
+
 from harness.agent import build_agent
 from harness.completion_logic import agent_did_useful_work
 from harness_common.cli import CLIError, indemn
@@ -95,11 +97,24 @@ def _write_skills_to_filesystem(skill_refs: list[str], activity_id: str) -> str 
 
         content = skill.get("content", "")
         name = skill.get("name", ref)
-        description = skill.get("description", f"Skill: {name}")
+        # Fallback string contains a colon — keep as-is, yaml.safe_dump will quote it.
+        description = skill.get("description") or f"Skill: {name}"
 
+        # Build frontmatter via yaml.safe_dump so values with colons / quotes /
+        # newlines / unicode are properly escaped. Hand-rolled f-string of
+        # `description: {value}` failed YAML parse on values containing ':'
+        # (e.g. fallback "Skill: email-classifier") and broke deepagents skill
+        # discovery — the agent saw "(No skills available yet)" even after the
+        # path fix in 8141a80. Surfaced 2026-04-29 Diana@CKSpecialty trace.
+        frontmatter = yaml.safe_dump(
+            {"name": name, "description": description},
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+        )
         skill_file = os.path.join(skill_dir, "SKILL.md")
         with open(skill_file, "w") as f:
-            f.write(f"---\nname: {name}\ndescription: {description}\n---\n\n")
+            f.write(f"---\n{frontmatter}---\n\n")
             f.write(content)
         written += 1
 
