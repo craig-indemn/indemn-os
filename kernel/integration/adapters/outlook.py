@@ -13,6 +13,7 @@ from kernel.integration.adapter import (
     AdapterAuthError,
     AdapterRateLimitError,
     AdapterTimeoutError,
+    AdapterValidationError,
 )
 from kernel.integration.registry import register_adapter
 
@@ -55,14 +56,40 @@ class OutlookAdapter(Adapter):
             }
 
     async def fetch(
-        self, since: str = None, folder: str = "inbox", limit: int = 50, **params
+        self,
+        since: str = None,
+        until: str = None,
+        folder: str = "inbox",
+        limit: int = 50,
+        **unknown_params,
     ) -> list[dict]:
-        """Fetch emails from Outlook inbox."""
+        """Fetch emails from Outlook inbox.
+
+        `since` / `until` are RFC3339 datetimes; together they constrain the
+        Microsoft Graph `$filter` to messages with `receivedDateTime` in
+        [since, until]. Bug #36 same-pattern fix: previously `**params`
+        silently swallowed any unknown kwargs (operators could pass `until`
+        and the adapter would drop it), now unknown kwargs raise
+        AdapterValidationError listing what's supported.
+        """
+        if unknown_params:
+            raise AdapterValidationError(
+                f"Unknown params for OutlookAdapter.fetch: "
+                f"{sorted(unknown_params.keys())}. "
+                f"Supported: since, until, folder, limit."
+            )
         headers = {"Authorization": f"Bearer {self.credentials['access_token']}"}
         url = f"https://graph.microsoft.com/v1.0/me/mailFolders/{folder}/messages"
         query_params = {"$top": limit, "$orderby": "receivedDateTime desc"}
+        # Microsoft Graph $filter clauses combined with `and`. Datetime is
+        # full-precision, no client-side filter needed.
+        filter_clauses = []
         if since:
-            query_params["$filter"] = f"receivedDateTime ge {since}"
+            filter_clauses.append(f"receivedDateTime ge {since}")
+        if until:
+            filter_clauses.append(f"receivedDateTime le {until}")
+        if filter_clauses:
+            query_params["$filter"] = " and ".join(filter_clauses)
 
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, params=query_params, timeout=30.0)

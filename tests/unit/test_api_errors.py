@@ -25,6 +25,7 @@ from pydantic import BaseModel, ValidationError
 from kernel.api.errors import register_error_handlers
 from kernel.entity.save import VersionConflictError
 from kernel.entity.state_machine import StateMachineError, TransitionValidationError
+from kernel.integration.adapter import AdapterValidationError
 
 
 # --- Test app builder ---
@@ -55,6 +56,12 @@ def _build_app_with_routes():
     @app.get("/raise-value")
     def raise_value():
         raise ValueError("bad input")
+
+    @app.get("/raise-adapter-validation")
+    def raise_adapter_validation():
+        raise AdapterValidationError(
+            "Unknown params for SomeAdapter.fetch: ['until']. Supported: since."
+        )
 
     @app.get("/raise-pydantic")
     def raise_pydantic():
@@ -110,6 +117,19 @@ def test_version_conflict_returns_409():
     assert r.status_code == 409
     body = r.json()
     assert body["error"] == "VersionConflict"
+
+
+def test_adapter_validation_error_returns_400():
+    """AdapterValidationError surfaces operator-actionable misuse (Bug #36):
+    unknown params, malformed input shape, etc. Must map to 400 (not the
+    catch-all 500) so callers can self-correct."""
+    client = _build_app_with_routes()
+    r = client.get("/raise-adapter-validation")
+    assert r.status_code == 400
+    body = r.json()
+    assert body["error"] == "AdapterValidationError"
+    assert "Unknown params for SomeAdapter.fetch" in body["message"]
+    assert "Supported: since" in body["message"]
 
 
 def test_permission_error_returns_403():

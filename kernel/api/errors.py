@@ -18,6 +18,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from kernel.entity.save import VersionConflictError
 from kernel.entity.state_machine import StateMachineError, TransitionValidationError
+from kernel.integration.adapter import AdapterValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,15 @@ def register_error_handlers(app: FastAPI):
         return JSONResponse(
             status_code=400,
             content={"error": "ValidationError", "message": str(exc)},
+        )
+
+    @app.exception_handler(AdapterValidationError)
+    async def adapter_validation_error(request: Request, exc: AdapterValidationError):
+        # Operator passed a bad/unknown param to an adapter (Bug #36 made this
+        # a real failure mode). 400 Bad Request — actionable for the caller.
+        return JSONResponse(
+            status_code=400,
+            content={"error": "AdapterValidationError", "message": str(exc)},
         )
 
     @app.exception_handler(PydanticValidationError)
