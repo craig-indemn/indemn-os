@@ -274,12 +274,21 @@ async def dispatch_associate_workflows():
         return  # Temporal not configured
 
     threshold = datetime.now(timezone.utc) - timedelta(seconds=10)
-    messages = await Message.find(
-        {
-            "status": {"$in": ["pending", "parked"]},
-            "created_at": {"$lt": threshold},
-        }
-    ).to_list(length=100)
+    # Sort by status DESC so 'pending' (lex 'pe...' > 'pa...') comes
+    # before 'parked' within each batch. Without this, once a backlog
+    # is parked, the sweep's first-100 keeps fetching the same parked
+    # messages and still-pending ones never make forward progress.
+    # Within each status, oldest first.
+    messages = (
+        await Message.find(
+            {
+                "status": {"$in": ["pending", "parked"]},
+                "created_at": {"$lt": threshold},
+            }
+        )
+        .sort([("status", -1), ("created_at", 1)])
+        .to_list(length=100)
+    )
 
     if not messages:
         return
