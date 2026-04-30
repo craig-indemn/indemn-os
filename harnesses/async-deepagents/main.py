@@ -46,6 +46,48 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
     }
 
 
+def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> dict:
+    """Build the agent's working context dict from the message's
+    `(entity_type, entity_id)`.
+
+    Watch-driven messages — `entity_type` is a real domain or kernel entity
+    (`Email`, `Meeting`, `Touchpoint`, …) — load the focus entity via the CLI
+    with `--depth 2 --include-related` so the agent has both forward and
+    reverse relationship context for its working set.
+
+    Synthetic kernel-internal messages — `entity_type` starts with `_` —
+    skip the entity-load. The leading underscore is the kernel's convention
+    for "this is not a real entity type" (currently `_scheduled` from
+    `kernel/queue_processor.py::check_scheduled_associates`; reserved for
+    future synthetic types like `_circuit_broken`, `_zombie_recovery`).
+    There is no `indemn _<sentinel>` CLI command; running it would
+    `CLIError`. Instead build a trigger descriptor — event name, the actor
+    `entity_id` points at, plus the actor's identity and schedule — so the
+    agent's prompt has structured context for what fired this run.
+
+    Bug #41 fix shape (framing B): honor the `_` sentinel. Watch-driven
+    behavior is unchanged; the helper just routes between the two cases.
+    The Bug #41 row in `os-learnings.md` documents the full reasoning,
+    including why this was preferred over framing A (changing the kernel
+    sweep to `entity_type="Actor"`) and framing C (a separate
+    `ScheduledActorWorkflow` with its own harness activity).
+    """
+    if entity_type.startswith("_"):
+        return {
+            "_synthetic": True,
+            "trigger": entity_type,
+            "trigger_entity_id": entity_id,
+            "associate_id": associate.get("_id"),
+            "associate_name": associate.get("name"),
+            "trigger_schedule": associate.get("trigger_schedule"),
+        }
+
+    entity_slug = entity_type.lower()
+    return indemn(
+        entity_slug, "get", entity_id, "--depth", "2", "--include-related"
+    )
+
+
 @activity.defn
 async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionResult:
     """Agent execution loop. Migrated from kernel/temporal/activities.py.
@@ -64,9 +106,9 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
 
         # Load associate config + context (harness orchestration, not agent tools)
         associate = indemn("actor", "get", input.associate_id)
-        # Dynamic entity instances with related entities per design (depth 2)
-        entity_slug = input.entity_type.lower()
-        context = indemn(entity_slug, "get", input.entity_id, "--depth", "2", "--include-related")
+        # Bug #41: route between watch-driven entity load and synthetic
+        # `_<sentinel>` trigger descriptor — see _load_message_context docstring.
+        context = _load_message_context(input.entity_type, input.entity_id, associate)
 
         # Load Runtime for three-layer config merge
         runtime_id = associate.get("runtime_id", RUNTIME_ID)
