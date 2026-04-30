@@ -193,6 +193,12 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
             raise PermanentProcessingError(f"Entity type {spec.entity_type} not found")
 
         # Query entities
+        # Bug #37 follow-on: skip_invalid=True so a single malformed row
+        # (e.g., Email with `company` containing a stringified dict from
+        # a pre-Bug-#9-fix associate run) doesn't abort the activity. The
+        # valid rows iterate normally; malformed rows are handled below
+        # by the DELETE-cleanup pass when the operator's filter targets
+        # them for removal.
         if spec.filter_query:
             typed_filter = _coerce_bulk_filter(
                 entity_cls, spec.entity_type, spec.filter_query
@@ -201,14 +207,20 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
                 await entity_cls.find_scoped(typed_filter)
                 .skip(offset)
                 .limit(spec.batch_size)
-                .to_list()
+                .to_list(skip_invalid=True)
             )
         elif spec.source_data:
             entities = spec.source_data[offset : offset + spec.batch_size]
+            typed_filter = None
         else:
             return {"done": True, "batch_processed": 0}
 
-        if not entities:
+        # Bug #37 follow-on: when the filter matches malformed rows but
+        # NO valid rows in this batch, skip_invalid above returned [].
+        # For DELETE, fall through to the cleanup pass below so we can
+        # still remove the malformed rows the operator targeted. For
+        # other ops, there's nothing to do — return done.
+        if not entities and spec.operation != "delete":
             return {"done": True, "batch_processed": 0, "total_count": offset}
 
         errors = []
@@ -280,12 +292,45 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
 
                     activity.heartbeat(f"batch progress: {batch_processed}")
 
-        total_count = offset + len(entities)
-        done = len(entities) < spec.batch_size
+                # Bug #37 follow-on: cleanup pass for malformed rows.
+                # `entities` reflects only Pydantic-valid rows (skip_invalid=True
+                # above). For DELETE, the operator's filter may have targeted
+                # malformed rows for removal — they were silently skipped
+                # by the entity load. Find any matched _ids in this batch's
+                # offset window that aren't in `entities`, then delete_many
+                # them via direct motor (no audit chain — can't compute
+                # changes from a doc that doesn't validate; accept the lossy
+                # audit for the cleanup case).
+                malformed_deleted = 0
+                if spec.operation == "delete" and typed_filter is not None:
+                    coll = entity_cls.get_motor_collection()
+                    matched_ids_cursor = (
+                        coll.find(typed_filter, {"_id": 1})
+                        .skip(offset)
+                        .limit(spec.batch_size)
+                    )
+                    matched_ids = [doc["_id"] for doc in await matched_ids_cursor.to_list(length=None)]
+                    valid_ids = {e.id for e in entities}
+                    bad_ids = [_id for _id in matched_ids if _id not in valid_ids]
+                    if bad_ids:
+                        result = await coll.delete_many(
+                            {"_id": {"$in": bad_ids}}, session=session
+                        )
+                        malformed_deleted = result.deleted_count
+                        for bad_id in bad_ids:
+                            logger.warning(
+                                "Bug #37 cleanup: bulk-delete removed malformed %s _id=%s "
+                                "(audit chain skipped — entity failed Pydantic validation)",
+                                spec.entity_type,
+                                bad_id,
+                            )
+
+        total_count = offset + len(entities) + malformed_deleted
+        done = (len(entities) + malformed_deleted) < spec.batch_size
 
         return {
             "done": done,
-            "batch_processed": batch_processed,
+            "batch_processed": batch_processed + malformed_deleted,
             "total_count": total_count,
             "errors": errors,
         }
@@ -308,7 +353,11 @@ async def preview_bulk_operation(spec_dict: dict) -> dict:
             current_org_id.set(ObjectId(spec.org_id))
         typed_filter = _coerce_bulk_filter(entity_cls, spec.entity_type, spec.filter_query)
         count = await entity_cls.find_scoped(typed_filter).count()
-        sample = await entity_cls.find_scoped(typed_filter).limit(5).to_list()
+        # Bug #37 follow-on: skip_invalid=True for the sample so a malformed
+        # row matching the filter doesn't abort the dry-run preview. Sample
+        # may underrepresent malformed rows, but the count above is honest
+        # (count uses motor directly, not Pydantic).
+        sample = await entity_cls.find_scoped(typed_filter).limit(5).to_list(skip_invalid=True)
         # Sample entities must be JSON-safe before crossing the Temporal data
         # converter — raw model_dump() returns ObjectId/datetime which choke
         # Pydantic v2's default JSON encoder. Use the API's to_dict() helper

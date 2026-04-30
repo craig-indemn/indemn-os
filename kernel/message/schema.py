@@ -28,7 +28,18 @@ class Message(Document):
     depth: int = 0
 
     status: Literal[
-        "pending", "processing", "completed", "failed", "dead_letter", "circuit_broken"
+        "pending",
+        "processing",
+        "completed",
+        "failed",
+        "dead_letter",
+        "circuit_broken",
+        # Bug #38 root cause #3: target role has type=associate actors but
+        # none in status=active. Park the message; the dispatch sweep
+        # re-evaluates it next cycle (and dispatches when the actor is
+        # reactivated). Distinct from `pending` so log spam stays bounded
+        # and operators can see the parked tail in queue stats.
+        "parked",
     ] = "pending"
     claimed_by: Optional[ObjectId] = None
     claimed_at: Optional[datetime] = None
