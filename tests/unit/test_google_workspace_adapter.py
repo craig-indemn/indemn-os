@@ -260,3 +260,203 @@ class TestNoUntilUnchangedBehavior:
 
         # Identical to pre-Bug-#36: just `after:` clause
         assert captured.get("q") == "after:2026/04/02"
+
+
+# --- TD-1 sub-piece 5: Drive document ingestion (fetch_documents) ---
+
+
+class TestFetchDocumentsContract:
+    """fetch_documents() returns Document-shaped dicts from Drive, paginated +
+    filtered by modifiedTime, with file-type-aware content extraction."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_kwarg(self):
+        """Bug #36 discipline applies — strict params, no silent absorption."""
+        adapter = _make_adapter()
+        with pytest.raises(AdapterValidationError) as exc:
+            await adapter.fetch_documents(folder="root")
+        assert "folder" in str(exc.value)
+        assert "since, until, user_emails, limit" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_returns_dicts_with_document_fields(self):
+        """Each dict returned must have the fields Document entity requires
+        plus external_ref (= drive_file_id) for fetch_new dedup."""
+        adapter = _make_adapter()
+
+        # Mock drive_service.files().list().execute() to return one file
+        files_call = MagicMock()
+        files_call.execute.return_value = {
+            "files": [
+                {
+                    "id": "drive-id-abc",
+                    "name": "Q4 Strategy.pdf",
+                    "mimeType": "application/pdf",
+                    "size": "12345",
+                    "createdTime": "2026-04-15T10:00:00.000Z",
+                    "modifiedTime": "2026-04-20T15:30:00.000Z",
+                    "webViewLink": "https://drive.google.com/file/d/drive-id-abc/view",
+                    "owners": [{"emailAddress": "owner@indemn.ai"}],
+                    "trashed": False,
+                }
+            ]
+        }
+        files = MagicMock()
+        files.list = MagicMock(return_value=files_call)
+        service = MagicMock()
+        service.files.return_value = files
+
+        with patch.object(adapter, "_drive_service", return_value=service):
+            results = await adapter.fetch_documents(user_emails=["u@x.com"])
+
+        assert len(results) == 1
+        d = results[0]
+        # Required Document fields
+        assert d["name"] == "Q4 Strategy.pdf"
+        assert d["mime_type"] == "application/pdf"
+        assert d["drive_file_id"] == "drive-id-abc"
+        assert d["drive_url"] == "https://drive.google.com/file/d/drive-id-abc/view"
+        assert d["file_size"] == 12345  # coerced int from Drive's string
+        assert d["source"] == "google_drive"
+        # external_ref = drive_file_id (so generic fetch_new dedup works)
+        assert d["external_ref"] == "drive-id-abc"
+
+    @pytest.mark.asyncio
+    async def test_filters_by_since_via_modified_time(self):
+        """`since` translates to `modifiedTime > '...'` in Drive's q syntax."""
+        adapter = _make_adapter()
+        captured = {}
+
+        files_call = MagicMock()
+        files_call.execute.return_value = {"files": []}
+        files = MagicMock()
+        files.list = MagicMock(side_effect=lambda **kw: (captured.update(kw), files_call)[1])
+        service = MagicMock()
+        service.files.return_value = files
+
+        with patch.object(adapter, "_drive_service", return_value=service):
+            await adapter.fetch_documents(
+                user_emails=["u@x.com"],
+                since="2026-04-01T00:00:00Z",
+            )
+
+        q = captured.get("q", "")
+        assert "modifiedTime > '2026-04-01T00:00:00Z'" in q
+        assert "trashed = false" in q  # always exclude trashed
+
+    @pytest.mark.asyncio
+    async def test_filters_by_until_via_modified_time(self):
+        """`until` translates to `modifiedTime < '...'` AND-combined with since."""
+        adapter = _make_adapter()
+        captured = {}
+
+        files_call = MagicMock()
+        files_call.execute.return_value = {"files": []}
+        files = MagicMock()
+        files.list = MagicMock(side_effect=lambda **kw: (captured.update(kw), files_call)[1])
+        service = MagicMock()
+        service.files.return_value = files
+
+        with patch.object(adapter, "_drive_service", return_value=service):
+            await adapter.fetch_documents(
+                user_emails=["u@x.com"],
+                since="2026-04-01T00:00:00Z",
+                until="2026-04-30T00:00:00Z",
+            )
+
+        q = captured.get("q", "")
+        assert "modifiedTime > '2026-04-01T00:00:00Z'" in q
+        assert "modifiedTime < '2026-04-30T00:00:00Z'" in q
+
+    @pytest.mark.asyncio
+    async def test_dedups_files_visible_to_multiple_users(self):
+        """Same drive_file_id seen across multiple users → returned once."""
+        adapter = _make_adapter()
+        same_file = {
+            "id": "shared-doc-1",
+            "name": "Shared Document.gdoc",
+            "mimeType": "application/vnd.google-apps.document",
+            "size": "0",
+            "createdTime": "2026-04-15T10:00:00.000Z",
+            "modifiedTime": "2026-04-20T15:30:00.000Z",
+            "webViewLink": "https://docs.google.com/document/d/shared-doc-1",
+            "trashed": False,
+        }
+
+        files_call = MagicMock()
+        files_call.execute.return_value = {"files": [same_file]}
+        files = MagicMock()
+        files.list = MagicMock(return_value=files_call)
+        service = MagicMock()
+        service.files.return_value = files
+        # Mock export for Google Doc content extraction
+        export_call = MagicMock()
+        export_call.execute.return_value = b"doc content text"
+        files.export = MagicMock(return_value=export_call)
+        files.export_media = MagicMock(return_value=export_call)
+
+        with patch.object(adapter, "_drive_service", return_value=service):
+            results = await adapter.fetch_documents(
+                user_emails=["a@x.com", "b@x.com", "c@x.com"]
+            )
+
+        assert len(results) == 1
+        assert results[0]["drive_file_id"] == "shared-doc-1"
+
+    @pytest.mark.asyncio
+    async def test_paginates_via_page_token(self):
+        """If files.list returns nextPageToken, the adapter calls again with pageToken."""
+        adapter = _make_adapter()
+
+        page1 = {
+            "files": [
+                {
+                    "id": "f1",
+                    "name": "File 1",
+                    "mimeType": "application/pdf",
+                    "size": "100",
+                    "createdTime": "2026-04-15T10:00:00.000Z",
+                    "modifiedTime": "2026-04-20T15:30:00.000Z",
+                    "webViewLink": "https://drive.google.com/file/d/f1/view",
+                    "trashed": False,
+                }
+            ],
+            "nextPageToken": "tok-1",
+        }
+        page2 = {
+            "files": [
+                {
+                    "id": "f2",
+                    "name": "File 2",
+                    "mimeType": "application/pdf",
+                    "size": "200",
+                    "createdTime": "2026-04-15T10:00:00.000Z",
+                    "modifiedTime": "2026-04-21T15:30:00.000Z",
+                    "webViewLink": "https://drive.google.com/file/d/f2/view",
+                    "trashed": False,
+                }
+            ]
+        }
+
+        call_count = {"n": 0}
+
+        def list_side_effect(**kw):
+            call = MagicMock()
+            call_count["n"] += 1
+            if "pageToken" in kw and kw["pageToken"] == "tok-1":
+                call.execute.return_value = page2
+            else:
+                call.execute.return_value = page1
+            return call
+
+        files = MagicMock()
+        files.list = MagicMock(side_effect=list_side_effect)
+        service = MagicMock()
+        service.files.return_value = files
+
+        with patch.object(adapter, "_drive_service", return_value=service):
+            results = await adapter.fetch_documents(user_emails=["u@x.com"])
+
+        assert len(results) == 2
+        assert {r["drive_file_id"] for r in results} == {"f1", "f2"}
+        assert call_count["n"] == 2  # paginated through both pages

@@ -392,6 +392,124 @@ class GoogleWorkspaceAdapter(Adapter):
         logger.info("Fetched %d emails across %d users", len(all_emails), len(real_users))
         return all_emails
 
+    async def fetch_documents(
+        self,
+        since: str = None,
+        until: str = None,
+        user_emails: list = None,
+        limit: int = 1000,
+        **unknown_params,
+    ) -> list[dict]:
+        """Fetch Document-shaped dicts from Google Drive across specified users.
+
+        Per-user iteration (DWD subject impersonation), files.list paginated by
+        pageToken, dedup by drive_file_id (the same shared file may be visible
+        to multiple users). Returns list ready for kernel.capability.fetch_new
+        which dedups by `external_ref` (= drive_file_id) before creating
+        Document entities.
+
+        `since` / `until` translate to Drive `q` clauses against `modifiedTime`.
+        `trashed = false` is always set so we ignore trashed files.
+        """
+        # Bug #36 discipline — no silent absorption of unknown kwargs.
+        if unknown_params:
+            raise AdapterValidationError(
+                f"Unknown params for GoogleWorkspaceAdapter.fetch_documents: "
+                f"{sorted(unknown_params.keys())}. "
+                f"Supported: since, until, user_emails, limit."
+            )
+        since = _normalize_rfc3339(since)
+        until = _normalize_rfc3339(until)
+        if not user_emails:
+            try:
+                user_emails = await self._list_domain_users()
+            except Exception as e:
+                fallback = self.config.get("user_emails")
+                if fallback:
+                    user_emails = fallback
+                else:
+                    raise AdapterAuthError(f"Cannot list domain users: {e}")
+
+        real_users = [
+            e for e in user_emails
+            if not any(skip in e for skip in ["backup@", "demo@", "indemn@indemn"])
+        ]
+
+        # Build Drive q filter — modifiedTime watermark is the incremental key.
+        q_parts = ["trashed = false"]
+        if since:
+            q_parts.append(f"modifiedTime > '{since}'")
+        if until:
+            q_parts.append(f"modifiedTime < '{until}'")
+        q = " and ".join(q_parts)
+
+        logger.info("Scanning %d users for Drive documents (q=%s)", len(real_users), q)
+
+        all_docs: dict[str, dict] = {}  # dedup by drive_file_id (= external_ref)
+        tracker = _PerUserErrorTracker(len(real_users), op="list user drive files")
+
+        for email in real_users:
+            if len(all_docs) >= limit:
+                break
+            try:
+                service = self._drive_service(email)
+                page_token = None
+                while True:
+                    params = {
+                        "q": q,
+                        "pageSize": min(100, max(1, limit - len(all_docs))),
+                        "fields": (
+                            "nextPageToken, files("
+                            "id, name, mimeType, size, createdTime, modifiedTime, "
+                            "webViewLink, owners, trashed"
+                            ")"
+                        ),
+                    }
+                    if page_token:
+                        params["pageToken"] = page_token
+
+                    response = service.files().list(**params).execute()
+                    for f in response.get("files", []):
+                        file_id = f.get("id")
+                        if not file_id or file_id in all_docs:
+                            continue
+                        all_docs[file_id] = self._format_drive_doc(f)
+                        if len(all_docs) >= limit:
+                            break
+
+                    page_token = response.get("nextPageToken")
+                    if not page_token or len(all_docs) >= limit:
+                        break
+                tracker.record_success()
+            except Exception as e:
+                tracker.record_failure(email, e)
+                logger.warning("Skipping %s for Drive: %s", email, e)
+                continue
+
+        tracker.maybe_raise()
+
+        logger.info("Fetched %d Documents across %d users", len(all_docs), len(real_users))
+        return list(all_docs.values())
+
+    def _format_drive_doc(self, f: dict) -> dict:
+        """Format a Drive files.list item as a Document-shaped dict.
+
+        Returns the wire-shape used by kernel.capability.fetch_new — required
+        Document fields plus `external_ref` (= drive_file_id) for dedup.
+        """
+        file_id = f["id"]
+        size_str = f.get("size")
+        return {
+            "external_ref": file_id,
+            "drive_file_id": file_id,
+            "name": f.get("name", "Untitled"),
+            "mime_type": f.get("mimeType"),
+            "drive_url": f.get("webViewLink"),
+            "file_size": int(size_str) if size_str else None,
+            "created_date": f.get("createdTime"),
+            "source": "google_drive",
+        }
+
     async def _list_gmail_messages(
         self,
         user_email: str,
