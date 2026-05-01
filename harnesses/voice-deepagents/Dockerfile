@@ -31,8 +31,18 @@ RUN cd /tmp/voice && uv pip install --system .
 
 # Pre-download VAD + turn-detector models so they're cached at image build time
 # (avoids per-cold-start download spike on the first call).
+#
+# Silero VAD loads cleanly via its loader.
+# Turn-detector's EnglishModel() constructor needs a JobContext (raises
+# RuntimeError otherwise), so we can't instantiate it at build time. Instead,
+# fetch the model files directly from HuggingFace into the standard
+# huggingface_hub cache so the runtime constructor (inside the JobProcess)
+# finds them locally and skips the download step.
 RUN python -c "from livekit.plugins import silero; silero.VAD.load()" || true
-RUN python -c "from livekit.plugins.turn_detector.english import EnglishModel; EnglishModel()" || true
+RUN python -c "\
+from huggingface_hub import snapshot_download; \
+snapshot_download('livekit/turn-detector', \
+    allow_patterns=['*.onnx', '*.json', '*.txt', 'tokenizer*'])" || true
 
 # Copy harness code as a Python package — `python -m harness.main` resolves to /app/harness/main.py.
 # Same layout as chat-deepagents.
