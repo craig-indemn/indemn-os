@@ -303,9 +303,36 @@ def _parse_list_filter(entity_cls, entity_name: str, filter_json: str) -> dict:
     return parse_filter(entity_cls, entity_name, filter_json)
 
 
+def _route_slug_for(entity_name: str, entity_cls: type) -> str:
+    """Resolve the URL prefix slug for an entity class.
+
+    Order:
+      1. `entity_cls._collection_name` — set by the EntityDefinition factory
+         (`kernel/entity/factory.py`), honors operator's explicit
+         `--collection-name` override at entity create time.
+      2. `entity_cls.Settings.name` — kernel entities (Beanie Document
+         subclasses) use this convention. e.g. Actor → "actors".
+      3. Naive `entity_name.lower() + 's'` — last-resort fallback for
+         classes that have neither attribute set.
+
+    Bug #39 (Session 14): pre-fix this always used (3), so an operator's
+    `indemn entity create X --collection-name foo` stored docs in `foo`
+    but the route was at `/api/xs/`. Both MongoDB collection AND HTTP
+    route now respect the explicit override.
+    """
+    cn = getattr(entity_cls, "_collection_name", None)
+    if cn:
+        return cn
+    settings = getattr(entity_cls, "Settings", None)
+    name = getattr(settings, "name", None) if settings else None
+    if name:
+        return name
+    return entity_name.lower() + "s"
+
+
 def register_entity_routes(app, entity_name: str, entity_cls: type):
     """Register CRUD + transition + @exposed method + capability routes."""
-    slug = entity_name.lower() + "s"
+    slug = _route_slug_for(entity_name, entity_cls)
     router = APIRouter(prefix=f"/api/{slug}", tags=[entity_name])
 
     @router.get("/")
