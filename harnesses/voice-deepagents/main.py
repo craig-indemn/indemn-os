@@ -50,7 +50,6 @@ from livekit.plugins import (
     deepgram,
     silero,
 )
-from livekit.plugins.turn_detector.english import EnglishModel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -142,9 +141,13 @@ async def entrypoint(ctx: JobContext) -> None:
         language=os.environ.get("VOICE_TTS_LANGUAGE", "en"),
     )
 
-    # VAD + turn detector
+    # VAD-only turn detection. EnglishModel (the multilingual ML turn detector)
+    # is optional — adds accuracy for tricky boundaries but requires huggingface
+    # model files at runtime. For internal team voice (predictable phrasing,
+    # short turns), Silero VAD's silence detection is sufficient. Re-enable
+    # later if turn-taking quality requires it (would need to wire the model
+    # download into the Dockerfile reliably).
     vad = silero.VAD.load()
-    turn_detector = EnglishModel()
 
     # AgentSession with our DeepagentsLLM as the LLM. The deepagents agent
     # handles ALL reasoning + tool calls internally — LiveKit just sees a
@@ -154,7 +157,6 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=voice_session.deepagents_llm,
         tts=tts_instance,
         vad=vad,
-        turn_detection=turn_detector,
         # Tighter endpointing for snappier turn-taking on internal CLI calls.
         min_endpointing_delay=0.4,
         max_endpointing_delay=2.0,
