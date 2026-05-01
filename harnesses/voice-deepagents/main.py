@@ -43,7 +43,6 @@ from livekit.agents import (
     AgentSession,
     AutoSubscribe,
     JobContext,
-    JobProcess,
     WorkerOptions,
 )
 from livekit.plugins import (
@@ -193,28 +192,30 @@ async def entrypoint(ctx: JobContext) -> None:
         await voice_session.close()
 
 
-def prewarm(proc: JobProcess) -> None:
-    """Per-JobProcess initialization — registers this worker as an OS Runtime
-    instance and spawns a daemon thread to run the Attention/Runtime heartbeat
-    loop in its own asyncio event loop.
+def _register_with_os_runtime() -> None:
+    """Register this worker with the OS Runtime entity + start heartbeat thread.
 
-    Why a daemon thread (not asyncio.create_task in the main loop):
-    LiveKit Agents runs each JobProcess in its own subprocess; the worker's
-    asyncio event loop is fully managed by `agents.cli.run_app()` and we
-    don't have a hook to schedule long-running tasks on it. A daemon thread
-    with its own event loop is the standard way to run a background heartbeat
-    that lives for the JobProcess's lifetime — when the JobProcess dies,
-    the daemon thread dies with it, and the OS-side queue processor's
-    `cleanup_expired_attentions` sweep + `last_heartbeat` TTL handle the
-    Runtime instance state machine via the kernel side.
+    Runs in the main worker process at boot, BEFORE `agents.cli.run_app()` takes
+    over the event loop. We do this synchronously (the `indemn` CLI is a
+    subprocess — no event loop needed) and spawn a daemon thread for the
+    heartbeat loop with its own asyncio event loop.
 
-    This mirrors the OS architecture intent (one Runtime instance per
-    worker process; each registers + heartbeats independently) — see
-    `docs/architecture/realtime.md` Runtime section + `harness_common/
-    runtime.py`. The async-deepagents + chat-deepagents harnesses run
-    register_instance + heartbeat_loop inline because their event loops
-    are owned by Temporal worker / Starlette lifespan respectively;
-    LiveKit Agents doesn't expose an equivalent hook so we use a thread.
+    Why not in `prewarm_fnc`: prewarm fires per-JobProcess, not on worker boot.
+    The OS Runtime entity needs to see "this worker is alive" before any job
+    arrives — otherwise dispatchable jobs wouldn't see the runtime as `active`
+    and the auto-dispatch path would skip us.
+
+    Why a daemon thread for the heartbeat: `agents.cli.run_app()` owns its
+    own asyncio event loop and we don't have a public hook to schedule tasks
+    on it. A daemon thread with its own loop runs independently for the
+    process's lifetime — when the worker dies, the thread dies with it, and
+    the kernel-side `cleanup_expired_attentions` sweep + 2-min TTL handle
+    Runtime state machine.
+
+    This is the analog of chat-deepagents/main.py's Starlette `lifespan`
+    context manager (which calls `register_instance` + `create_task(
+    heartbeat_loop)` once on app boot). LiveKit Agents doesn't expose
+    `lifespan`, so we register before `run_app` instead.
     """
     if not RUNTIME_ID:
         log.warning("RUNTIME_ID env var not set — skipping runtime registration")
@@ -225,9 +226,8 @@ def prewarm(proc: JobProcess) -> None:
         log.info("Registered Runtime instance for runtime_id=%s", RUNTIME_ID)
     except Exception as e:
         # Don't fail the worker — runtime registration is best-effort.
-        # Heartbeat thread starts anyway; missing register-instance just
-        # means the OS Runtime entity won't have this worker in its
-        # `instances` list initially. The heartbeat will create it.
+        # The heartbeat thread starts anyway; if it goes through, the kernel
+        # side will create the instance entry on the first heartbeat sweep.
         log.warning("Runtime register-instance failed: %s", e)
 
     threading.Thread(
@@ -241,12 +241,22 @@ def prewarm(proc: JobProcess) -> None:
 if __name__ == "__main__":
     _setup_gcp_credentials()
 
+    # Register this worker with the OS Runtime entity FIRST so the entity
+    # transitions to `active` before any room job arrives. Heartbeat runs in a
+    # daemon thread independent of LiveKit's event loop.
+    _register_with_os_runtime()
+
     # WorkerOptions tells LiveKit which entrypoint to call per room job.
-    # `prewarm_fnc` runs once per JobProcess subprocess; we use it for the
-    # one-time runtime-instance registration + heartbeat thread launch.
+    # `agent_name` enables explicit-dispatch routing — only LiveKit rooms that
+    # explicitly request this agent (via room config or AgentDispatch API) are
+    # routed to this worker. Without it, the worker accepts auto-dispatch and
+    # would pick up ANY room that has no agent specified — including customer
+    # voice-livekit traffic. Same pattern as voice-livekit/main.py.
+    agent_name = os.environ.get("AGENT_NAME", "voice-deepagents")
+
     agents.cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
+            agent_name=agent_name,
         )
     )

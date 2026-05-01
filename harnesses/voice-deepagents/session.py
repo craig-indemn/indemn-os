@@ -38,8 +38,32 @@ from harness_common.runtime import RUNTIME_ID
 
 log = logging.getLogger(__name__)
 
-WORKSPACE_DIR = "/workspace"
-SKILLS_DIR = os.path.join(WORKSPACE_DIR, "skills")
+def _workspace_dir() -> str:
+    """Where the agent's filesystem (skills, scratch) lives.
+
+    Resolution order:
+      1. `INDEMN_WORKSPACE_DIR` env var if set
+      2. `/workspace` if it exists and is writable (Docker convention —
+         the Dockerfile creates this with `mkdir -p /workspace`)
+      3. `/tmp/indemn-workspace` fallback (always writable on macOS/Linux)
+
+    Auto-fallback at (3) is necessary because LiveKit Agents' `spawn`-mode
+    JobProcess subprocess doesn't always inherit the parent's env vars
+    cleanly; relying on the env var alone fails for local-dev `python -m
+    harness.main`. The runtime check picks the right path regardless.
+    Read at use-time, not module-import, so subprocess-side resolution
+    works.
+    """
+    explicit = os.environ.get("INDEMN_WORKSPACE_DIR")
+    if explicit:
+        return explicit
+    if os.path.isdir("/workspace") and os.access("/workspace", os.W_OK):
+        return "/workspace"
+    return "/tmp/indemn-workspace"
+
+
+def _skills_dir() -> str:
+    return os.path.join(_workspace_dir(), "skills")
 
 
 def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -> dict:
@@ -171,7 +195,8 @@ class VoiceSession:
         if not skill_refs:
             return []
 
-        os.makedirs(SKILLS_DIR, exist_ok=True)
+        skills_root = _skills_dir()
+        os.makedirs(skills_root, exist_ok=True)
 
         loop = asyncio.get_event_loop()
         all_skills = await loop.run_in_executor(
@@ -187,7 +212,7 @@ class VoiceSession:
                 continue
 
             slug = ref.lower().replace(" ", "-")
-            skill_dir = os.path.join(SKILLS_DIR, slug)
+            skill_dir = os.path.join(skills_root, slug)
             os.makedirs(skill_dir, exist_ok=True)
 
             content = skill.get("content", "")
@@ -205,7 +230,7 @@ class VoiceSession:
         log.info(
             "Wrote %d skills to %s for progressive disclosure",
             len(skill_paths),
-            SKILLS_DIR,
+            skills_root,
         )
         return skill_paths
 

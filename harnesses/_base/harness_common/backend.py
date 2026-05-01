@@ -19,14 +19,25 @@ import os
 def _root_dir_for_activity(activity_id: str | None) -> str:
     """Compute the per-activity sandbox root directory.
 
-    Returns /workspace/{activity_id} for filesystem isolation between
-    concurrent agents (the Bug #3 fix). Falls back to /workspace if no
+    Returns {workspace}/{activity_id} for filesystem isolation between
+    concurrent agents (the Bug #3 fix). Falls back to {workspace} if no
     activity_id is given — chat/voice sessions don't always have one
-    and the existing layout for skills already lives under /workspace.
+    and the existing layout for skills already lives there.
+
+    Workspace resolution: `INDEMN_WORKSPACE_DIR` if set, else `/workspace`
+    when writable (Docker layout — the Dockerfile creates it), else
+    `/tmp/indemn-workspace` fallback for local dev (macOS `/` is read-only).
     """
+    explicit = os.environ.get("INDEMN_WORKSPACE_DIR")
+    if explicit:
+        workspace = explicit
+    elif os.path.isdir("/workspace") and os.access("/workspace", os.W_OK):
+        workspace = "/workspace"
+    else:
+        workspace = "/tmp/indemn-workspace"
     if not activity_id:
-        return "/workspace"
-    return f"/workspace/{activity_id}"
+        return workspace
+    return f"{workspace}/{activity_id}"
 
 
 def build_backend(activity_id: str | None = None):
