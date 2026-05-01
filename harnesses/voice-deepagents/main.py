@@ -33,14 +33,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 
 from harness.session import VoiceSession
-from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
+from harness_common.cli import indemn
+from harness_common.runtime import RUNTIME_ID, heartbeat_loop
 from livekit import agents
 from livekit.agents import (
     AgentSession,
     AutoSubscribe,
     JobContext,
+    JobProcess,
     WorkerOptions,
 )
 from livekit.plugins import (
@@ -190,25 +193,60 @@ async def entrypoint(ctx: JobContext) -> None:
         await voice_session.close()
 
 
-async def _runtime_lifecycle() -> None:
-    """Register this runtime instance and run the heartbeat loop.
+def prewarm(proc: JobProcess) -> None:
+    """Per-JobProcess initialization — registers this worker as an OS Runtime
+    instance and spawns a daemon thread to run the Attention/Runtime heartbeat
+    loop in its own asyncio event loop.
 
-    Mirrors what main.py does in chat-deepagents (via the lifespan
-    context manager). For LiveKit we run it as a background task before
-    handing off to the worker CLI.
+    Why a daemon thread (not asyncio.create_task in the main loop):
+    LiveKit Agents runs each JobProcess in its own subprocess; the worker's
+    asyncio event loop is fully managed by `agents.cli.run_app()` and we
+    don't have a hook to schedule long-running tasks on it. A daemon thread
+    with its own event loop is the standard way to run a background heartbeat
+    that lives for the JobProcess's lifetime — when the JobProcess dies,
+    the daemon thread dies with it, and the OS-side queue processor's
+    `cleanup_expired_attentions` sweep + `last_heartbeat` TTL handle the
+    Runtime instance state machine via the kernel side.
+
+    This mirrors the OS architecture intent (one Runtime instance per
+    worker process; each registers + heartbeats independently) — see
+    `docs/architecture/realtime.md` Runtime section + `harness_common/
+    runtime.py`. The async-deepagents + chat-deepagents harnesses run
+    register_instance + heartbeat_loop inline because their event loops
+    are owned by Temporal worker / Starlette lifespan respectively;
+    LiveKit Agents doesn't expose an equivalent hook so we use a thread.
     """
-    await register_instance()
-    asyncio.create_task(heartbeat_loop(interval_s=30.0))
+    if not RUNTIME_ID:
+        log.warning("RUNTIME_ID env var not set — skipping runtime registration")
+        return
+
+    try:
+        indemn("runtime", "register-instance", "--runtime-id", RUNTIME_ID)
+        log.info("Registered Runtime instance for runtime_id=%s", RUNTIME_ID)
+    except Exception as e:
+        # Don't fail the worker — runtime registration is best-effort.
+        # Heartbeat thread starts anyway; missing register-instance just
+        # means the OS Runtime entity won't have this worker in its
+        # `instances` list initially. The heartbeat will create it.
+        log.warning("Runtime register-instance failed: %s", e)
+
+    threading.Thread(
+        target=lambda: asyncio.run(heartbeat_loop(interval_s=30.0)),
+        name="indemn-runtime-heartbeat",
+        daemon=True,
+    ).start()
+    log.info("Heartbeat daemon thread started (interval=30s)")
 
 
 if __name__ == "__main__":
     _setup_gcp_credentials()
 
-    # Spin up the runtime registration + heartbeat in the background
-    # before the LiveKit worker takes over the event loop.
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(_runtime_lifecycle())
-
     # WorkerOptions tells LiveKit which entrypoint to call per room job.
-    agents.cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    # `prewarm_fnc` runs once per JobProcess subprocess; we use it for the
+    # one-time runtime-instance registration + heartbeat thread launch.
+    agents.cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
+        )
+    )

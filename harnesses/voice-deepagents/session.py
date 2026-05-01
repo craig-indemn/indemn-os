@@ -135,9 +135,16 @@ class VoiceSession:
         )
 
         # Wrap the agent for LiveKit's AgentSession via the LLM adapter.
-        # Pass the Interaction id as thread_id so LangGraph checkpointing
-        # ties to the same conversation across reconnects.
-        self.deepagents_llm = DeepagentsLLM(self.agent, thread_id=self.interaction_id)
+        # - thread_id binds LangGraph checkpointing to this Interaction so
+        #   reconnects pick up the same conversation state.
+        # - event_queue is shared with the events-stream subprocess so the
+        #   adapter can drain mid-conversation entity changes and inject
+        #   them as a SystemMessage on the next user turn.
+        self.deepagents_llm = DeepagentsLLM(
+            self.agent,
+            thread_id=self.interaction_id,
+            event_queue=self._event_queue,
+        )
 
         # Heartbeat keeps Attention alive (TTL = 2 min, refresh every 30s)
         self._heartbeat_task = asyncio.create_task(

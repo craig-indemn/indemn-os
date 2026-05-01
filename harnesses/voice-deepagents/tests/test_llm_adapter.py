@@ -38,7 +38,7 @@ class TestLivekitChatCtxTranslation:
     """The adapter must translate LiveKit's ChatContext into LangChain messages."""
 
     def test_user_message_becomes_human_message(self, patch_livekit_imports):
-        from harnesses.voice_deepagents.llm_adapter import (  # noqa: E501
+        from llm_adapter import (  # noqa: E501
             _livekit_chat_ctx_to_langchain,
         )
 
@@ -53,7 +53,7 @@ class TestLivekitChatCtxTranslation:
         assert result[0].content == "hello"
 
     def test_assistant_message_becomes_ai_message(self, patch_livekit_imports):
-        from harnesses.voice_deepagents.llm_adapter import (
+        from llm_adapter import (
             _livekit_chat_ctx_to_langchain,
         )
 
@@ -67,7 +67,7 @@ class TestLivekitChatCtxTranslation:
         assert result[0].content == "prior reply"
 
     def test_system_message_becomes_system_message(self, patch_livekit_imports):
-        from harnesses.voice_deepagents.llm_adapter import (
+        from llm_adapter import (
             _livekit_chat_ctx_to_langchain,
         )
 
@@ -82,7 +82,7 @@ class TestLivekitChatCtxTranslation:
     def test_empty_content_skipped(self, patch_livekit_imports):
         """Items with no content (or whitespace-only) don't appear in the result —
         deepagents would treat them as malformed turns."""
-        from harnesses.voice_deepagents.llm_adapter import (
+        from llm_adapter import (
             _livekit_chat_ctx_to_langchain,
         )
 
@@ -101,7 +101,7 @@ class TestLivekitChatCtxTranslation:
         """Tool/function roles aren't surfaced — deepagents owns its own
         tool history; LiveKit-side tool calls (none, in our case) aren't
         translated back."""
-        from harnesses.voice_deepagents.llm_adapter import (
+        from llm_adapter import (
             _livekit_chat_ctx_to_langchain,
         )
 
@@ -120,7 +120,7 @@ class TestLivekitChatCtxTranslation:
     def test_multipart_content_concatenates_text(self, patch_livekit_imports):
         """LiveKit content can be a list of parts (e.g., text + image). For
         voice we only carry text; non-text parts get stringified harmlessly."""
-        from harnesses.voice_deepagents.llm_adapter import (
+        from llm_adapter import (
             _livekit_chat_ctx_to_langchain,
         )
 
@@ -142,7 +142,7 @@ class TestExtractFinalAssistantText:
     deepagents agent state and returns it for TTS to speak."""
 
     def test_returns_last_ai_message_text(self, patch_livekit_imports):
-        from harnesses.voice_deepagents.llm_adapter import (
+        from llm_adapter import (
             _extract_final_assistant_text,
         )
 
@@ -159,7 +159,7 @@ class TestExtractFinalAssistantText:
     def test_skips_ai_messages_with_only_tool_calls(self, patch_livekit_imports):
         """Intermediate AIMessages with no text content (just tool calls) are
         the agent's internal reasoning — TTS shouldn't speak them."""
-        from harnesses.voice_deepagents.llm_adapter import (
+        from llm_adapter import (
             _extract_final_assistant_text,
         )
 
@@ -173,7 +173,7 @@ class TestExtractFinalAssistantText:
         assert _extract_final_assistant_text(result) == "Fetched 5 messages, all good."
 
     def test_returns_empty_when_no_ai_messages(self, patch_livekit_imports):
-        from harnesses.voice_deepagents.llm_adapter import (
+        from llm_adapter import (
             _extract_final_assistant_text,
         )
 
@@ -183,7 +183,7 @@ class TestExtractFinalAssistantText:
     def test_handles_multipart_ai_content(self, patch_livekit_imports):
         """Some LLMs emit multi-part AIMessage content (text + thought_signature
         for Gemini). Extract just the text parts."""
-        from harnesses.voice_deepagents.llm_adapter import (
+        from llm_adapter import (
             _extract_final_assistant_text,
         )
 
@@ -209,7 +209,7 @@ class TestDeepagentsLLMShape:
     chat() returns an LLMStream that runs the wrapped agent."""
 
     def test_model_and_provider_identifiers(self, patch_livekit_imports):
-        from harnesses.voice_deepagents.llm_adapter import DeepagentsLLM
+        from llm_adapter import DeepagentsLLM
 
         llm = DeepagentsLLM(agent=MagicMock(), thread_id="i-1")
         assert llm.model == "deepagents"
@@ -221,7 +221,7 @@ class TestDeepagentsLLMShape:
         the wrapped agent and yields a ChatChunk with the final assistant text."""
         from livekit.agents.llm import ChatContext
 
-        from harnesses.voice_deepagents.llm_adapter import DeepagentsLLM
+        from llm_adapter import DeepagentsLLM
 
         agent = MagicMock()
         agent.ainvoke = AsyncMock(
@@ -252,3 +252,109 @@ class TestDeepagentsLLMShape:
             for c in chunks
         )
         agent.ainvoke.assert_called_once()
+
+
+class TestEventQueueDrain:
+    """The adapter drains VoiceSession._event_queue on each user turn and
+    prepends a SystemMessage describing entity changes that happened while
+    the user was talking — same mid-conversation awareness pattern as
+    ChatSession.handle_message."""
+
+    def test_drain_returns_none_for_empty_queue(self, patch_livekit_imports):
+        from llm_adapter import _drain_event_queue
+
+        assert _drain_event_queue([]) is None
+        assert _drain_event_queue(None) is None
+
+    def test_drain_summarizes_events(self, patch_livekit_imports):
+        from llm_adapter import _drain_event_queue
+
+        queue = [
+            {"entity_type": "Touchpoint", "entity_id": "tp-1", "event_type": "created"},
+            {"entity_type": "Email", "entity_id": "e-9", "event_type": "transitioned"},
+        ]
+        msg = _drain_event_queue(queue)
+        assert msg is not None
+        assert "Touchpoint/tp-1: created" in msg
+        assert "Email/e-9: transitioned" in msg
+        assert msg.startswith("[System events since last turn:")
+        # Drain mutates — queue should be empty after.
+        assert queue == []
+
+    def test_drain_handles_missing_fields(self, patch_livekit_imports):
+        """Robust against malformed events from the stream subprocess."""
+        from llm_adapter import _drain_event_queue
+
+        msg = _drain_event_queue([{}])
+        assert "unknown/unknown: change" in msg
+
+    @pytest.mark.asyncio
+    async def test_stream_prepends_system_message_when_events_present(
+        self, patch_livekit_imports
+    ):
+        """The full path: events queued → adapter drains → SystemMessage
+        prepended to the agent's input messages."""
+        from livekit.agents.llm import ChatContext
+
+        from llm_adapter import DeepagentsLLM
+
+        captured_messages: list = []
+
+        async def fake_ainvoke(input_dict, config=None):
+            captured_messages.extend(input_dict.get("messages", []))
+            return {"messages": [AIMessage(content="ack")]}
+
+        agent = MagicMock()
+        agent.ainvoke = fake_ainvoke
+
+        # Pre-populate the queue (as if the events subprocess pushed events)
+        event_queue = [
+            {"entity_type": "Touchpoint", "entity_id": "tp-99", "event_type": "created"}
+        ]
+
+        llm = DeepagentsLLM(agent=agent, thread_id="i-3", event_queue=event_queue)
+
+        chat_ctx = ChatContext()
+        chat_ctx.add_message(role="user", content="status?")
+
+        stream = llm.chat(chat_ctx=chat_ctx)
+        async for _ in stream:
+            pass
+
+        # Should have prepended a SystemMessage describing the queued event.
+        assert len(captured_messages) == 2
+        assert isinstance(captured_messages[0], SystemMessage)
+        assert "Touchpoint/tp-99: created" in captured_messages[0].content
+        assert isinstance(captured_messages[1], HumanMessage)
+        assert event_queue == []  # drained
+
+    @pytest.mark.asyncio
+    async def test_stream_skips_system_message_when_queue_empty(
+        self, patch_livekit_imports
+    ):
+        """No drain message when no events queued."""
+        from livekit.agents.llm import ChatContext
+
+        from llm_adapter import DeepagentsLLM
+
+        captured_messages: list = []
+
+        async def fake_ainvoke(input_dict, config=None):
+            captured_messages.extend(input_dict.get("messages", []))
+            return {"messages": [AIMessage(content="ack")]}
+
+        agent = MagicMock()
+        agent.ainvoke = fake_ainvoke
+
+        llm = DeepagentsLLM(agent=agent, thread_id="i-4", event_queue=[])
+
+        chat_ctx = ChatContext()
+        chat_ctx.add_message(role="user", content="hi")
+
+        stream = llm.chat(chat_ctx=chat_ctx)
+        async for _ in stream:
+            pass
+
+        # Only the user message — no SystemMessage prepended.
+        assert len(captured_messages) == 1
+        assert isinstance(captured_messages[0], HumanMessage)

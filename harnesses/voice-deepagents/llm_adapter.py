@@ -35,6 +35,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import json
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from livekit.agents import APIConnectOptions
 from livekit.agents.llm import (
@@ -93,6 +95,35 @@ def _livekit_chat_ctx_to_langchain(chat_ctx: ChatContext) -> list:
     return messages
 
 
+def _drain_event_queue(event_queue: list | None) -> str | None:
+    """Drain pending entity-change events from the events-stream queue.
+
+    Returns a one-line system message summarizing the events (suitable for
+    prepending to the agent's input messages), or None if the queue is empty.
+
+    Mirrors the chat-deepagents pattern in `ChatSession.handle_message`:
+    on each user turn, drain queued events and inject them as a system
+    message so the agent has mid-conversation awareness of state changes
+    (a supervisor updated the Interaction, a related Touchpoint arrived,
+    a related Email got classified, etc.).
+
+    Mutates the queue: pops everything currently in it. Safe across
+    concurrent appends from the events-stream subprocess thread because
+    Python list pop/append at the head/tail is atomic under the GIL.
+    """
+    if not event_queue:
+        return None
+    events = list(event_queue)
+    event_queue.clear()
+    summaries = []
+    for ev in events:
+        entity_type = ev.get("entity_type", "unknown")
+        entity_id = ev.get("entity_id", "unknown")
+        event_type = ev.get("event_type", "change")
+        summaries.append(f"{entity_type}/{entity_id}: {event_type}")
+    return "[System events since last turn: " + "; ".join(summaries) + "]"
+
+
 def _extract_final_assistant_text(agent_result: dict) -> str:
     """Pull the agent's final assistant message out of a deepagents result.
 
@@ -128,11 +159,21 @@ class DeepagentsLLMStream(LLMStream):
         """Invoke the deepagents agent; emit its final assistant text as chunks."""
         agent = self._llm._agent  # type: ignore[attr-defined]
         thread_id = self._llm._thread_id  # type: ignore[attr-defined]
+        event_queue = self._llm._event_queue  # type: ignore[attr-defined]
 
         messages = _livekit_chat_ctx_to_langchain(self._chat_ctx)
         if not messages:
             log.warning("DeepagentsLLMStream._run: no messages in chat_ctx; skipping")
             return
+
+        # Mid-conversation awareness: drain entity-change events that arrived
+        # while the agent was idle and prepend them as a SystemMessage so the
+        # agent knows the world has moved while the user was talking.
+        # Same pattern as chat-deepagents/session.py::handle_message.
+        events_msg = _drain_event_queue(event_queue)
+        if events_msg:
+            messages = [SystemMessage(content=events_msg)] + messages
+            log.info("DeepagentsLLM: prepended event summary (%d chars)", len(events_msg))
 
         log.info(
             "DeepagentsLLM invoke: %d messages, last=%s",
@@ -176,10 +217,19 @@ class DeepagentsLLM(LLM):
     AgentSession calls `chat()` and waits for the LLMStream to emit chunks.
     """
 
-    def __init__(self, agent, thread_id: str | None = None) -> None:
+    def __init__(
+        self,
+        agent,
+        thread_id: str | None = None,
+        event_queue: list | None = None,
+    ) -> None:
         super().__init__()
         self._agent = agent
         self._thread_id = thread_id
+        # event_queue is shared with VoiceSession._run_events_stream — appended
+        # by the events-stream subprocess reader thread, drained here on each
+        # user turn. Pass `None` to skip mid-conversation event injection.
+        self._event_queue = event_queue
 
     @property
     def model(self) -> str:
