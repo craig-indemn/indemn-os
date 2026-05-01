@@ -23,9 +23,6 @@ from starlette.websockets import WebSocket
 
 log = logging.getLogger(__name__)
 
-WORKSPACE_DIR = "/workspace"
-SKILLS_DIR = os.path.join(WORKSPACE_DIR, "skills")
-
 
 def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -> dict:
     """Three-layer config merge per Phase 4-5 spec § 5.3."""
@@ -81,11 +78,6 @@ class ChatSession:
         # Three-layer LLM config merge
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Write skills to filesystem for deepagents progressive disclosure.
-        # deepagents loads skill metadata into the prompt and the agent reads
-        # full content on demand via read_file — NOT loaded upfront.
-        skill_paths = await self._write_skills_to_filesystem(associate.get("skills", []))
-
         # Resume existing Interaction or create a new one
         if self.interaction_id:
             log.info("Resuming interaction: %s", self.interaction_id)
@@ -107,11 +99,10 @@ class ChatSession:
         )
         self.attention_id = attention.get("_id")
 
-        # Build agent with skills directory for progressive disclosure.
-        # Pass the parent directory — deepagents discovers subdirectories with SKILL.md.
+        # Build agent — skills load via CLI directives in the system prompt
+        # (commit `7281b83` pattern), no filesystem skill writing.
         self.agent = build_agent(
             associate=associate,
-            skill_paths=["skills"] if skill_paths else [],
             llm_config=llm_config,
             checkpointer=self.checkpointer,
         )
@@ -129,57 +120,6 @@ class ChatSession:
             self.interaction_id,
             self.attention_id,
         )
-
-    async def _write_skills_to_filesystem(self, skill_refs: list[str]) -> list[str]:
-        """Fetch skills and write as SKILL.md files for deepagents to load on demand."""
-        if not skill_refs:
-            return []
-
-        os.makedirs(SKILLS_DIR, exist_ok=True)
-
-        # Fetch all skills in one CLI call
-        loop = asyncio.get_event_loop()
-        all_skills = await loop.run_in_executor(None, indemn, "skill", "list", "--format", "json")
-        skill_map = {s["name"]: s for s in all_skills}
-
-        skill_paths = []
-        for ref in skill_refs:
-            skill = skill_map.get(ref)
-            if not skill:
-                log.warning("Skill not found: %s", ref)
-                continue
-
-            slug = ref.lower().replace(" ", "-")
-            skill_dir = os.path.join(SKILLS_DIR, slug)
-            os.makedirs(skill_dir, exist_ok=True)
-
-            content = skill.get("content", "")
-            frontmatter = (
-                f"---\n"
-                f"name: {ref}\n"
-                f"description: Entity skill for {ref} — fields, lifecycle, CLI commands\n"
-                f"---\n\n"
-            )
-
-            # Write SKILL.md inside the skill directory
-            skill_file = os.path.join(skill_dir, "SKILL.md")
-            with open(skill_file, "w") as f:
-                f.write(frontmatter + content)
-
-            # deepagents expects directory paths relative to backend root_dir
-            skill_paths.append(f"skills/{slug}")
-
-        log.info(
-            "Wrote %d skills to %s for progressive disclosure",
-            len(skill_paths),
-            SKILLS_DIR,
-        )
-        # Log actual file listing for debugging
-        for sp in skill_paths:
-            full = os.path.join(WORKSPACE_DIR, sp, "SKILL.md")
-            log.info("  Skill file exists=%s: %s", os.path.exists(full), full)
-
-        return skill_paths
 
     async def handle_message(self, content: str, context: dict | None = None):
         """Process one user message — stream response tokens to the UI."""

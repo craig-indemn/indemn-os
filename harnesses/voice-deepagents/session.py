@@ -38,33 +38,6 @@ from harness_common.runtime import RUNTIME_ID
 
 log = logging.getLogger(__name__)
 
-def _workspace_dir() -> str:
-    """Where the agent's filesystem (skills, scratch) lives.
-
-    Resolution order:
-      1. `INDEMN_WORKSPACE_DIR` env var if set
-      2. `/workspace` if it exists and is writable (Docker convention —
-         the Dockerfile creates this with `mkdir -p /workspace`)
-      3. `/tmp/indemn-workspace` fallback (always writable on macOS/Linux)
-
-    Auto-fallback at (3) is necessary because LiveKit Agents' `spawn`-mode
-    JobProcess subprocess doesn't always inherit the parent's env vars
-    cleanly; relying on the env var alone fails for local-dev `python -m
-    harness.main`. The runtime check picks the right path regardless.
-    Read at use-time, not module-import, so subprocess-side resolution
-    works.
-    """
-    explicit = os.environ.get("INDEMN_WORKSPACE_DIR")
-    if explicit:
-        return explicit
-    if os.path.isdir("/workspace") and os.access("/workspace", os.W_OK):
-        return "/workspace"
-    return "/tmp/indemn-workspace"
-
-
-def _skills_dir() -> str:
-    return os.path.join(_workspace_dir(), "skills")
-
 
 def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -> dict:
     """Three-layer config merge per Phase 4-5 spec § 5.3.
@@ -126,11 +99,6 @@ class VoiceSession:
         # Three-layer LLM config merge (Runtime defaults < Associate < Deployment)
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Write skills to filesystem for deepagents progressive disclosure.
-        # Same pattern as chat-deepagents/session.py — agent loads metadata
-        # in prompt, fetches full content via read_file on demand.
-        skill_paths = await self._write_skills_to_filesystem(associate.get("skills", []))
-
         # Create Interaction (voice channel)
         interaction = await create_interaction(
             channel_type="voice",
@@ -150,10 +118,10 @@ class VoiceSession:
         )
         self.attention_id = attention.get("_id")
 
-        # Build the deepagents agent (same shape as chat + async)
+        # Build the deepagents agent — skills load via CLI directives in the
+        # system prompt (commit `7281b83` pattern), no filesystem skill writing.
         self.agent = build_agent(
             associate=associate,
-            skill_paths=["skills"] if skill_paths else [],
             llm_config=llm_config,
             checkpointer=self.checkpointer,
         )
@@ -190,54 +158,6 @@ class VoiceSession:
             self.interaction_id,
             self.attention_id,
         )
-
-    async def _write_skills_to_filesystem(self, skill_refs: list[str]) -> list[str]:
-        """Fetch skills via CLI and write SKILL.md files for deepagents.
-
-        Mirrors ChatSession._write_skills_to_filesystem. Per Bug #35 fix,
-        returns absolute paths and uses yaml.safe_dump for frontmatter.
-        """
-        if not skill_refs:
-            return []
-
-        skills_root = _skills_dir()
-        os.makedirs(skills_root, exist_ok=True)
-
-        loop = asyncio.get_event_loop()
-        all_skills = await loop.run_in_executor(
-            None, indemn, "skill", "list", "--format", "json"
-        )
-        skill_map = {s["name"]: s for s in all_skills}
-
-        skill_paths: list[str] = []
-        for ref in skill_refs:
-            skill = skill_map.get(ref)
-            if not skill:
-                log.warning("Skill not found: %s", ref)
-                continue
-
-            slug = ref.lower().replace(" ", "-")
-            skill_dir = os.path.join(skills_root, slug)
-            os.makedirs(skill_dir, exist_ok=True)
-
-            content = skill.get("content", "")
-            frontmatter = (
-                f"---\n"
-                f"name: {ref}\n"
-                f"description: Skill for {ref}\n"
-                f"---\n\n"
-            )
-            with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
-                f.write(frontmatter + content)
-
-            skill_paths.append(f"skills/{slug}")
-
-        log.info(
-            "Wrote %d skills to %s for progressive disclosure",
-            len(skill_paths),
-            skills_root,
-        )
-        return skill_paths
 
     async def close(self) -> None:
         """Clean up — cancel background tasks, close Attention + Interaction.
