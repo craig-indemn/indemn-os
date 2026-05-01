@@ -7,12 +7,53 @@ that goes through deepagents' LocalShellBackend (MVP) or DaytonaSandbox (prod).
 
 import json
 import os
+import shutil
 import subprocess
+import sys
 from typing import Any
 
 
 class CLIError(RuntimeError):
     pass
+
+
+def _resolve_indemn_binary() -> str:
+    """Resolve the absolute path to the python `indemn_os` CLI.
+
+    LiveKit Agents (and other multiprocess harness frameworks) spawn
+    JobProcess subprocesses whose inherited PATH may pick up the wrong
+    `indemn` binary — e.g. on dev macOS, `/opt/homebrew/bin/indemn` is
+    a Node.js CLI from the `@indemn/cli` npm package that only has
+    `init` (no actor/runtime/skill commands). The Python `indemn_os`
+    binary lives in the same venv as harness_common; resolve that
+    explicitly via `shutil.which` against `sys.executable`'s bin dir
+    so the harness can't accidentally invoke a different tool.
+
+    Resolution order:
+      1. `INDEMN_CLI_PATH` env var if set
+      2. `<sys.executable's directory>/indemn` if it exists + is executable
+      3. `shutil.which("indemn")` fallback (PATH-based)
+    """
+    explicit = os.environ.get("INDEMN_CLI_PATH")
+    if explicit and os.access(explicit, os.X_OK):
+        return explicit
+
+    venv_bin_dir = os.path.dirname(sys.executable)
+    venv_indemn = os.path.join(venv_bin_dir, "indemn")
+    if os.access(venv_indemn, os.X_OK):
+        return venv_indemn
+
+    fallback = shutil.which("indemn")
+    if fallback:
+        return fallback
+
+    raise RuntimeError(
+        "Cannot find `indemn` binary. Install indemn_os in the venv "
+        "(`pip install -e indemn_os/`) or set INDEMN_CLI_PATH."
+    )
+
+
+_INDEMN_BIN = _resolve_indemn_binary()
 
 
 def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
@@ -23,7 +64,7 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
     env = {
         "INDEMN_API_URL": os.environ["INDEMN_API_URL"],
         "INDEMN_SERVICE_TOKEN": os.environ["INDEMN_SERVICE_TOKEN"],
-        "PATH": os.environ["PATH"],
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
         "PYTHONUNBUFFERED": "1",
     }
     # OTEL context propagation
@@ -39,7 +80,7 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
     if "INDEMN_EFFECTIVE_ACTOR_ID" in os.environ:
         env["INDEMN_EFFECTIVE_ACTOR_ID"] = os.environ["INDEMN_EFFECTIVE_ACTOR_ID"]
 
-    cmd = ["indemn", *args]
+    cmd = [_INDEMN_BIN, *args]
 
     result = subprocess.run(
         cmd,
