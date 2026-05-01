@@ -355,9 +355,9 @@ described an auto-deploy flow that never actually existed; corrected
 ### The flow
 
 1. **Land code on `main`** via PR. Branches are merged; the merge commit lives on `main`.
-2. **Pick the service to deploy.** Six Railway services share two image flavors:
+2. **Pick the service to deploy.** Seven Railway services share three image flavors:
    - `indemn-api`, `indemn-queue-processor`, `indemn-temporal-worker` — kernel image (anything in `kernel/`)
-   - `indemn-runtime-async`, `indemn-runtime-chat` — harness images (anything in `harnesses/<kind>-deepagents/`)
+   - `indemn-runtime-async`, `indemn-runtime-chat`, `indemn-runtime-voice` — harness images (anything in `harnesses/<kind>-deepagents/`)
    - `indemn-ui` — UI image (anything in `ui/`)
 3. **Run `railway up --service <name>`.** Railway uploads the working tree, builds the image, and rolls it out. Health-checks pass when the new instance is serving.
 
@@ -385,6 +385,8 @@ railway up --service indemn-api --detach
 | `kernel/queue_processor.py` | `indemn-queue-processor` |
 | `harnesses/async-deepagents/*` | `indemn-runtime-async` |
 | `harnesses/chat-deepagents/*` | `indemn-runtime-chat` |
+| `harnesses/voice-deepagents/*` | `indemn-runtime-voice` |
+| `harnesses/_base/harness_common/*` | all three runtime services (shared lib) |
 | `ui/*` | `indemn-ui` |
 | `indemn_os/*` (the user-facing CLI package) | none — runs on user laptops |
 
