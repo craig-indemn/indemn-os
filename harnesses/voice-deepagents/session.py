@@ -164,10 +164,15 @@ class VoiceSession:
         # - event_queue is shared with the events-stream subprocess so the
         #   adapter can drain mid-conversation entity changes and inject
         #   them as a SystemMessage on the next user turn.
+        # - associate + runtime_id flow into LangSmith metadata so voice
+        #   traces are queryable by associate_id / entity_id / runtime_id
+        #   (CLAUDE.md § 8 debugging recipe).
         self.deepagents_llm = DeepagentsLLM(
             self.agent,
             thread_id=self.interaction_id,
             event_queue=self._event_queue,
+            associate=associate,
+            runtime_id=RUNTIME_ID,
         )
 
         # Heartbeat keeps Attention alive (TTL = 2 min, refresh every 30s)

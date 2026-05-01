@@ -160,6 +160,8 @@ class DeepagentsLLMStream(LLMStream):
         agent = self._llm._agent  # type: ignore[attr-defined]
         thread_id = self._llm._thread_id  # type: ignore[attr-defined]
         event_queue = self._llm._event_queue  # type: ignore[attr-defined]
+        associate = self._llm._associate or {}  # type: ignore[attr-defined]
+        runtime_id = self._llm._runtime_id  # type: ignore[attr-defined]
 
         messages = _livekit_chat_ctx_to_langchain(self._chat_ctx)
         if not messages:
@@ -180,7 +182,34 @@ class DeepagentsLLMStream(LLMStream):
             len(messages),
             type(messages[-1]).__name__,
         )
-        config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+
+        # Build RunnableConfig with checkpointer thread_id + LangSmith metadata.
+        # Mirrors `harnesses/async-deepagents/main.py` so traces appear under
+        # the same `indemn-os-associates` LangSmith project, queryable by
+        # associate_id / entity_id / runtime_id (per CLAUDE.md § 8 debugging
+        # recipe). Voice's `entity_type` is always "Interaction" and the
+        # entity_id is the Interaction.id (== thread_id here).
+        associate_name = associate.get("name") or "Voice Agent"
+        config: dict = {}
+        if thread_id:
+            config["configurable"] = {"thread_id": thread_id}
+        config["metadata"] = {
+            "associate_id": str(associate.get("_id", "")),
+            "associate_name": associate_name,
+            "entity_type": "Interaction",
+            "entity_id": str(thread_id) if thread_id else "",
+            "runtime_id": str(runtime_id) if runtime_id else "",
+        }
+        config["tags"] = [
+            f"associate:{associate_name}",
+            "entity_type:Interaction",
+            f"runtime:{runtime_id}" if runtime_id else "runtime:unknown",
+            "channel:voice",
+        ]
+        config["run_name"] = (
+            f"{associate_name} → Interaction {str(thread_id)[:8] if thread_id else '?'}"
+        )
+
         try:
             result = await agent.ainvoke({"messages": messages}, config=config)
         except Exception as e:
@@ -222,6 +251,8 @@ class DeepagentsLLM(LLM):
         agent,
         thread_id: str | None = None,
         event_queue: list | None = None,
+        associate: dict | None = None,
+        runtime_id: str | None = None,
     ) -> None:
         super().__init__()
         self._agent = agent
@@ -230,6 +261,12 @@ class DeepagentsLLM(LLM):
         # by the events-stream subprocess reader thread, drained here on each
         # user turn. Pass `None` to skip mid-conversation event injection.
         self._event_queue = event_queue
+        # associate + runtime_id power LangSmith metadata + tags so voice
+        # traces appear in the indemn-os-associates project queryable by
+        # associate_id / entity_id / runtime_id (CLAUDE.md § 8). Both
+        # optional — falls back to bare-minimum config if missing.
+        self._associate = associate
+        self._runtime_id = runtime_id
 
     @property
     def model(self) -> str:
