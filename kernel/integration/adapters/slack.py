@@ -234,4 +234,4 @@ class SlackAdapter(Adapter):
         }
 
 
-register_adapter("messaging", "slack", SlackAdapter)
+register_adapter("slack", "v1", SlackAdapter)

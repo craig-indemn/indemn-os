@@ -17,6 +17,18 @@ def _make_adapter(token="xoxb-test"):
     return SlackAdapter(config={}, credentials={"bot_token": token})
 
 
+class TestSlackAdapterRegistration:
+    """Pin the (provider, version) registration key — Bug #45b regression guard."""
+
+    def test_registers_under_slack_v1(self):
+        # Importing the module triggers register_adapter() at import time.
+        import kernel.integration.adapters.slack  # noqa: F401
+        from kernel.integration.adapters.slack import SlackAdapter
+        from kernel.integration.registry import get_adapter_class
+
+        assert get_adapter_class("slack", "v1") is SlackAdapter
+
+
 class TestSlackAdapterContract:
     """fetch_new wire-shape: returns SlackMessage-shaped dicts ready for
     kernel.capability.fetch_new."""
