@@ -16,6 +16,15 @@ from kernel.observability.tracing import create_span
 
 logger = logging.getLogger(__name__)
 
+# Source-system timestamp fields used to compute the incremental fetch watermark.
+# These represent "when did this thing happen in the source system" — distinct from
+# `created_at` / `updated_at` (OS ingestion / last-mutation time). Tried in order;
+# first field that exists on the entity AND has a non-null value on the latest
+# record wins. Order keeps existing behavior for Email/Meeting (which use `date`)
+# and adds support for newer entity types: SlackMessage (`posted_at`),
+# Document (`created_date`).
+WATERMARK_FIELD_CANDIDATES = ("date", "posted_at", "created_date")
+
 
 async def fetch_new(entity_cls, config: dict, org_id, params: dict = {}) -> dict:
     """Fetch new entities from an external system via integration adapter.
@@ -29,17 +38,23 @@ async def fetch_new(entity_cls, config: dict, org_id, params: dict = {}) -> dict
         system_type = config["system_type"]
         adapter = await get_adapter(system_type, org_id=org_id, require_org_only=True)
 
-        # Determine "since" for incremental fetch
+        # Determine "since" for incremental fetch.
+        # Try each candidate timestamp field in WATERMARK_FIELD_CANDIDATES order;
+        # first one that exists on the entity AND has a non-null value wins.
+        # Falls through to "no since" (adapter fetches all) if no candidate matches.
         fetch_params = {**params}
         if "since" not in fetch_params:
-            # Use most recent entity's date field (actual meeting date, not ingestion time)
-            # _DomainQuery.sort() takes a string: "-date" for descending
-            try:
-                latest = await entity_cls.find_scoped({}).sort("-date").limit(1).to_list()
-                if latest and hasattr(latest[0], "date") and latest[0].date:
-                    fetch_params["since"] = latest[0].date.isoformat()
-            except Exception:
-                pass  # No existing entities or no date field — fetch all
+            for field in WATERMARK_FIELD_CANDIDATES:
+                try:
+                    latest = (
+                        await entity_cls.find_scoped({}).sort(f"-{field}").limit(1).to_list()
+                    )
+                    value = getattr(latest[0], field, None) if latest else None
+                    if value:
+                        fetch_params["since"] = value.isoformat()
+                        break
+                except Exception:
+                    continue  # Field doesn't exist on this entity type — try next
 
         # Fetch from external system
         fetch_method = config.get("fetch_method", "fetch")
