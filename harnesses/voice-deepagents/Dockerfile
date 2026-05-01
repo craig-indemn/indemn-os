@@ -42,4 +42,7 @@ COPY harnesses/voice-deepagents/ /app/harness/
 RUN mkdir -p /workspace
 
 # Entry point — opentelemetry-instrument for tracing, then the harness module.
-CMD ["opentelemetry-instrument", "python", "-m", "harness.main"]
+# `start` is the LiveKit Agents CLI subcommand for production worker mode
+# (vs `dev` which has hot-reload + extra debug output). agents.cli.run_app
+# parses argv to dispatch — without `start` it prints help text and exits.
+CMD ["opentelemetry-instrument", "python", "-m", "harness.main", "start"]
