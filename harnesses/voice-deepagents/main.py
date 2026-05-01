@@ -1,30 +1,41 @@
 """voice-deepagents harness entry point — LiveKit Agents worker.
 
 Connects to Indemn's self-hosted LiveKit (URL/keys via env), spawns one
-IndemnVoiceAssistant per room, runs the realtime voice pipeline:
+VoiceSession per room, runs the canonical realtime voice pipeline:
 
-  user audio -> VAD -> STT (Deepgram) -> Gemini LLM -> TTS (Cartesia) -> user audio
-                                                |
-                                                +-> execute('indemn ...') tool
-                                                    -> subprocess to OS CLI
+  user audio -> VAD -> STT (Deepgram)
+                            |
+                            v
+                      DeepagentsLLM
+                       (deepagents)
+                            |
+              (executes indemn CLI internally,
+               loads skills, plans w/ todos, etc.)
+                            |
+                            v
+                  TTS (Cartesia) -> user audio
 
 Same Gemini-3-flash-preview model + global location as the async-deepagents
-runtime (Bug #42's resolved fix). Tool surface is the `indemn` CLI, symmetric
-with how every other Indemn OS associate operates.
-
-Run modes:
-- Production: `python main.py start` — connects to the LiveKit URL via env.
-- Dev: `python main.py dev` — reads from .env, prints debug logs.
+runtime (Bug #42 resolution); inherited from runtime defaults via the
+three-layer config merge in session.py.
 
 The harness registers itself with the OS Runtime entity (`voice-deepagents-dev`)
-on boot so the runtime is discoverable + the actor's Deployment can route
-to it. Actors with mode=hybrid + voice-deepagents runtime_id will dispatch
+on boot so the runtime is discoverable + actors with that runtime_id dispatch
 through this worker on each call.
+
+Run modes:
+- Production: `python -m harness.main` (Dockerfile entrypoint)
+- Dev: `python -m harness.main dev` for local debugging
 """
 
+from __future__ import annotations
+
+import asyncio
 import logging
 import os
 
+from harness.session import VoiceSession
+from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from livekit import agents
 from livekit.agents import (
     AgentSession,
@@ -35,12 +46,9 @@ from livekit.agents import (
 from livekit.plugins import (
     cartesia,
     deepgram,
-    google,
     silero,
 )
 from livekit.plugins.turn_detector.english import EnglishModel
-
-from assistant import IndemnVoiceAssistant
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,69 +86,129 @@ def _setup_gcp_credentials() -> None:
     log.info("GCP credentials written to %s", sa_path)
 
 
+# Sole-tenant: one associate per voice runtime. The associate id comes from
+# env so the harness image stays generic and the OS routes voice calls to
+# whichever actor owns this Runtime instance. Async + chat use the same
+# convention (the async harness reads associate from message; the chat
+# harness reads from the WebSocket connect message; voice reads from env).
+def _voice_associate_id() -> str:
+    aid = os.environ.get("VOICE_ASSOCIATE_ID", "")
+    if not aid:
+        # Fallback for local dev — harness still boots but greets that
+        # the associate isn't configured. Real deployments set this.
+        log.warning("VOICE_ASSOCIATE_ID not set — voice will be unconfigured")
+    return aid
+
+
 async def entrypoint(ctx: JobContext) -> None:
     """LiveKit per-room job entrypoint.
 
-    Called once per room a user joins. Constructs the AgentSession with the
-    STT/LLM/TTS pipeline + IndemnVoiceAssistant, joins the room, greets the
-    user, then runs the voice loop until the room closes.
+    Called once per room a user joins. Constructs a VoiceSession (which
+    creates Interaction + Attention + builds the deepagents agent), then
+    plugs the deepagents-backed LLM into a LiveKit AgentSession with
+    Deepgram STT + Cartesia TTS + Silero VAD. Joins the room, greets the
+    user, runs the voice loop until the room closes.
     """
     log.info("Job started: room=%s", ctx.room.name)
 
-    # Connect to the room (subscribe to all participant audio tracks).
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    associate_id = _voice_associate_id()
+    auth_token = os.environ.get("INDEMN_SERVICE_TOKEN", "")
 
-    # Build the LLM — Gemini-3-flash-preview on global endpoint, matching the
-    # async-deepagents runtime default (Bug #42 resolution).
-    llm_instance = google.LLM(
-        model=os.environ.get("VOICE_LLM_MODEL", "gemini-3-flash-preview"),
-        location=os.environ.get("VOICE_LLM_LOCATION", "global"),
-        temperature=float(os.environ.get("VOICE_LLM_TEMPERATURE", "0.3")),
+    # OS-side session lifecycle: load config, create Interaction + Attention,
+    # build the deepagents agent, wrap it in DeepagentsLLM.
+    voice_session = VoiceSession(
+        associate_id=associate_id,
+        auth_token=auth_token,
+        # Checkpointer is per-runtime concern; voice uses the in-memory
+        # default for now. MongoDB checkpointer can be wired later
+        # alongside chat-deepagents (commit `7281b83` follow-up).
+        checkpointer=None,
     )
+    if associate_id:
+        await voice_session.start()
 
-    # STT — Deepgram (Indemn standard for voice STT, matches voice-livekit).
+    # STT — Deepgram, matching voice-livekit (Indemn's customer voice product).
     stt_instance = deepgram.STT(
         model=os.environ.get("VOICE_STT_MODEL", "nova-3"),
         language=os.environ.get("VOICE_STT_LANGUAGE", "en"),
     )
 
-    # TTS — Cartesia (Indemn standard).
+    # TTS — Cartesia, matching voice-livekit.
     tts_instance = cartesia.TTS(
         model=os.environ.get("VOICE_TTS_MODEL", "sonic-3"),
         voice=os.environ.get("VOICE_TTS_VOICE_ID", "6ccbfb76-1fc6-48f7-b71d-91ac6298247b"),
         language=os.environ.get("VOICE_TTS_LANGUAGE", "en"),
     )
 
-    # VAD + turn detector — Silero VAD + LiveKit's English turn detector.
+    # VAD + turn detector
     vad = silero.VAD.load()
     turn_detector = EnglishModel()
 
-    session = AgentSession(
+    # AgentSession with our DeepagentsLLM as the LLM. The deepagents agent
+    # handles ALL reasoning + tool calls internally — LiveKit just sees a
+    # standard LLM that takes ChatContext and emits ChatChunks.
+    agent_session = AgentSession(
         stt=stt_instance,
-        llm=llm_instance,
+        llm=voice_session.deepagents_llm,
         tts=tts_instance,
         vad=vad,
         turn_detection=turn_detector,
-        # Tighten endpointing for snappier turn-taking on low-latency CLI calls.
+        # Tighter endpointing for snappier turn-taking on internal CLI calls.
         min_endpointing_delay=0.4,
         max_endpointing_delay=2.0,
     )
 
-    assistant = IndemnVoiceAssistant()
+    # Connect to the room (subscribe to all participant audio).
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    await session.start(room=ctx.room, agent=assistant)
+    # Bare LiveKit `Agent` — the AgentSession needs an Agent instance for
+    # its protocol but our LLM is the one doing the work. The Agent here
+    # just provides the interface contract; instructions are unused
+    # because DeepagentsLLM has the full system prompt baked in via
+    # build_agent.
+    bare_agent = agents.Agent(instructions="(handled by DeepagentsLLM)")
 
-    # Greet the user — the agent's first action will be to load its skill,
-    # but we open with a brief "I'm here" so the user knows the line is live.
-    await session.say(
+    await agent_session.start(room=ctx.room, agent=bare_agent)
+
+    # Greet the user. The deepagents agent will load its skill on the
+    # first user turn — this opener just confirms the line is live.
+    await agent_session.say(
         "Hi, this is your Indemn OS assistant. What can I help you with?",
         allow_interruptions=False,
     )
+
+    # Hold the entrypoint open until the room disconnects. AgentSession
+    # runs the voice loop in the background; we just need to wait.
+    try:
+        await ctx.wait_for_disconnect()
+    except AttributeError:
+        # Older livekit-agents versions name this differently; fall through
+        # to a long sleep until the worker shuts the job.
+        while True:
+            await asyncio.sleep(60)
+    finally:
+        await voice_session.close()
+
+
+async def _runtime_lifecycle() -> None:
+    """Register this runtime instance and run the heartbeat loop.
+
+    Mirrors what main.py does in chat-deepagents (via the lifespan
+    context manager). For LiveKit we run it as a background task before
+    handing off to the worker CLI.
+    """
+    await register_instance()
+    asyncio.create_task(heartbeat_loop(interval_s=30.0))
 
 
 if __name__ == "__main__":
     _setup_gcp_credentials()
 
-    # WorkerOptions tells the LiveKit Agents framework which entrypoint to call
-    # per room job. The framework handles room subscription, lifecycle, retries.
+    # Spin up the runtime registration + heartbeat in the background
+    # before the LiveKit worker takes over the event loop.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(_runtime_lifecycle())
+
+    # WorkerOptions tells LiveKit which entrypoint to call per room job.
     agents.cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
