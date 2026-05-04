@@ -69,15 +69,37 @@ async def fetch_new(entity_cls, config: dict, org_id, params: dict = {}) -> dict
             ).to_list()
             existing = {getattr(e, "external_ref", None) for e in existing_entities}
 
+        # Filter to genuinely new items, then sort ascending by the watermark
+        # field so we save oldest-first. This matters when `limit` is set:
+        # saving newest-first would advance the watermark past unsaved older
+        # items, leaving them stranded forever. Oldest-first means the
+        # watermark moves cleanly to "what we just saved" and the next tick
+        # picks up the next oldest-window.
+        new_items = [item for item in raw_results if item.get("external_ref") not in existing]
+        skipped = len(raw_results) - len(new_items)
+
+        sort_field = next(
+            (f for f in WATERMARK_FIELD_CANDIDATES if any(f in item for item in new_items)),
+            None,
+        )
+        if sort_field is not None:
+            new_items.sort(key=lambda r: r.get(sort_field) or "")
+
+        # Per-call cap on saves (Bug #50 follow-on, fetch_new chunking).
+        # Bounds subprocess time when accumulated backlog is large (e.g. Email
+        # Fetcher across 11 mailboxes after a stuck period). If `limit` is
+        # passed in params, save at most that many; subsequent ticks drain
+        # the rest. Default is unbounded — manual backfills (`--data '{"since":...}'`
+        # without limit) keep the old "save everything" behavior.
+        save_limit = params.get("limit")
+        if save_limit is not None and len(new_items) > save_limit:
+            new_items = new_items[:save_limit]
+
         # Create new entities
         created = []
-        skipped = 0
         errors = []
         actor_id = str(current_actor_id.get())
-        for item in raw_results:
-            if item.get("external_ref") in existing:
-                skipped += 1
-                continue
+        for item in new_items:
             try:
                 entity = entity_cls(org_id=org_id, **item)
                 await entity.save_tracked(actor_id=actor_id, method="fetch_new")
