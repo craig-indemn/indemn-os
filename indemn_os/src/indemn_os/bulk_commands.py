@@ -13,9 +13,15 @@ import typer
 from indemn_os.client import CLIClient, render
 
 
-def register_bulk_commands(entity_name: str, entity_app: typer.Typer):
-    """Register bulk commands for a specific entity type."""
-    slug = entity_name.lower()
+def register_bulk_commands(entity_name: str, entity_app: typer.Typer, url_slug: str | None = None):
+    """Register bulk commands for a specific entity type.
+
+    `url_slug` is the entity's collection name (URL plural, honors
+    `--collection-name`). Defaults to naive `entity_name.lower() + "s"` for
+    backward compatibility, but callers (main.py) should pass the value from
+    `/api/_meta/entities` to honor Bug #48 / Bug #39.
+    """
+    slug = url_slug or (entity_name.lower() + "s")
 
     @entity_app.command("bulk-create")
     def bulk_create(
@@ -34,7 +40,7 @@ def register_bulk_commands(entity_name: str, entity_app: typer.Typer):
             typer.echo(f"Read {len(source_data)} rows from {from_csv}")
 
         result = client.post(
-            f"/api/{slug}s/bulk",
+            f"/api/{slug}/bulk",
             json={
                 "operation": "create",
                 "source_data": source_data,
@@ -57,7 +63,7 @@ def register_bulk_commands(entity_name: str, entity_app: typer.Typer):
 
         client = CLIClient()
         result = client.post(
-            f"/api/{slug}s/bulk",
+            f"/api/{slug}/bulk",
             json={
                 "operation": "transition",
                 "filter_query": orjson.loads(filter),
@@ -82,7 +88,7 @@ def register_bulk_commands(entity_name: str, entity_app: typer.Typer):
 
         client = CLIClient()
         result = client.post(
-            f"/api/{slug}s/bulk",
+            f"/api/{slug}/bulk",
             json={
                 "operation": "method",
                 "method_name": method,
@@ -108,7 +114,7 @@ def register_bulk_commands(entity_name: str, entity_app: typer.Typer):
 
         client = CLIClient()
         result = client.post(
-            f"/api/{slug}s/bulk",
+            f"/api/{slug}/bulk",
             json={
                 "operation": "update",
                 "filter_query": orjson.loads(filter),
@@ -154,5 +160,5 @@ def register_bulk_commands(entity_name: str, entity_app: typer.Typer):
         }
         if all_records:
             body["match_all"] = True
-        result = client.post(f"/api/{slug}s/bulk", json=body)
+        result = client.post(f"/api/{slug}/bulk", json=body)
         render(result, "json")

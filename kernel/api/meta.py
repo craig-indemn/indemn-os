@@ -8,6 +8,7 @@ from typing import get_args
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from kernel.api.registration import _route_slug_for
 from kernel.auth.middleware import get_current_actor
 from kernel.db import ENTITY_REGISTRY
 
@@ -24,6 +25,11 @@ async def get_entity_metadata(actor=Depends(get_current_actor)):
 
         meta = {
             "name": name,
+            # Bug #48: include the URL slug so the CLI client can construct
+            # `/api/{collection}/...` correctly. Without this, the client falls
+            # back to naive `name.lower() + "s"` and 404s on entities whose
+            # `--collection-name` differs (e.g. SlackMessage → slack_messages).
+            "collection": _route_slug_for(name, cls),
             "fields": _get_field_metadata(cls, name),
             "state_machine": getattr(cls, "_state_machine", None),
             "capabilities": [
@@ -217,7 +223,13 @@ async def get_entity_detail_metadata(entity_name: str, actor=Depends(get_current
 
     return {
         "name": entity_name,
-        "collection": cls.Settings.name if hasattr(cls, "Settings") else entity_name.lower() + "s",
+        # Bug #48: use the same slug logic as kernel/api/registration.py so
+        # the URL the CLI client constructs matches the actual route. Pre-fix
+        # this was `cls.Settings.name if hasattr(cls, "Settings") else
+        # entity_name.lower() + "s"` — domain entities don't have Beanie
+        # Settings (their collection name lives on `_collection_name`), so
+        # they always fell through to the naive plural.
+        "collection": _route_slug_for(entity_name, cls),
         "is_kernel_entity": is_kernel,
         "fields": fields,
         "state_machine": state_machine,

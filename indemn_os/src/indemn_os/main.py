@@ -108,8 +108,16 @@ def main():
 def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient):
     """Register CLI commands for one entity type. Mirrors API registration."""
     name = meta["name"]
-    slug = name.lower()
-    entity_app = typer.Typer(name=slug, help=f"{name} operations")
+    # Typer subcommand name stays singular (e.g. `indemn slackmessage list`).
+    cli_name = name.lower()
+    # URL slug is the entity's actual collection — Bug #48. The kernel's
+    # `_route_slug_for` honors `--collection-name` overrides, so SlackMessage
+    # routes to `/api/slack_messages/` even though the CLI subcommand stays
+    # `slackmessage`. Falls back to naive plural for backward compatibility
+    # with older API instances that don't populate the `collection` meta
+    # field yet.
+    slug = meta.get("collection") or (cli_name + "s")
+    entity_app = typer.Typer(name=cli_name, help=f"{name} operations")
 
     @entity_app.command("list")
     def list_cmd(
@@ -122,7 +130,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         params = {"limit": limit, "offset": offset}
         if status:
             params["status"] = status
-        result = client.get(f"/api/{slug}s/", params=params)
+        result = client.get(f"/api/{slug}/", params=params)
         render(result, fmt)
 
     @entity_app.command("get")
@@ -138,7 +146,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             params["depth"] = depth
         if include_related:
             params["include_related"] = "true"
-        result = client.get(f"/api/{slug}s/{entity_id}", params=params)
+        result = client.get(f"/api/{slug}/{entity_id}", params=params)
         render(result, fmt)
 
     @entity_app.command("create")
@@ -146,7 +154,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         """Create entity. Data as JSON string."""
         import orjson
 
-        result = client.post(f"/api/{slug}s/", json=orjson.loads(data))
+        result = client.post(f"/api/{slug}/", json=orjson.loads(data))
         render(result, "json")
 
     @entity_app.command("update")
@@ -154,7 +162,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         """Update entity fields."""
         import orjson
 
-        result = client.put(f"/api/{slug}s/{entity_id}", json=orjson.loads(data))
+        result = client.put(f"/api/{slug}/{entity_id}", json=orjson.loads(data))
         render(result, "json")
 
     if meta.get("state_machine"):
@@ -163,7 +171,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         def transition_cmd(entity_id: str, to: str = typer.Option(..., "--to"), reason: str = None):
             """Transition entity state."""
             result = client.post(
-                f"/api/{slug}s/{entity_id}/transition",
+                f"/api/{slug}/{entity_id}/transition",
                 json={"to": to, "reason": reason},
             )
             render(result, "json")
@@ -186,7 +194,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         watches listed.
         """
         result = client.post(
-            f"/api/{slug}s/{entity_id}/reprocess",
+            f"/api/{slug}/{entity_id}/reprocess",
             json={"role": role, "event_type": event_type},
         )
         render(result, "json")
@@ -211,14 +219,14 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         """
         if not yes:
             confirm = typer.confirm(
-                f"Hard-delete {slug} {entity_id}? This is irreversible.",
+                f"Hard-delete {cli_name} {entity_id}? This is irreversible.",
                 default=False,
             )
             if not confirm:
                 typer.echo("Cancelled.")
                 raise typer.Exit(0)
         result = client.post(
-            f"/api/{slug}s/bulk",
+            f"/api/{slug}/bulk",
             json={
                 "operation": "delete",
                 "filter_query": {"_id": entity_id},
@@ -267,26 +275,26 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
 
             if entity_id:
                 result = client.post(
-                    f"/api/{slug_name}s/{entity_id}/{capability_kebab}",
+                    f"/api/{slug_name}/{entity_id}/{capability_kebab}",
                     json=body,
                     params=params,
                 )
                 render(result, "json")
             else:
-                entities = client.get(f"/api/{slug_name}s/", params={"limit": 1000})
+                entities = client.get(f"/api/{slug_name}/", params={"limit": 1000})
                 processed = 0
                 for entity in entities:
                     eid = entity.get("_id") or entity.get("id")
                     if not eid:
                         continue
                     result = client.post(
-                        f"/api/{slug_name}s/{eid}/{capability_kebab}",
+                        f"/api/{slug_name}/{eid}/{capability_kebab}",
                         json=body,
                         params=params,
                     )
                     if result.get("matched") or result.get("result"):
                         processed += 1
-                typer.echo(f"Processed {processed}/{len(entities)} {slug_name}s")
+                typer.echo(f"Processed {processed}/{len(entities)} {slug_name}")
 
         return cap_cmd
 
@@ -309,7 +317,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
 
             body = orjson.loads(data) if data else {}
             result = client.post(
-                f"/api/{slug_name}s/{capability_kebab}", json=body
+                f"/api/{slug_name}/{capability_kebab}", json=body
             )
             render(result, "json")
 
@@ -328,9 +336,14 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         cap_slug = cap["name"].replace("_", "-")
         entity_app.command(cap_slug)(_make_collection_cap_cmd(cap["name"], slug))
 
-    # Register bulk commands for this entity type
+    # Register bulk commands for this entity type. Pass the URL slug
+    # (entity's collection name, e.g. `slack_messages`) so bulk commands
+    # build URLs like `/api/slack_messages/bulk` that match the actual route.
     from indemn_os.bulk_commands import register_bulk_commands
 
-    register_bulk_commands(name, entity_app)
+    register_bulk_commands(name, entity_app, url_slug=slug)
 
-    parent.add_typer(entity_app, name=slug)
+    # The Typer subcommand name is the singular CLI verb (e.g. `slackmessage`),
+    # not the URL slug — operators invoke `indemn slackmessage list`, not
+    # `indemn slack_messages list`.
+    parent.add_typer(entity_app, name=cli_name)
