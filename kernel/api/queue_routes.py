@@ -4,6 +4,8 @@ Provides controlled access to the message queue without exposing
 full CRUD on the Message collection.
 """
 
+from datetime import datetime, timedelta, timezone
+
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -159,6 +161,54 @@ async def claim_message_by_id(
 
 
 # --- Message lifecycle (standard queue verbs per Q1 session decision) ---
+
+
+@queue_router.post("/api/message_queues/{message_id}/extend-visibility")
+async def extend_visibility(
+    message_id: str,
+    actor=Depends(get_current_actor),
+):
+    """Extend the `visibility_timeout` of a still-claimed message.
+
+    Bug #50 fix. Bug #49 (Session 16) added Temporal activity heartbeating
+    so long-running cron_runner subprocesses don't hit `heartbeat_timeout`.
+    But the Mongo queue's `visibility_timeout` (5 min, set on every claim)
+    is independent — nothing extends it while the runtime is still working.
+    Slow subprocesses (Email/Slack `fetch-new` on a backed-up watermark can
+    legitimately take >5 min) race the queue's recovery sweep: pod A still
+    working, queue recovers the message at 5 min, pod B claims it, pod A's
+    later `complete` hits 404. This endpoint lets the runtime extend the
+    visibility on the same 30s cadence as the activity heartbeat — both
+    "this work is alive" timers stay in sync.
+
+    Idempotent on terminal status (no-op for completed / dead_letter /
+    failed) so a late call after the activity finally completed doesn't
+    surprise the caller. Refuses to extend on `pending` (nothing to extend
+    — the message isn't claimed)."""
+    message = await Message.get(ObjectId(message_id))
+    if not message:
+        raise HTTPException(404, "Message not found")
+    if message.status in ("completed", "dead_letter", "failed"):
+        return {
+            "status": message.status,
+            "message_id": message_id,
+            "idempotent": True,
+        }
+    if message.status != "processing":
+        raise HTTPException(
+            400, f"Cannot extend visibility on {message.status} message"
+        )
+
+    new_visibility = datetime.now(timezone.utc) + timedelta(minutes=5)
+    await Message.get_motor_collection().update_one(
+        {"_id": message.id, "status": "processing"},
+        {"$set": {"visibility_timeout": new_visibility}},
+    )
+    return {
+        "status": "extended",
+        "message_id": message_id,
+        "visibility_timeout": new_visibility.isoformat(),
+    }
 
 
 @queue_router.post("/api/message_queues/{message_id}/complete")

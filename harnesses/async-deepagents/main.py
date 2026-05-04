@@ -133,10 +133,37 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             cron_heartbeat_task = None
             try:
                 async def _cron_heartbeat_loop():
+                    """Bug #49 + Bug #50 — keep BOTH liveness timers fresh.
+
+                    Temporal activity heartbeat (Bug #49) prevents the
+                    activity from being cancelled mid-subprocess. The Mongo
+                    queue's visibility_timeout (Bug #50) is independent —
+                    if not also extended, the queue processor recovers the
+                    message at 5 min and another pod re-claims it while the
+                    original subprocess is still working. Same 30s cadence,
+                    both timers extend in lockstep."""
                     while True:
                         try:
                             await asyncio.sleep(30.0)
                             activity.heartbeat("cron_runner_running")
+                            try:
+                                await asyncio.to_thread(
+                                    indemn,
+                                    "queue",
+                                    "extend-visibility",
+                                    str(input.message_id),
+                                )
+                            except CLIError as e:
+                                # Don't crash the heartbeat on a single
+                                # extend-visibility failure — at worst we
+                                # lose the race once and another pod
+                                # claims. Log so the API-slowness pattern
+                                # is visible.
+                                log.warning(
+                                    "extend-visibility failed for %s: %s",
+                                    input.message_id,
+                                    e,
+                                )
                         except asyncio.CancelledError:
                             break
 
