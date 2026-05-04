@@ -19,7 +19,7 @@ class Actor(BaseEntity):
 
     # Associate-specific (None for humans)
     skills: Optional[list[str]] = None
-    mode: Optional[Literal["deterministic", "reasoning", "hybrid"]] = None
+    mode: Optional[Literal["deterministic", "reasoning", "hybrid", "cron_runner"]] = None
     runtime_id: Optional[ObjectId] = None
     owner_actor_id: Optional[ObjectId] = None
     llm_config: Optional[dict] = None
