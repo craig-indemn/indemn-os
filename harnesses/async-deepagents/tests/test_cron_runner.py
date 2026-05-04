@@ -628,6 +628,39 @@ def test_process_with_associate_heartbeats_cron_runner_branch():
     assert "cron_heartbeat_task.cancel()" in branch
 
 
+def test_cron_heartbeat_loop_extends_queue_visibility():
+    """Bug #50 — the cron heartbeat loop must extend BOTH liveness timers:
+    Temporal activity heartbeat (Bug #49) AND Mongo queue visibility
+    timeout (Bug #50). Pre-fix only Temporal got heartbeated; the queue's
+    5-min visibility silently expired on slow subprocesses (Email/Slack
+    fetch-new on backed-up watermark, observed >5min) and the queue
+    processor recovered the message mid-execution → multi-pod race →
+    `complete` 404s. The fix calls `indemn queue extend-visibility
+    <message_id>` on the same 30s cadence as the Temporal heartbeat."""
+    main_path = Path(__file__).resolve().parents[1] / "main.py"
+    src = main_path.read_text()
+
+    # Locate the cron_runner branch
+    start = src.index('associate.get("mode") == "cron_runner"')
+    end = src.index("# Bug #41:", start)
+    branch = src[start:end]
+
+    # Pin: the heartbeat loop must include a queue extend-visibility call
+    # alongside the Temporal heartbeat
+    assert '"queue"' in branch and '"extend-visibility"' in branch, (
+        "Bug #50: cron heartbeat must call `indemn queue extend-visibility` "
+        "alongside the Temporal activity heartbeat"
+    )
+    # Pin: the call must use input.message_id (the active message) and run
+    # via asyncio.to_thread so it doesn't block the asyncio loop
+    assert "input.message_id" in branch
+    assert "asyncio.to_thread(" in branch and "indemn," in branch
+    # Pin: extend-visibility failures must not crash the heartbeat loop
+    # (CLIError caught and logged — at worst we lose the race once)
+    assert "except CLIError" in branch
+    assert "log.warning" in branch
+
+
 def test_actor_mode_literal_includes_cron_runner():
     """Pin the kernel_entities.actor.Actor.mode Literal includes the new value.
     Without this the API would 422 on `PUT /api/actors/<id> --data {"mode":"cron_runner"}`,

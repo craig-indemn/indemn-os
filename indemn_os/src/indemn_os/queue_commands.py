@@ -59,3 +59,19 @@ def fail_message(
         json={"reason": reason},
     )
     render(result)
+
+
+@queue_app.command("extend-visibility")
+def extend_visibility(
+    message_id: str,
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """Extend the visibility timeout on a still-claimed message.
+
+    Used by long-running activities (cron_runner subprocess, agent loops)
+    to keep the Mongo queue's view of liveness in sync with the activity's
+    actual progress. Bug #50 fix — paired with the Temporal activity
+    heartbeat that Bug #49 added."""
+    client = CLIClient()
+    result = client.post(f"/api/message_queues/{message_id}/extend-visibility")
+    render(result)

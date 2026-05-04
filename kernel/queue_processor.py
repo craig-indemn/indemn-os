@@ -35,9 +35,42 @@ def register_sweep(func: callable):
 
 async def check_visibility_timeouts():
     """Find processing messages past their visibility timeout.
-    Return them to pending status for re-claiming."""
+    Dead-letter ones that have exceeded `max_attempts`; recover the rest
+    to pending for re-claiming.
+
+    Bug #50 fix — pre-fix this function unconditionally recovered every
+    timed-out message back to pending without consulting `max_attempts`.
+    The next claim incremented `attempt_count` (per `mongodb_bus.claim`),
+    but nothing ever capped it, so messages stuck in a slow-subprocess /
+    short-visibility race could attempt 7+ times indefinitely. The
+    explicit `bus.fail` path enforces max_attempts; this implicit recovery
+    path was the gap. Mirror the same enforcement here."""
     now = datetime.now(timezone.utc)
-    result = await Message.get_motor_collection().update_many(
+
+    # Step 1: dead-letter messages that have exceeded max_attempts. The
+    # `$expr` clause compares two fields on the same document; the
+    # message-bus claim path uses `$inc: {attempt_count: 1}` on every
+    # successful claim, so by the time visibility expires after attempt N,
+    # `attempt_count == N` already.
+    dead_lettered = await Message.get_motor_collection().update_many(
+        {
+            "status": "processing",
+            "visibility_timeout": {"$lt": now},
+            "$expr": {"$gte": ["$attempt_count", "$max_attempts"]},
+        },
+        {
+            "$set": {
+                "status": "dead_letter",
+                "last_error": (
+                    "Visibility timeout exceeded with attempt_count >= max_attempts "
+                    "(Bug #50: visibility-recovery path now caps retries)"
+                ),
+            },
+        },
+    )
+
+    # Step 2: recover the rest to pending for re-claim.
+    recovered = await Message.get_motor_collection().update_many(
         {
             "status": "processing",
             "visibility_timeout": {"$lt": now},
@@ -46,8 +79,13 @@ async def check_visibility_timeouts():
             "$set": {"status": "pending", "claimed_by": None, "visibility_timeout": None},
         },
     )
-    if result.modified_count > 0:
-        logger.info("Recovered %d timed-out messages", result.modified_count)
+    if dead_lettered.modified_count > 0:
+        logger.info(
+            "Dead-lettered %d messages over max_attempts (Bug #50)",
+            dead_lettered.modified_count,
+        )
+    if recovered.modified_count > 0:
+        logger.info("Recovered %d timed-out messages", recovered.modified_count)
 
 
 async def check_escalation_deadlines():
