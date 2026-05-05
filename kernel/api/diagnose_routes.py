@@ -45,15 +45,18 @@ async def diagnose_actor(
     org_id = current_org_id.get()
 
     from kernel_entities.actor import Actor
+    from kernel_entities.role import Role
 
     target_actor = await Actor.find_one({"_id": ObjectId(actor_id), "org_id": org_id})
     if not target_actor:
         return {"error": "Actor not found", "actor_id": actor_id}
 
-    role_name = target_actor.role if hasattr(target_actor, "role") else None
-    if not role_name:
-        roles = getattr(target_actor, "roles", [])
-        role_name = roles[0] if roles else None
+    role_name = None
+    role_ids = getattr(target_actor, "role_ids", [])
+    if role_ids:
+        role_entity = await Role.find_one({"_id": role_ids[0]})
+        if role_entity:
+            role_name = role_entity.name
 
     if not role_name:
         return {"error": "Actor has no role — cannot query messages", "actor_id": actor_id}
@@ -167,15 +170,18 @@ async def diagnose_cron(
     org_id = current_org_id.get()
 
     from kernel_entities.actor import Actor
+    from kernel_entities.role import Role
 
     target_actor = await Actor.find_one({"org_id": org_id, "name": actor_name})
     if not target_actor:
         return {"error": "Actor not found", "actor_name": actor_name}
 
-    role_name = target_actor.role if hasattr(target_actor, "role") else None
-    if not role_name:
-        roles = getattr(target_actor, "roles", [])
-        role_name = roles[0] if roles else None
+    role_name = None
+    role_ids = getattr(target_actor, "role_ids", [])
+    if role_ids:
+        role_entity = await Role.find_one({"_id": role_ids[0]})
+        if role_entity:
+            role_name = role_entity.name
 
     messages = (
         await Message.find(
