@@ -132,53 +132,56 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             activity.heartbeat("starting_cron_runner")
             cron_heartbeat_task = None
             try:
-                async def _cron_heartbeat_loop():
-                    """Bug #49 + Bug #50 — keep BOTH liveness timers fresh.
-
-                    Temporal activity heartbeat (Bug #49) prevents the
-                    activity from being cancelled mid-subprocess. The Mongo
-                    queue's visibility_timeout (Bug #50) is independent —
-                    if not also extended, the queue processor recovers the
-                    message at 5 min and another pod re-claims it while the
-                    original subprocess is still working. Same 30s cadence,
-                    both timers extend in lockstep."""
-                    while True:
-                        try:
-                            await asyncio.sleep(30.0)
-                            activity.heartbeat("cron_runner_running")
-                            try:
-                                await asyncio.to_thread(
-                                    indemn,
-                                    "queue",
-                                    "extend-visibility",
-                                    str(input.message_id),
-                                )
-                            except CLIError as e:
-                                # Don't crash the heartbeat on a single
-                                # extend-visibility failure — at worst we
-                                # lose the race once and another pod
-                                # claims. Log so the API-slowness pattern
-                                # is visible.
-                                log.warning(
-                                    "extend-visibility failed for %s: %s",
-                                    input.message_id,
-                                    e,
-                                )
-                        except asyncio.CancelledError:
-                            break
-
-                cron_heartbeat_task = asyncio.create_task(_cron_heartbeat_loop())
+                cron_heartbeat_task = asyncio.create_task(
+                    _heartbeat_with_status_check("cron_runner_running")
+                )
                 try:
                     return await asyncio.to_thread(run_cron_skill, input, associate)
                 finally:
                     cron_heartbeat_task.cancel()
                     try:
                         await cron_heartbeat_task
-                    except asyncio.CancelledError:
+                    except (asyncio.CancelledError, RuntimeError):
                         pass
             finally:
                 os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
                 os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
+
+        # --- Shared heartbeat helper with actor-status check ---
+        async def _heartbeat_with_status_check(label: str):
+            """Heartbeat loop that also checks actor status every cycle.
+
+            If the actor has been suspended mid-run, raises RuntimeError
+            to cancel the activity cleanly. The queue visibility sweep
+            recovers the message and parks it (actor is now suspended).
+            """
+            while True:
+                try:
+                    await asyncio.sleep(30.0)
+                    activity.heartbeat(label)
+                    try:
+                        await asyncio.to_thread(
+                            indemn, "queue", "extend-visibility", str(input.message_id),
+                        )
+                    except CLIError:
+                        pass
+                    try:
+                        actor_state = await asyncio.to_thread(
+                            indemn, "actor", "get", str(input.associate_id),
+                        )
+                        if actor_state.get("status") != "active":
+                            log.warning(
+                                "Actor %s is %s — cancelling activity",
+                                input.associate_id,
+                                actor_state.get("status"),
+                            )
+                            raise RuntimeError(
+                                f"Actor suspended (status={actor_state.get('status')})"
+                            )
+                    except CLIError:
+                        pass
+                except asyncio.CancelledError:
+                    break
 
         # Bug #41: route between watch-driven entity load and synthetic
         # `_<sentinel>` trigger descriptor — see _load_message_context docstring.
@@ -218,15 +221,9 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # Temporal from cancelling the activity.
         heartbeat_task = None
         try:
-            async def _heartbeat_loop():
-                while True:
-                    try:
-                        await asyncio.sleep(30.0)
-                        activity.heartbeat("agent_running")
-                    except asyncio.CancelledError:
-                        break
-
-            heartbeat_task = asyncio.create_task(_heartbeat_loop())
+            heartbeat_task = asyncio.create_task(
+                _heartbeat_with_status_check("agent_running")
+            )
 
             result = await agent.ainvoke(
                 {
@@ -260,7 +257,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                 heartbeat_task.cancel()
                 try:
                     await heartbeat_task
-                except asyncio.CancelledError:
+                except (asyncio.CancelledError, RuntimeError):
                     pass
 
         # Log what the agent did — every message, every tool call
