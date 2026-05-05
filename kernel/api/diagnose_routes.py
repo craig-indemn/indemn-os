@@ -77,8 +77,9 @@ async def diagnose_actor(
     runs = []
     for msg in messages:
         duration_ms = None
-        if msg.completed_at and msg.created_at:
-            duration_ms = (msg.completed_at - msg.created_at).total_seconds() * 1000
+        claimed_at = getattr(msg, "claimed_at", None)
+        if claimed_at and msg.created_at:
+            duration_ms = (claimed_at - msg.created_at).total_seconds() * 1000
 
         runs.append(
             {
@@ -86,12 +87,10 @@ async def diagnose_actor(
                 "entity_type": msg.entity_type,
                 "entity_id": str(msg.entity_id) if msg.entity_id else None,
                 "status": msg.status,
-                "attempt_count": getattr(msg, "attempt_count", None),
+                "attempt_count": getattr(msg, "attempt_count", 0),
                 "last_error": getattr(msg, "last_error", None),
                 "created_at": msg.created_at.isoformat() if msg.created_at else None,
-                "completed_at": (
-                    msg.completed_at.isoformat() if getattr(msg, "completed_at", None) else None
-                ),
+                "claimed_at": claimed_at.isoformat() if claimed_at else None,
                 "duration_ms": round(duration_ms, 1) if duration_ms else None,
                 "correlation_id": msg.correlation_id,
             }
@@ -118,6 +117,9 @@ async def diagnose_message(
     if not msg:
         return {"error": "Message not found", "message_id": message_id}
 
+    claimed_at = getattr(msg, "claimed_at", None)
+    visibility_timeout = getattr(msg, "visibility_timeout", None)
+
     result = {
         "message_id": str(msg.id),
         "entity_type": msg.entity_type,
@@ -125,23 +127,10 @@ async def diagnose_message(
         "target_role": msg.target_role,
         "status": msg.status,
         "created_at": msg.created_at.isoformat() if msg.created_at else None,
-        "claimed_at": (
-            getattr(msg, "claimed_at", None).isoformat()
-            if getattr(msg, "claimed_at", None)
-            else None
-        ),
-        "completed_at": (
-            getattr(msg, "completed_at", None).isoformat()
-            if getattr(msg, "completed_at", None)
-            else None
-        ),
-        "visibility_timeout": (
-            getattr(msg, "visibility_timeout", None).isoformat()
-            if getattr(msg, "visibility_timeout", None)
-            else None
-        ),
-        "attempt_count": getattr(msg, "attempt_count", None),
-        "max_attempts": getattr(msg, "max_attempts", None),
+        "claimed_at": claimed_at.isoformat() if claimed_at else None,
+        "visibility_timeout": visibility_timeout.isoformat() if visibility_timeout else None,
+        "attempt_count": getattr(msg, "attempt_count", 0),
+        "max_attempts": getattr(msg, "max_attempts", 3),
         "last_error": getattr(msg, "last_error", None),
         "correlation_id": msg.correlation_id,
         "causation_id": getattr(msg, "causation_id", None),
@@ -149,10 +138,10 @@ async def diagnose_message(
         "event_type": getattr(msg, "event_type", None),
     }
 
-    duration_ms = None
-    if getattr(msg, "completed_at", None) and msg.created_at:
-        duration_ms = (msg.completed_at - msg.created_at).total_seconds() * 1000
-        result["duration_ms"] = round(duration_ms, 1)
+    if claimed_at and msg.created_at:
+        result["duration_ms"] = round(
+            (claimed_at - msg.created_at).total_seconds() * 1000, 1
+        )
 
     return result
 
@@ -199,18 +188,18 @@ async def diagnose_cron(
     ticks = []
     for msg in messages:
         duration_ms = None
-        completed_at = getattr(msg, "completed_at", None)
-        if completed_at and msg.created_at:
-            duration_ms = (completed_at - msg.created_at).total_seconds() * 1000
+        claimed_at = getattr(msg, "claimed_at", None)
+        if claimed_at and msg.created_at:
+            duration_ms = (claimed_at - msg.created_at).total_seconds() * 1000
 
         ticks.append(
             {
                 "message_id": str(msg.id),
                 "created_at": msg.created_at.isoformat() if msg.created_at else None,
-                "completed_at": completed_at.isoformat() if completed_at else None,
+                "claimed_at": claimed_at.isoformat() if claimed_at else None,
                 "status": msg.status,
                 "duration_ms": round(duration_ms, 1) if duration_ms else None,
-                "attempt_count": getattr(msg, "attempt_count", None),
+                "attempt_count": getattr(msg, "attempt_count", 0),
                 "last_error": getattr(msg, "last_error", None),
             }
         )
