@@ -338,15 +338,15 @@ async def _dispatch_one_message(message, client) -> None:
 
 
 async def dispatch_associate_workflows():
-    """Find pending + parked messages for roles with associates.
+    """Find pending messages for roles with associates.
     Start Temporal workflows for them.
 
     This is the SWEEP BACKSTOP — optimistic dispatch from the API
     is the primary path. This catches anything that was missed.
 
-    Bug #38: parked messages re-evaluated each cycle (cheap — Mongo
-    query + skip). When operator reactivates a suspended associate,
-    the sweep finds parked messages and dispatches them.
+    Parked messages are NOT auto-dispatched. Use `indemn queue drain`
+    to explicitly re-emit parked messages at a controlled pace.
+    This separates "process new work" from "replay historical backlog."
     """
     from kernel.temporal.client import get_temporal_client
 
@@ -355,19 +355,14 @@ async def dispatch_associate_workflows():
         return  # Temporal not configured
 
     threshold = datetime.now(timezone.utc) - timedelta(seconds=10)
-    # Sort by status DESC so 'pending' (lex 'pe...' > 'pa...') comes
-    # before 'parked' within each batch. Without this, once a backlog
-    # is parked, the sweep's first-100 keeps fetching the same parked
-    # messages and still-pending ones never make forward progress.
-    # Within each status, oldest first.
     messages = (
         await Message.find(
             {
-                "status": {"$in": ["pending", "parked"]},
+                "status": "pending",
                 "created_at": {"$lt": threshold},
             }
         )
-        .sort([("status", -1), ("created_at", 1)])
+        .sort([("created_at", 1)])
         .to_list(length=100)
     )
 

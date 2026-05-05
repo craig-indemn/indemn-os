@@ -247,3 +247,55 @@ async def fail_message(
     bus = MongoDBMessageBus()
     await bus.fail(ObjectId(message_id), data.get("reason", "unknown"))
     return {"status": "failed", "message_id": message_id}
+
+
+@queue_router.post("/api/queue/drain")
+async def drain_parked(
+    data: dict,
+    actor=Depends(get_current_actor),
+):
+    """Re-emit parked messages as fresh pending messages for a role.
+
+    Separates "process new work" (automatic via sweep) from "replay
+    historical backlog" (explicit via this endpoint). Each parked message
+    is re-emitted with a fresh ID and the original retires to dead_letter.
+
+    Body: {"role": "email_classifier", "limit": 20}
+    """
+    role_name = data.get("role")
+    if not role_name:
+        raise HTTPException(400, "role is required")
+    limit = min(data.get("limit", 20), 500)
+
+    org_id = current_org_id.get()
+    parked = (
+        await Message.find(
+            {
+                "status": "parked",
+                "target_role": role_name,
+                "org_id": org_id,
+            }
+        )
+        .sort([("created_at", 1)])
+        .to_list(length=limit)
+    )
+
+    if not parked:
+        return {"reemitted": 0, "remaining_parked": 0, "role": role_name}
+
+    from kernel.queue_processor import _reemit_parked
+
+    reemitted = 0
+    for msg in parked:
+        await _reemit_parked(msg)
+        reemitted += 1
+
+    remaining = await Message.find(
+        {"status": "parked", "target_role": role_name, "org_id": org_id}
+    ).count()
+
+    return {
+        "reemitted": reemitted,
+        "remaining_parked": remaining,
+        "role": role_name,
+    }

@@ -61,6 +61,26 @@ def fail_message(
     render(result)
 
 
+@queue_app.command("drain")
+def drain_parked(
+    role: str = typer.Option(..., "--role", help="Role whose parked messages to drain"),
+    limit: int = typer.Option(20, "--limit", help="Max messages to re-emit (max 500)"),
+):
+    """Re-emit parked messages as fresh pending messages for a role.
+
+    Use after reactivating a suspended associate to replay historical
+    backlog at a controlled pace. Each parked message gets a fresh ID;
+    the original retires to dead_letter.
+
+    Example: indemn queue drain --role email_classifier --limit 20
+    """
+    client = CLIClient()
+    result = client.post("/api/queue/drain", json={"role": role, "limit": limit})
+    reemitted = result.get("reemitted", 0)
+    remaining = result.get("remaining_parked", 0)
+    typer.echo(f"Drained {reemitted} parked messages for {role} ({remaining} remaining)")
+
+
 @queue_app.command("extend-visibility")
 def extend_visibility(
     message_id: str,
