@@ -139,6 +139,45 @@ async def _mark_message_dead_letter(message, reason: str) -> None:
     )
 
 
+async def _reemit_parked(parked_message) -> "Message":
+    """Re-emit a parked message as a fresh message with a new ID.
+
+    The parked message retires to dead_letter (preserving audit trail).
+    The fresh message dispatches cleanly with a new workflow ID.
+    """
+    fresh = Message(
+        org_id=parked_message.org_id,
+        entity_type=parked_message.entity_type,
+        entity_id=parked_message.entity_id,
+        event_type=parked_message.event_type,
+        target_role=parked_message.target_role,
+        target_actor_id=parked_message.target_actor_id,
+        correlation_id=parked_message.correlation_id,
+        causation_id=f"reemit:{parked_message.id}",
+        depth=parked_message.depth,
+        priority=parked_message.priority,
+        event_metadata=parked_message.event_metadata,
+        context=parked_message.context,
+        summary=parked_message.summary,
+    )
+    await fresh.insert()
+
+    coll = parked_message.get_motor_collection()
+    await coll.update_one(
+        {"_id": parked_message.id},
+        {"$set": {"status": "dead_letter", "last_error": f"Re-emitted as {fresh.id}"}},
+    )
+    logger.info(
+        "Re-emitted parked message %s as fresh %s (role=%s entity=%s:%s)",
+        parked_message.id,
+        fresh.id,
+        parked_message.target_role,
+        parked_message.entity_type,
+        parked_message.entity_id,
+    )
+    return fresh
+
+
 async def _mark_message_parked(message, reason: str) -> None:
     """Park message status. Dispatch sweep re-evaluates parked alongside
     pending so the message dispatches once the actor reactivates."""
@@ -247,16 +286,20 @@ async def _dispatch_one_message(message, client) -> None:
     ).to_list()
 
     if active:
-        workflow_id = f"msg-{message.id}"
+        dispatch_message = message
+        if message.status == "parked":
+            dispatch_message = await _reemit_parked(message)
+
+        workflow_id = f"msg-{dispatch_message.id}"
         try:
             await client.start_workflow(
                 ProcessMessageWorkflow.run,
-                args=[str(message.id), str(active[0].id)],
+                args=[str(dispatch_message.id), str(active[0].id)],
                 id=workflow_id,
                 task_queue="indemn-kernel",
             )
         except WorkflowAlreadyStartedError:
-            await _handle_already_started(message, client, workflow_id)
+            await _handle_already_started(dispatch_message, client, workflow_id)
         return
 
     # No active associates — distinguish "suspended autonomous role" from
