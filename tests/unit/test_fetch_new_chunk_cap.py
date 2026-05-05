@@ -62,22 +62,38 @@ def _entity_cls_with_no_existing():
     chain.to_list = AsyncMock(return_value=[])  # No latest entity → no since
     entity_cls.find_scoped = MagicMock(return_value=chain)
 
-    # Constructor — return a mock entity that records its data + .save_tracked
+    # Constructor — return a mock entity that records its kwargs
     saved = []
-
-    async def fake_save_tracked(self_obj, actor_id=None, method=None):
-        saved.append(self_obj.data)
-        self_obj.id = f"mock-id-{len(saved)}"
 
     def constructor(**kwargs):
         m = MagicMock()
         m.data = kwargs
-        m.save_tracked = fake_save_tracked.__get__(m)
+        m.external_ref = kwargs.get("external_ref")
+        m.id = f"mock-id-{len(saved) + 1}"
+        saved.append(m.data)
         return m
 
     entity_cls.side_effect = constructor
     entity_cls._saved_items = saved  # expose for assertions
     return entity_cls
+
+
+@pytest.fixture(autouse=True)
+def patch_bulk_save():
+    """Patch bulk_save_tracked so fetch_new tests exercise sorting/capping
+    logic without hitting real DB. The mock records what entities were passed."""
+
+    async def fake_bulk_save(entities, actor_id=None, method=None, correlation_id=None):
+        return {
+            "succeeded": len(entities),
+            "errored": 0,
+            "errors": [],
+            "created_ids": [str(e.id) for e in entities],
+            "duration_ms": 1.0,
+        }
+
+    with patch("kernel.entity.save.bulk_save_tracked", new=fake_bulk_save):
+        yield
 
 
 class TestChunkCap:
@@ -202,16 +218,24 @@ class TestChunkCap:
 
         entity_cls.find_scoped = MagicMock(side_effect=find_scoped)
 
-        saved = []
+        # Track what bulk_save_tracked receives
+        bulk_saved_entities = []
 
-        async def fake_save_tracked(self_obj, actor_id=None, method=None):
-            saved.append(self_obj.data)
-            self_obj.id = f"mock-id-{len(saved)}"
+        async def tracking_bulk_save(entities, actor_id=None, method=None, correlation_id=None):
+            bulk_saved_entities.extend(entities)
+            return {
+                "succeeded": len(entities),
+                "errored": 0,
+                "errors": [],
+                "created_ids": [str(e.id) for e in entities],
+                "duration_ms": 1.0,
+            }
 
         def constructor(**kwargs):
             m = MagicMock()
             m.data = kwargs
-            m.save_tracked = fake_save_tracked.__get__(m)
+            m.external_ref = kwargs.get("external_ref")
+            m.id = f"mock-id-{len(bulk_saved_entities) + 1}"
             return m
 
         entity_cls.side_effect = constructor
@@ -225,6 +249,9 @@ class TestChunkCap:
         ), patch(
             "kernel.integration.dispatch.execute_with_retry",
             new=AsyncMock(return_value=all_items),
+        ), patch(
+            "kernel.entity.save.bulk_save_tracked",
+            new=tracking_bulk_save,
         ):
             result = await fetch_new(
                 entity_cls,
@@ -237,8 +264,8 @@ class TestChunkCap:
         assert result["fetched"] == 150
         assert result["skipped_duplicates"] == 50
         assert result["created"] == 100
-        assert len(saved) == 100
+        assert len(bulk_saved_entities) == 100
         # First saved should be ref-0050 (oldest non-dupe)
-        assert saved[0]["external_ref"] == "ref-0050"
+        assert bulk_saved_entities[0].data["external_ref"] == "ref-0050"
         # Last saved should be ref-0149
-        assert saved[-1]["external_ref"] == "ref-0149"
+        assert bulk_saved_entities[-1].data["external_ref"] == "ref-0149"

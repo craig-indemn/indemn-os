@@ -7,7 +7,10 @@ from pathlib import Path
 import httpx
 import typer
 
-auth_app = typer.Typer(name="auth", help="Authentication")
+auth_app = typer.Typer(
+    name="auth",
+    help="Authentication. Set INDEMN_SERVICE_TOKEN env var for service-token auth (skips login).",
+)
 
 TOKEN_FILE = Path.home() / ".indemn" / "credentials"
 

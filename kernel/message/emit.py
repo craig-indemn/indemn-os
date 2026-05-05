@@ -199,23 +199,46 @@ async def _build_related_entities(entity, depth: int) -> list[dict]:
     if own_defn:
         entity_data = entity.model_dump(by_alias=True)
         for field_name, field_def in own_defn.fields.items():
-            if not (field_def.is_relationship and field_def.relationship_target):
-                continue
-            target_name = field_def.relationship_target
-            related_id = entity_data.get(field_name)
-            if not related_id:
-                continue
-            target_cls = ENTITY_REGISTRY.get(target_name)
-            if target_cls is None:
-                continue
-            target_entity = await target_cls.get(related_id)
-            if target_entity is None:
-                continue
-            d = to_dict(target_entity)
-            d["_entity_type"] = target_name
-            d["_relationship_direction"] = "forward"
-            d["_via_field"] = field_name
-            related.append(d)
+            # Standard fixed-target relationship
+            if field_def.is_relationship and field_def.relationship_target:
+                target_name = field_def.relationship_target
+                related_id = entity_data.get(field_name)
+                if not related_id:
+                    continue
+                target_cls = ENTITY_REGISTRY.get(target_name)
+                if target_cls is None:
+                    continue
+                target_entity = await target_cls.get(related_id)
+                if target_entity is None:
+                    continue
+                d = to_dict(target_entity)
+                d["_entity_type"] = target_name
+                d["_relationship_direction"] = "forward"
+                d["_via_field"] = field_name
+                related.append(d)
+            # Polymorphic relationship — target type resolved at runtime
+            elif (
+                getattr(field_def, "is_polymorphic_relationship", False)
+                and getattr(field_def, "target_type_field", None)
+            ):
+                related_id = entity_data.get(field_name)
+                if not related_id:
+                    continue
+                target_name = entity_data.get(field_def.target_type_field)
+                if not target_name:
+                    continue
+                target_cls = ENTITY_REGISTRY.get(target_name)
+                if target_cls is None:
+                    continue
+                target_entity = await target_cls.get(related_id)
+                if target_entity is None:
+                    continue
+                d = to_dict(target_entity)
+                d["_entity_type"] = target_name
+                d["_relationship_direction"] = "forward"
+                d["_via_field"] = field_name
+                d["_polymorphic"] = True
+                related.append(d)
 
     # ---- Reverse refs: walk every other EntityDefinition for fields pointing here ----
     all_defns = await EntityDefinition.find_all().to_list()

@@ -27,6 +27,8 @@ class FieldDefinition(BaseModel):
     is_state_field: bool = False  # True for the field controlled by the state machine
     is_relationship: bool = False  # True for ObjectId fields that reference other entities
     relationship_target: Optional[str] = None  # Entity name this relationship points to
+    is_polymorphic_relationship: bool = False  # Target type varies per-entity instance
+    target_type_field: Optional[str] = None  # Field on this entity that names the target type
     auto_resolve: bool = False  # Bug #9: when an LLM passes {"name": "Acme"} for this
     # relationship field instead of an _id hex string, attempt to resolve via the target
     # entity's entity_resolve capability (if activated). Auto-link only on a single 1.0

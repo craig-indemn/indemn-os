@@ -28,6 +28,7 @@ def main():
     from indemn_os.lookup_commands import lookup_app
     from indemn_os.org_commands import org_app
     from indemn_os.platform_commands import platform_app
+    from indemn_os.diagnose_commands import diagnose_app
     from indemn_os.queue_commands import queue_app
     from indemn_os.report_commands import report_app
     from indemn_os.role_commands import role_app as role_mgmt_app
@@ -54,6 +55,7 @@ def main():
     app.add_typer(role_mgmt_app, name="role")
     app.add_typer(runtime_app, name="runtime")
     app.add_typer(trace_app, name="trace")
+    app.add_typer(diagnose_app, name="diagnose")
     app.add_typer(interaction_app, name="interaction")
     app.add_typer(attention_app, name="attention")
 
@@ -124,12 +126,19 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         limit: int = 20,
         offset: int = 0,
         status: str = None,
+        data: str = typer.Option(
+            None,
+            "--data",
+            help='JSON filter by fields, e.g. \'{"company":"69eb..."}\'',
+        ),
         fmt: str = typer.Option("json", "--format"),
     ):
         """List entities with filters."""
         params = {"limit": limit, "offset": offset}
         if status:
             params["status"] = status
+        if data:
+            params["filter"] = data
         result = client.get(f"/api/{slug}/", params=params)
         render(result, fmt)
 

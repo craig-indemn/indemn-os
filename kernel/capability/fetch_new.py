@@ -95,27 +95,43 @@ async def fetch_new(entity_cls, config: dict, org_id, params: dict = {}) -> dict
         if save_limit is not None and len(new_items) > save_limit:
             new_items = new_items[:save_limit]
 
-        # Create new entities
-        created = []
-        errors = []
+        # Create new entities via bulk path
+        from kernel.entity.save import bulk_save_tracked
+
         actor_id = str(current_actor_id.get())
+
+        # Construct all entities (Pydantic validation pass)
+        valid_entities = []
+        construction_errors = []
         for item in new_items:
             try:
                 entity = entity_cls(org_id=org_id, **item)
-                await entity.save_tracked(actor_id=actor_id, method="fetch_new")
-                created.append(str(entity.id))
+                valid_entities.append(entity)
             except Exception as e:
-                error_str = str(e)
-                if "E11000" in error_str or "duplicate key" in error_str:
-                    # Unique constraint caught a duplicate not in external_ref set
-                    skipped += 1
-                    continue
                 logger.warning(
-                    "Failed to create entity from %s: %s",
+                    "Failed to construct entity from %s: %s",
                     item.get("external_ref", "?"),
                     e,
                 )
-                errors.append({"external_ref": item.get("external_ref"), "error": error_str})
+                construction_errors.append(
+                    {"external_ref": item.get("external_ref"), "error": str(e)}
+                )
+
+        # Bulk insert + audit + watch evaluation
+        if valid_entities:
+            bulk_result = await bulk_save_tracked(
+                entities=valid_entities,
+                actor_id=actor_id,
+                method="fetch_new",
+            )
+            created = bulk_result["created_ids"]
+            errors = construction_errors + bulk_result["errors"]
+            # Count dedup-caught items from bulk insert as skipped
+            dedup_in_bulk = len(valid_entities) - bulk_result["succeeded"] - bulk_result["errored"]
+            skipped += dedup_in_bulk
+        else:
+            created = []
+            errors = construction_errors
 
         return {
             "fetched": len(raw_results),
