@@ -47,6 +47,35 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
     }
 
 
+_TRUNCATE_THRESHOLD = 1000
+
+
+def _truncate_large_fields(data: dict, threshold: int = _TRUNCATE_THRESHOLD) -> dict:
+    """Truncate large string fields in entity context to keep initial LLM
+    context lean. The agent can always read the full entity via CLI if
+    it needs more detail.
+
+    Modifies the dict in place and returns it."""
+    if not isinstance(data, dict):
+        return data
+    for key, value in data.items():
+        if isinstance(value, str) and len(value) > threshold:
+            total = len(value)
+            data[key] = (
+                value[:threshold]
+                + f"\n\n[… truncated — {total} chars total. "
+                + f"Run `indemn {data.get('_entity_type', 'entity').lower()} get {data.get('_id', '<id>')}` "
+                + "to read full content.]"
+            )
+        elif isinstance(value, dict):
+            _truncate_large_fields(value, threshold)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _truncate_large_fields(item, threshold)
+    return data
+
+
 def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> dict:
     """Build the agent's working context dict from the message's
     `(entity_type, entity_id)`.
@@ -84,9 +113,10 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
         }
 
     entity_slug = entity_type.lower()
-    return indemn(
+    context = indemn(
         entity_slug, "get", entity_id, "--depth", "2", "--include-related"
     )
+    return _truncate_large_fields(context)
 
 
 @activity.defn
