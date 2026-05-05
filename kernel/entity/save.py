@@ -314,6 +314,7 @@ async def bulk_save_tracked(
         change_records = []
         for entity in succeeded_entities:
             record = ChangeRecord(
+                id=ObjectId(),
                 org_id=entity.org_id,
                 entity_type=entity_type_name,
                 entity_id=entity.id,
@@ -456,3 +457,48 @@ async def _save_heartbeat_only(entity):
         {"_id": entity.id},
         {"$set": update_fields},
     )
+
+
+async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int:
+    """Nullify relationship fields on other entities that reference a deleted entity.
+
+    Scans all EntityDefinitions for fields where is_relationship=True and
+    relationship_target matches the deleted entity's type. For each, runs
+    update_many to set matching references to null.
+
+    Returns total number of documents updated across all collections.
+    """
+    from kernel.db import ENTITY_REGISTRY
+    from kernel.entity.definition import EntityDefinition
+
+    definitions = await EntityDefinition.find({"org_id": org_id}).to_list()
+    total_updated = 0
+
+    for defn in definitions:
+        for field_name, field_def in defn.fields.items():
+            if not field_def.is_relationship:
+                continue
+            if field_def.relationship_target != entity_type:
+                continue
+
+            entity_cls = ENTITY_REGISTRY.get(defn.name)
+            if entity_cls is None:
+                continue
+
+            collection = entity_cls.get_motor_collection()
+            result = await collection.update_many(
+                {"org_id": org_id, field_name: entity_id},
+                {"$set": {field_name: None}},
+            )
+            if result.modified_count > 0:
+                log.info(
+                    "cascade_nullify: %s.%s — nullified %d refs to deleted %s %s",
+                    defn.name,
+                    field_name,
+                    result.modified_count,
+                    entity_type,
+                    entity_id,
+                )
+                total_updated += result.modified_count
+
+    return total_updated

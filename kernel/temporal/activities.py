@@ -268,6 +268,11 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
                             new_entity = entity_cls(org_id=org, **entity)
                             await new_entity.save_tracked(method="bulk_create")
                         elif spec.operation == "delete":
+                            from kernel.entity.save import cascade_nullify_references
+
+                            await cascade_nullify_references(
+                                spec.entity_type, entity.id, entity.org_id
+                            )
                             await entity.get_motor_collection().delete_one(
                                 {"_id": entity.id}, session=session
                             )

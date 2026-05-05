@@ -107,8 +107,11 @@ def modify_entity_def(
     name: str,
     add_field: str = typer.Option(None, "--add-field", help='JSON: {"field_name": {...}}'),
     remove_field: str = typer.Option(None, "--remove-field"),
+    state_machine: str = typer.Option(
+        None, "--state-machine", help='JSON: {"state": ["target1", ...], ...}'
+    ),
 ):
-    """Modify an entity definition (add/remove fields)."""
+    """Modify an entity definition (add/remove fields, update state machine)."""
     import orjson
 
     data = {}
@@ -116,17 +119,31 @@ def modify_entity_def(
         data["add_fields"] = orjson.loads(add_field)
     if remove_field:
         data["remove_fields"] = [remove_field]
+    if state_machine:
+        data["state_machine"] = orjson.loads(state_machine)
 
     if not data:
-        typer.echo("Nothing to modify. Use --add-field or --remove-field.", err=True)
+        typer.echo(
+            "Nothing to modify. Use --add-field, --remove-field, or --state-machine.",
+            err=True,
+        )
         raise typer.Exit(1)
 
     client = CLIClient()
     result = client.put(f"/api/entitydefinitions/{name}/modify", json=data)
     added = result.get("added", [])
     removed = result.get("removed", [])
-    typer.echo(f"Modified {name}: added={added}, removed={removed}")
-    typer.echo("  (requires API restart to pick up changes)")
+    modified = result.get("modified", [])
+    parts = []
+    if added:
+        parts.append(f"added={added}")
+    if modified:
+        parts.append(f"modified={modified}")
+    if removed:
+        parts.append(f"removed={removed}")
+    if result.get("state_machine"):
+        parts.append("state_machine=updated")
+    typer.echo(f"Modified {name}: {', '.join(parts)}")
 
 
 @entity_app.command("enable")

@@ -169,12 +169,13 @@ async def enable_capability(
 async def modify_entity_definition(
     name: str, data: dict, request: Request, actor=Depends(get_current_actor)
 ):
-    """Modify an entity definition — add/modify/remove fields.
+    """Modify an entity definition — add/modify/remove fields, update state machine.
 
     Body: {
       "add_fields": {"field_name": {...}},
       "modify_fields": {"field_name": {...}},  # full replacement of the field spec
-      "remove_fields": ["field_name"]
+      "remove_fields": ["field_name"],
+      "state_machine": {"state": ["target1", ...], ...}  # full replacement
     }
     """
     check_permission(actor, "EntityDefinition", "write")
@@ -187,6 +188,7 @@ async def modify_entity_definition(
     added = []
     modified = []
     removed = []
+    state_machine_updated = False
 
     add_fields = data.get("add_fields", {})
     for field_name, field_spec in add_fields.items():
@@ -201,8 +203,6 @@ async def modify_entity_definition(
                 f"Field '{field_name}' is not defined on entity '{name}'. "
                 f"Use add_fields to create it.",
             )
-        # Full replacement of the field's spec. Reconcile_indexes will see
-        # any unique/indexed/sparse changes and drop+recreate the index.
         defn.fields[field_name] = FieldDefinition(**field_spec)
         modified.append(field_name)
 
@@ -212,19 +212,22 @@ async def modify_entity_definition(
             del defn.fields[field_name]
             removed.append(field_name)
 
-    if added or modified or removed:
+    new_state_machine = data.get("state_machine")
+    if new_state_machine is not None:
+        defn.state_machine = new_state_machine
+        state_machine_updated = True
+
+    if added or modified or removed or state_machine_updated:
         from datetime import datetime, timezone
 
         defn.updated_at = datetime.now(timezone.utc)
         defn.version += 1
         await defn.save()
 
-        # Re-register the dynamic class so changes take effect without restart
         from kernel.db import register_domain_entity
 
         await register_domain_entity(defn, app=request.app)
 
-        # Regenerate the entity skill to reflect the modified definition
         from kernel.skill.generator import generate_entity_skill
         from kernel.skill.integrity import compute_content_hash
         from kernel.skill.schema import Skill
@@ -246,7 +249,10 @@ async def modify_entity_definition(
             )
             await skill.insert()
 
-    return {"status": "modified", "added": added, "modified": modified, "removed": removed}
+    result = {"status": "modified", "added": added, "modified": modified, "removed": removed}
+    if state_machine_updated:
+        result["state_machine"] = "updated"
+    return result
 
 
 # --- Entity Migration ---
