@@ -137,6 +137,8 @@ ALL entity saves go through `save_tracked()`. One MongoDB transaction:
 
 **Selective emission**: only creation + state transitions + @exposed methods generate messages. NOT every field change.
 
+**Bulk creation path**: `bulk_save_tracked(entities, actor_id, method=...)` in `kernel/entity/save.py` — same audit + watch contracts, optimized for batch inserts. Uses `insert_many(ordered=False)` + in-memory hash-chained change records + batched watch evaluation. Preserves partial failure (some succeed even if others hit unique constraints). Used by `fetch_new` for adapter ingestion. Use this instead of looping `save_tracked()` when creating multiple entities at once.
+
 ## Authentication
 
 ```bash
@@ -174,6 +176,9 @@ curl -X POST $API/auth/setup-password -d '{"token":"<setup_token>","new_password
 ```bash
 indemn trace entity <EntityType> <entity_id>     # Unified timeline: changes + messages
 indemn trace cascade <correlation_id>             # Full execution tree
+indemn diagnose actor <actor_id>                  # Recent runs: durations, outcomes, errors
+indemn diagnose message <message_id>              # Full message lifecycle: claims, visibility, status
+indemn diagnose cron <actor_name>                 # Last N cron ticks with durations + outcomes
 indemn queue stats                                # Pending/processing/dead-letter per role
 indemn integration health                         # Test adapter connectivity
 indemn audit verify                               # Hash chain integrity
@@ -258,7 +263,7 @@ All queries use `find_scoped()` / `get_scoped()`. Never raw Motor. org_id from c
 |---|---|
 | `kernel/entity/base.py` | BaseEntity (KernelBaseEntity + DomainBaseEntity) |
 | `kernel/entity/factory.py` | Dynamic class creation from EntityDefinition |
-| `kernel/entity/save.py` | save_tracked() — the ONE save path |
+| `kernel/entity/save.py` | save_tracked() + bulk_save_tracked() — the save paths |
 | `kernel/entity/state_machine.py` | State machine enforcement |
 | `kernel/api/registration.py` | Auto-generated CRUD + transition + @exposed routes |
 | `kernel/watch/evaluator.py` | Condition evaluation (shared by watches + rules) |
