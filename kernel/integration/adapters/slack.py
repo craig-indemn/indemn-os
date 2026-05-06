@@ -69,6 +69,7 @@ class SlackAdapter(Adapter):
                 "with secret containing {bot_token: 'xoxb-...'}"
             )
         self._workspace_id = config.get("workspace_id")  # optional
+        self._user_cache: dict[str, dict] = {}  # user_id → {email, name, ...}
 
     async def _api_call(self, method: str, params: dict = None) -> dict:
         """Slack Web API call with bearer auth, JSON response. Raises on
@@ -147,7 +148,7 @@ class SlackAdapter(Adapter):
                     if ext_ref in seen_keys:
                         continue
                     seen_keys.add(ext_ref)
-                    all_messages.append(self._format_message(channel, msg))
+                    all_messages.append(await self._format_message(channel, msg))
                     if len(all_messages) >= limit:
                         break
             except Exception as e:
@@ -211,7 +212,34 @@ class SlackAdapter(Adapter):
                 break
         return out
 
-    def _format_message(self, channel: dict, msg: dict) -> dict:
+    async def _resolve_user(self, user_id: str) -> dict:
+        """Resolve a Slack user_id to profile data via users.info.
+
+        Cached per-adapter-instance (one fetch cycle). Returns
+        {email, real_name} or empty dict on failure."""
+        if not user_id:
+            return {}
+        if user_id in self._user_cache:
+            return self._user_cache[user_id]
+        try:
+            data = await self._api_call("users.info", {"user": user_id})
+            profile = data.get("user", {}).get("profile", {})
+            result = {
+                "email": profile.get("email"),
+                "real_name": (
+                    data.get("user", {}).get("real_name")
+                    or profile.get("real_name")
+                    or profile.get("display_name")
+                ),
+            }
+            self._user_cache[user_id] = result
+            return result
+        except Exception as e:
+            logger.debug("Failed to resolve Slack user %s: %s", user_id, e)
+            self._user_cache[user_id] = {}
+            return {}
+
+    async def _format_message(self, channel: dict, msg: dict) -> dict:
         """Format a Slack message dict as a SlackMessage-shaped dict.
 
         external_ref = '{channel_id}:{slack_ts}' for fetch_new dedup.
@@ -219,17 +247,18 @@ class SlackAdapter(Adapter):
         a follow-on enrichment step (out of fetch path).
         """
         ts = msg.get("ts")
+        user_id = msg.get("user", "")
+        user_profile = await self._resolve_user(user_id) if user_id else {}
         return {
             "external_ref": f"{channel['id']}:{ts}",
             "slack_ts": ts,
             "channel_id": channel["id"],
             "channel_name": channel.get("name", ""),
             "thread_ts": msg.get("thread_ts"),
-            "user_id": msg.get("user", ""),
+            "user_id": user_id,
+            "sender_email": user_profile.get("email"),
             "text": msg.get("text", ""),
             "posted_at": _slack_ts_to_iso(ts),
-            # files list: store IDs for now; Document materialization is a
-            # separate enrichment step (avoids file-download blocking the fetch).
             "files": [f.get("id") for f in (msg.get("files") or []) if f.get("id")],
         }
 
