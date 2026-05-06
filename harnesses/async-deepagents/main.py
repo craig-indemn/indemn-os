@@ -138,6 +138,16 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # Load associate config + context (harness orchestration, not agent tools)
         associate = indemn("actor", "get", input.associate_id)
 
+        if associate.get("status") != "active":
+            log.warning(
+                "Actor %s is %s at activity start — aborting",
+                input.associate_id,
+                associate.get("status"),
+            )
+            raise RuntimeError(
+                f"Actor not active (status={associate.get('status')})"
+            )
+
         # Bug #40: cron_runner mode bypasses the LLM agent entirely. The actor's
         # first skill carries a literal `## Command` CLI line; we shell-exec it
         # directly. No deepagents, no tool-call serialization, no LLM tokens.
