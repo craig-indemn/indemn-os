@@ -14,10 +14,48 @@ class of bugs surfaced as Bug #35 (Sessions 11–12).
 """
 
 import os
+from typing import Callable
 
 from deepagents import create_deep_agent
+from deepagents.middleware import AgentMiddleware, ToolCallRequest
 from harness_common.backend import build_backend
 from langchain.chat_models import init_chat_model
+from langchain_core.messages import ToolMessage
+
+
+class ExecuteErrorStatusMiddleware(AgentMiddleware):
+    """Fix deepagents execute tool returning status='success' on errors.
+
+    The FilesystemMiddleware's execute tool returns plain strings for
+    errors (exit_code != 0, FileNotFoundError, etc.). LangGraph wraps
+    these as ToolMessage(status='success'). This middleware intercepts
+    execute results and sets status='error' when the output indicates
+    failure — making errors visible in LangSmith traces and to the agent.
+    """
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage],
+    ) -> ToolMessage:
+        result = handler(request)
+        if request.tool_name == "execute" and isinstance(result, ToolMessage):
+            content = result.content if isinstance(result.content, str) else str(result.content)
+            if "[Command failed with exit code" in content or "Error executing command" in content:
+                result.status = "error"
+        return result
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable,
+    ) -> ToolMessage:
+        result = await handler(request)
+        if request.tool_name == "execute" and isinstance(result, ToolMessage):
+            content = result.content if isinstance(result.content, str) else str(result.content)
+            if "[Command failed with exit code" in content or "Error executing command" in content:
+                result.status = "error"
+        return result
 
 DEFAULT_PROMPT = (
     "You are an Indemn OS Associate.\n\n"
@@ -96,4 +134,5 @@ def build_agent(
         model=init_chat_model(model_id, **llm_config),
         system_prompt=build_system_prompt(associate),
         backend=build_backend(activity_id=activity_id),
+        middleware=[ExecuteErrorStatusMiddleware()],
     )
