@@ -371,22 +371,16 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         raise  # Re-raise so Temporal marks the activity failed
 
     finally:
-        # Bug #3 fix: tear down the per-activity sandbox directory so /workspace
-        # doesn't accumulate state across invocations on long-running runtimes.
-        # Recomputed from input rather than relying on a closure so this runs
-        # even if an early exception happened before activity_id was bound.
-        activity_dir = f"/workspace/act-{input.message_id}"
-        if os.path.exists(activity_dir):
-            try:
-                import shutil
-
-                shutil.rmtree(activity_dir)
-            except Exception as cleanup_error:  # noqa: BLE001
-                log.warning(
-                    "Failed to cleanup activity directory %s: %s",
-                    activity_dir,
-                    cleanup_error,
-                )
+        # Sandbox directories accumulate in /workspace/act-{id}/ during
+        # the container's lifetime. This is acceptable — the container is
+        # ephemeral (dies on every Railway deploy). Aggressive per-activity
+        # cleanup was the root cause of the 8.8M token CE spiral: when two
+        # activities shared a truncated directory name, one's cleanup deleted
+        # the other's workspace mid-execution. Even with full message_id
+        # uniqueness (commit 6387bec), deleting during `finally` is fragile
+        # against retries and concurrent edge cases. Let the container
+        # lifecycle handle it.
+        pass
 
 
 def _setup_gcp_credentials():
