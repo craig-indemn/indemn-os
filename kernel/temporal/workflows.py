@@ -97,6 +97,8 @@ class ProcessMessageWorkflow:
                     "PermissionError",
                     "CLIError",
                     "ValidationError",
+                    "RuntimeError",
+                    "GraphRecursionError",
                 ],
             ),
         )

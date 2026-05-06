@@ -275,6 +275,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                     ],
                 },
                 config={
+                    "recursion_limit": 50,
                     "metadata": {
                         "associate_id": str(input.associate_id),
                         "associate_name": associate.get("name"),
