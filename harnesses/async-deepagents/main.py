@@ -455,7 +455,7 @@ async def main():
         activities=[process_with_associate],
         max_concurrent_activities=max_concurrent,
         interceptors=[TracingInterceptor()],
-        graceful_shutdown_timeout=timedelta(seconds=30),
+        graceful_shutdown_timeout=timedelta(seconds=120),
     )
 
     log.info("Worker listening on queue: %s (max_concurrent=%d)", TASK_QUEUE, max_concurrent)
