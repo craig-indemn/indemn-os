@@ -202,20 +202,27 @@ async def _build_related_entities(entity, depth: int) -> list[dict]:
             # Standard fixed-target relationship
             if field_def.is_relationship and field_def.relationship_target:
                 target_name = field_def.relationship_target
-                related_id = entity_data.get(field_name)
-                if not related_id:
+                raw_value = entity_data.get(field_name)
+                if not raw_value:
                     continue
                 target_cls = ENTITY_REGISTRY.get(target_name)
                 if target_cls is None:
                     continue
-                target_entity = await target_cls.get(related_id)
-                if target_entity is None:
-                    continue
-                d = to_dict(target_entity)
-                d["_entity_type"] = target_name
-                d["_relationship_direction"] = "forward"
-                d["_via_field"] = field_name
-                related.append(d)
+                ids_to_resolve = raw_value if isinstance(raw_value, list) else [raw_value]
+                for related_id in ids_to_resolve:
+                    if not related_id:
+                        continue
+                    try:
+                        target_entity = await target_cls.get(related_id)
+                    except Exception:
+                        continue
+                    if target_entity is None:
+                        continue
+                    d = to_dict(target_entity)
+                    d["_entity_type"] = target_name
+                    d["_relationship_direction"] = "forward"
+                    d["_via_field"] = field_name
+                    related.append(d)
             # Polymorphic relationship — target type resolved at runtime
             elif (
                 getattr(field_def, "is_polymorphic_relationship", False)
