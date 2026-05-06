@@ -245,7 +245,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # leak into another's). The agent loads its operating + entity skills
         # at runtime via `execute('indemn skill get <name>')` per the
         # build_system_prompt directive — no filesystem SKILL.md writes here.
-        activity_id = f"act-{input.message_id[:12]}"
+        activity_id = f"act-{input.message_id}"
 
         agent = build_agent(
             associate=associate,
@@ -375,7 +375,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # doesn't accumulate state across invocations on long-running runtimes.
         # Recomputed from input rather than relying on a closure so this runs
         # even if an early exception happened before activity_id was bound.
-        activity_dir = f"/workspace/act-{input.message_id[:12]}"
+        activity_dir = f"/workspace/act-{input.message_id}"
         if os.path.exists(activity_dir):
             try:
                 import shutil
