@@ -39,7 +39,8 @@ class ExecuteErrorStatusMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], ToolMessage],
     ) -> ToolMessage:
         result = handler(request)
-        if request.tool_name == "execute" and isinstance(result, ToolMessage):
+        tool_name = request.tool_call.get("name", "") if isinstance(request.tool_call, dict) else getattr(request.tool_call, "name", "")
+        if tool_name == "execute" and isinstance(result, ToolMessage):
             content = result.content if isinstance(result.content, str) else str(result.content)
             if "[Command failed with exit code" in content or "Error executing command" in content:
                 result.status = "error"
@@ -51,7 +52,8 @@ class ExecuteErrorStatusMiddleware(AgentMiddleware):
         handler: Callable,
     ) -> ToolMessage:
         result = await handler(request)
-        if request.tool_name == "execute" and isinstance(result, ToolMessage):
+        tool_name = request.tool_call.get("name", "") if isinstance(request.tool_call, dict) else getattr(request.tool_call, "name", "")
+        if tool_name == "execute" and isinstance(result, ToolMessage):
             content = result.content if isinstance(result.content, str) else str(result.content)
             if "[Command failed with exit code" in content or "Error executing command" in content:
                 result.status = "error"
