@@ -17,7 +17,7 @@ import os
 from typing import Callable
 
 from deepagents import create_deep_agent
-from deepagents.middleware import AgentMiddleware, ToolCallRequest
+from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
 from harness_common.backend import build_backend
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import ToolMessage
