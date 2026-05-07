@@ -82,26 +82,42 @@ class ProcessMessageWorkflow:
             correlation_id=claimed.get("correlation_id", ""),
             depth=claimed.get("depth", 0),
         )
-        result = await workflow.execute_activity(
-            "process_with_associate",
-            agent_input,
-            task_queue=f"runtime-{runtime_id}",
-            start_to_close_timeout=timedelta(minutes=30),
-            heartbeat_timeout=timedelta(seconds=90),
-            retry_policy=RetryPolicy(
-                maximum_attempts=2,
-                initial_interval=timedelta(seconds=5),
-                non_retryable_error_types=[
-                    "PermanentProcessingError",
-                    "SkillTamperError",
-                    "PermissionError",
-                    "CLIError",
-                    "ValidationError",
-                    "RuntimeError",
-                    "GraphRecursionError",
-                ],
-            ),
-        )
+        try:
+            result = await workflow.execute_activity(
+                "process_with_associate",
+                agent_input,
+                task_queue=f"runtime-{runtime_id}",
+                start_to_close_timeout=timedelta(minutes=30),
+                heartbeat_timeout=timedelta(seconds=90),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=2,
+                    initial_interval=timedelta(seconds=5),
+                    non_retryable_error_types=[
+                        "PermanentProcessingError",
+                        "SkillTamperError",
+                        "PermissionError",
+                        "CLIError",
+                        "ValidationError",
+                        "RuntimeError",
+                        "GraphRecursionError",
+                    ],
+                ),
+            )
+        except Exception as e:
+            error_reason = str(e)[:500]
+            try:
+                await workflow.execute_activity(
+                    fail_message,
+                    args=[message_id, f"Temporal: {error_reason}"],
+                    start_to_close_timeout=timedelta(seconds=30),
+                )
+            except Exception:
+                workflow.logger.warning(
+                    "Could not surface error to message queue for %s: %s",
+                    message_id,
+                    error_reason,
+                )
+            return {"status": "failed", "reason": error_reason}
 
         return result
 

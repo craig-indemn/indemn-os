@@ -127,6 +127,12 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
     Agent's own tool execution uses deepagents' built-in execute via backend.
     """
     try:
+        # Heartbeat immediately — before any CLI calls. Under concurrency
+        # pressure, the 3-4 CLI subprocess calls below can take > 90s
+        # (the heartbeat_timeout), causing Temporal to cancel the activity
+        # before it even starts. This buys us the full 90s window.
+        activity.heartbeat("loading_context")
+
         # Set causation message ID so downstream CLI calls propagate it
         os.environ["INDEMN_CAUSATION_MESSAGE_ID"] = str(input.message_id)
         # Set effective-actor-id (Bug #22 forensics): all CLI calls from this
