@@ -154,46 +154,8 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                 f"Actor not active (status={associate.get('status')})"
             )
 
-        # Bug #40: cron_runner mode bypasses the LLM agent entirely. The actor's
-        # first skill carries a literal `## Command` CLI line; we shell-exec it
-        # directly. No deepagents, no tool-call serialization, no LLM tokens.
-        # run_cron_skill validates that the trigger is a synthetic `_*` event
-        # and fails the message if something else routed here. The env-var
-        # propagation (INDEMN_CAUSATION_MESSAGE_ID + INDEMN_EFFECTIVE_ACTOR_ID
-        # set above) flows to the subprocess for forensics.
-        #
-        # Heartbeat: run_cron_skill calls a blocking subprocess (`indemn email
-        # fetch-new` etc.) which can exceed Temporal's 90s heartbeat_timeout
-        # under load (Slack with rate-limited channels, Drive on first crawl,
-        # etc.). Without heartbeating, Temporal cancels the activity, the
-        # workflow ends FAILED, the dispatch sweep marks the message
-        # dead_letter via Bug #38 cleanup. Pre-fix: 11 spurious dead_letters
-        # over 3 days (5 Email, 6 Slack — Slack-heavy because slack fetches
-        # took longer). Fix: wrap the sync run_cron_skill in
-        # `asyncio.to_thread` and run a heartbeat loop concurrently — same
-        # shape as the agent path's `_heartbeat_loop` below. The heartbeat
-        # is an activity-level concern (not a cron_runner concern), so it
-        # lives here in the caller, keeping cron_runner.py sync + simple.
-        if associate.get("mode") == "cron_runner":
-            activity.heartbeat("starting_cron_runner")
-            cron_heartbeat_task = None
-            try:
-                cron_heartbeat_task = asyncio.create_task(
-                    _heartbeat_with_status_check("cron_runner_running")
-                )
-                try:
-                    return await asyncio.to_thread(run_cron_skill, input, associate)
-                finally:
-                    cron_heartbeat_task.cancel()
-                    try:
-                        await cron_heartbeat_task
-                    except (asyncio.CancelledError, RuntimeError):
-                        pass
-            finally:
-                os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
-                os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
-
         # --- Shared heartbeat helper with actor-status check ---
+        # Defined before cron_runner branch because both paths use it.
         async def _heartbeat_with_status_check(label: str):
             """Heartbeat loop that also checks actor status every cycle.
 
@@ -228,6 +190,25 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                         pass
                 except asyncio.CancelledError:
                     break
+
+        if associate.get("mode") == "cron_runner":
+            activity.heartbeat("starting_cron_runner")
+            cron_heartbeat_task = None
+            try:
+                cron_heartbeat_task = asyncio.create_task(
+                    _heartbeat_with_status_check("cron_runner_running")
+                )
+                try:
+                    return await asyncio.to_thread(run_cron_skill, input, associate)
+                finally:
+                    cron_heartbeat_task.cancel()
+                    try:
+                        await cron_heartbeat_task
+                    except (asyncio.CancelledError, RuntimeError):
+                        pass
+            finally:
+                os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
+                os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
 
         # Bug #41: route between watch-driven entity load and synthetic
         # `_<sentinel>` trigger descriptor — see _load_message_context docstring.
