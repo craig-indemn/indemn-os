@@ -82,6 +82,7 @@ def main():
         "Runtime",
         "Interaction",
         "Attention",
+        "Trace",
         "Rule",
         "RuleGroup",
         "Skill",

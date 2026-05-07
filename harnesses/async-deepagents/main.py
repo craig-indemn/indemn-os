@@ -13,14 +13,18 @@ Session decisions folded in:
 """
 
 import asyncio
+import json
 import logging
 import os
-from datetime import timedelta
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
 
 from harness.agent import build_agent
 from harness.cron_runner import run_cron_skill
 from harness.completion_logic import agent_did_useful_work
 from harness_common.cli import CLIError, indemn
+from trace_helpers import serialize_messages, derive_child_runs, aggregate_tokens
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from indemn_os.types import AgentExecutionInput, AgentExecutionResult
 from temporalio import activity
@@ -119,6 +123,114 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
     return _truncate_large_fields(context)
 
 
+async def _create_trace(
+    input: AgentExecutionInput,
+    associate: dict,
+    messages: list,
+    tools_used: list[str],
+    langsmith_run_id: uuid.UUID,
+    start_time: datetime,
+    start_ts: float,
+    execution_status: str = "success",
+    error_msg: str | None = None,
+):
+    """Create a durable Trace kernel entity after agent.ainvoke().
+
+    Non-blocking (runs CLI via asyncio.to_thread). Failure is logged
+    but does not block message completion.
+    """
+    end_time = datetime.now(timezone.utc)
+    duration_ms = int((time.monotonic() - start_ts) * 1000)
+
+    serialized = serialize_messages(messages)
+    child_runs = derive_child_runs(messages)
+    prompt_tokens, completion_tokens, total_tokens = aggregate_tokens(messages)
+
+    trace_data = {
+        "trace_id": str(langsmith_run_id),
+        "langsmith_run_id": str(langsmith_run_id),
+        "session_id": os.environ.get("LANGCHAIN_PROJECT"),
+        "associate_id": str(input.associate_id),
+        "associate_name": associate.get("name", ""),
+        "message_id": str(input.message_id),
+        "correlation_id": os.environ.get("INDEMN_CAUSATION_MESSAGE_ID"),
+        "entity_type": input.entity_type,
+        "entity_id": str(input.entity_id),
+        "name": f"{associate.get('name', 'agent')} → {input.entity_type} {str(input.entity_id)[:8]}",
+        "run_type": "chain",
+        "inputs": {"role": "user", "content": "Process this work: <entity context>"},
+        "outputs": {"messages_count": len(messages), "tools_used": tools_used},
+        "messages": serialized,
+        "child_runs": child_runs,
+        "tags": [
+            f"associate:{associate.get('name', 'unknown')}",
+            f"entity_type:{input.entity_type}",
+            f"runtime:{RUNTIME_ID}",
+        ],
+        "extra": {"rubric_ids": associate.get("rubric_ids", [])},
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat(),
+        "duration_ms": duration_ms,
+        "execution_status": execution_status,
+        "error": error_msg,
+        "status": "created",
+    }
+
+    payload = json.dumps(trace_data, default=str)
+    if len(payload) > 200_000:
+        for m in trace_data["messages"]:
+            if isinstance(m, dict) and isinstance(m.get("content"), str) and len(m["content"]) > 500:
+                m["content"] = m["content"][:500] + "... [truncated]"
+        payload = json.dumps(trace_data, default=str)
+
+    await asyncio.to_thread(indemn, "trace", "create", "--data", payload, timeout=30.0)
+    log.info("Trace created for %s -> %s %s", associate.get("name"), input.entity_type, str(input.entity_id)[:8])
+
+
+async def _sync_eval_to_langsmith(trace_entity_id: str):
+    """Sync evaluation results to LangSmith after evaluator completes.
+
+    Called when entity_type == "Trace" — the evaluator processed a Trace.
+    Loads the Trace to get langsmith_run_id, loads EvaluationResults,
+    and calls client.create_feedback() for each rubric score.
+    """
+    try:
+        from langsmith import Client
+    except ImportError:
+        log.warning("langsmith not installed — skipping eval sync")
+        return
+
+    trace = await asyncio.to_thread(indemn, "trace", "get", trace_entity_id, timeout=15.0)
+    langsmith_run_id = trace.get("langsmith_run_id")
+    if not langsmith_run_id:
+        return
+
+    results = await asyncio.to_thread(
+        indemn, "evaluationresult", "list",
+        "--data", json.dumps({"trace_id": trace_entity_id}),
+        timeout=15.0,
+    )
+    if not results or not isinstance(results, list):
+        return
+
+    client = Client()
+    for result in results:
+        for score_entry in result.get("rubric_scores", []):
+            try:
+                client.create_feedback(
+                    run_id=langsmith_run_id,
+                    key=score_entry.get("rule_id", "unknown"),
+                    score=score_entry.get("score", 0.0),
+                    comment=score_entry.get("reasoning", ""),
+                )
+            except Exception as e:
+                log.warning("LangSmith feedback sync failed for rule %s: %s",
+                            score_entry.get("rule_id"), e)
+
+
 @activity.defn
 async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionResult:
     """Agent execution loop. Migrated from kernel/temporal/activities.py.
@@ -126,6 +238,12 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
     Harness orchestration uses the CLI for I/O (load context, mark complete).
     Agent's own tool execution uses deepagents' built-in execute via backend.
     """
+    # Initialize trace variables early so the except block can create error traces
+    _langsmith_run_id = uuid.uuid4()
+    _start_time = datetime.now(timezone.utc)
+    _start_ts = time.monotonic()
+    associate: dict = {"name": "unknown"}
+
     try:
         # Heartbeat immediately — before any CLI calls. Under concurrency
         # pressure, the 3-4 CLI subprocess calls below can take > 90s
@@ -243,6 +361,10 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # Heartbeat before the potentially long agent run
         activity.heartbeat("starting_agent")
 
+        # Reset timing to exclude setup overhead (context loading, config merge)
+        _start_time = datetime.now(timezone.utc)
+        _start_ts = time.monotonic()
+
         # Run the agent loop with periodic heartbeating.
         # ainvoke() may take minutes; heartbeat every 30s to prevent
         # Temporal from cancelling the activity.
@@ -262,6 +384,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                     ],
                 },
                 config={
+                    "run_id": _langsmith_run_id,
                     "recursion_limit": 50,
                     "metadata": {
                         "associate_id": str(input.associate_id),
@@ -271,6 +394,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                         "entity_id": str(input.entity_id),
                         "runtime_id": str(runtime_id),
                         "correlation_id": os.environ.get("INDEMN_CAUSATION_MESSAGE_ID"),
+                        "thread_id": os.environ.get("INDEMN_CAUSATION_MESSAGE_ID"),
                     },
                     "tags": [
                         f"associate:{associate.get('name', 'unknown')}",
@@ -316,6 +440,15 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
 
         log.info("Agent completed: %d messages, tools=%s", len(messages), tools_used)
 
+        # Create durable Trace entity (non-blocking)
+        try:
+            await _create_trace(
+                input, associate, messages, tools_used,
+                _langsmith_run_id, _start_time, _start_ts,
+            )
+        except Exception as e:
+            log.warning("Trace creation failed (non-blocking): %s", e)
+
         # Bug #2: detect agent that ran-but-did-nothing. Without this check the
         # harness used to silently mark complete even when the agent produced
         # no output and made no mutating CLI calls — message stayed in
@@ -327,6 +460,13 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
 
         if did_useful_work:
+            # Sync evaluation results to LangSmith for evaluator runs
+            if input.entity_type == "Trace":
+                try:
+                    await _sync_eval_to_langsmith(str(input.entity_id))
+                except Exception as e:
+                    log.warning("LangSmith eval sync failed (non-blocking): %s", e)
+
             indemn("queue", "complete", input.message_id)
             return AgentExecutionResult(
                 status="complete",
@@ -348,6 +488,15 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             )
 
     except Exception as e:
+        # Create error trace — variables initialized before the try block
+        try:
+            await _create_trace(
+                input, associate, [], [],
+                _langsmith_run_id, _start_time, _start_ts,
+                execution_status="error", error_msg=str(e)[:500],
+            )
+        except Exception:
+            pass
         # Clean up causation env var
         os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
         os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)

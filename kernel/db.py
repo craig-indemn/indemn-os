@@ -63,6 +63,7 @@ async def init_database():
         Role,
         Runtime,
         Session,
+        Trace,
     )
 
     # Kernel entities + kernel infrastructure documents
@@ -74,6 +75,7 @@ async def init_database():
         Attention,
         Runtime,
         Session,
+        Trace,
         EntityDefinition,
         Skill,
         Rule,

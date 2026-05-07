@@ -1,15 +1,74 @@
-"""Trace commands — unified debugging across changes, messages, and OTEL.
+"""Trace commands — CRUD for Trace kernel entities + debugging.
 
-Per vision § 14:
-- `indemn trace entity` — unified timeline for one entity
-- `indemn trace cascade` — full execution tree by correlation_id
+Trace CRUD (list, get, create, transition) for the Trace kernel entity.
+Debugging commands (entity, cascade) for unified timeline and cascade views.
 """
 
 import typer
 
 from indemn_os.client import CLIClient, render
 
-trace_app = typer.Typer(name="trace", help="Debugging and execution tracing")
+trace_app = typer.Typer(name="trace", help="Trace entities and execution debugging")
+
+
+@trace_app.command("list")
+def list_traces(
+    associate: str = typer.Option(None, "--associate", help="Filter by associate name"),
+    entity_type: str = typer.Option(None, "--entity-type"),
+    status: str = typer.Option(None, "--status", help="created or evaluated"),
+    execution_status: str = typer.Option(None, "--execution-status", help="success, error, or cancelled"),
+    correlation_id: str = typer.Option(None, "--correlation-id"),
+    limit: int = typer.Option(20, "--limit"),
+):
+    """List Trace entities with optional filters."""
+    client = CLIClient()
+    params: dict = {"limit": limit}
+    if associate:
+        params["associate_name"] = associate
+    if entity_type:
+        params["entity_type"] = entity_type
+    if status:
+        params["status"] = status
+    if execution_status:
+        params["execution_status"] = execution_status
+    if correlation_id:
+        params["correlation_id"] = correlation_id
+    result = client.get("/api/traces/", params=params)
+    render(result)
+
+
+@trace_app.command("get")
+def get_trace(trace_id: str):
+    """Get a Trace entity by ID."""
+    client = CLIClient()
+    result = client.get(f"/api/traces/{trace_id}")
+    render(result)
+
+
+@trace_app.command("create")
+def create_trace(
+    data: str = typer.Option(..., "--data", help="JSON trace data"),
+):
+    """Create a Trace entity from JSON data."""
+    import orjson
+
+    client = CLIClient()
+    result = client.post("/api/traces/", json=orjson.loads(data))
+    render(result)
+
+
+@trace_app.command("transition")
+def transition_trace(
+    trace_id: str,
+    to: str = typer.Option(..., "--to", help="Target state (evaluated)"),
+):
+    """Transition a Trace entity's status."""
+    client = CLIClient()
+    result = client.post(
+        f"/api/traces/{trace_id}/transition",
+        json={"to_state": to},
+    )
+    render(result)
 
 
 @trace_app.command("entity")
