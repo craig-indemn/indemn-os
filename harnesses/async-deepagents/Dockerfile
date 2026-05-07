@@ -22,6 +22,10 @@ RUN cd /tmp/async && uv pip install --system .
 # Copy harness code
 COPY harnesses/async-deepagents/ /app/harness/
 
+# Smoke test — verify imports work before deploying. Three consecutive
+# deploys in Session 19 introduced import errors that crashed the runtime.
+RUN python -c "from harness.agent import build_agent; print('harness smoke test passed')"
+
 # Agent working directory
 RUN mkdir -p /workspace
 
