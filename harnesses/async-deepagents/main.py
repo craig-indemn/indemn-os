@@ -24,7 +24,7 @@ from harness.agent import build_agent
 from harness.cron_runner import run_cron_skill
 from harness.completion_logic import agent_did_useful_work
 from harness_common.cli import CLIError, indemn
-from trace_helpers import serialize_messages, derive_child_runs, aggregate_tokens
+from harness.trace_helpers import serialize_messages, derive_child_runs, aggregate_tokens
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from indemn_os.types import AgentExecutionInput, AgentExecutionResult
 from temporalio import activity
@@ -131,6 +131,7 @@ async def _create_trace(
     langsmith_run_id: uuid.UUID,
     start_time: datetime,
     start_ts: float,
+    correlation_id: str | None = None,
     execution_status: str = "success",
     error_msg: str | None = None,
 ):
@@ -153,7 +154,7 @@ async def _create_trace(
         "associate_id": str(input.associate_id),
         "associate_name": associate.get("name", ""),
         "message_id": str(input.message_id),
-        "correlation_id": os.environ.get("INDEMN_CAUSATION_MESSAGE_ID"),
+        "correlation_id": correlation_id,
         "entity_type": input.entity_type,
         "entity_id": str(input.entity_id),
         "name": f"{associate.get('name', 'agent')} → {input.entity_type} {str(input.entity_id)[:8]}",
@@ -216,19 +217,22 @@ async def _sync_eval_to_langsmith(trace_entity_id: str):
     if not results or not isinstance(results, list):
         return
 
-    client = Client()
-    for result in results:
-        for score_entry in result.get("rubric_scores", []):
-            try:
-                client.create_feedback(
-                    run_id=langsmith_run_id,
-                    key=score_entry.get("rule_id", "unknown"),
-                    score=score_entry.get("score", 0.0),
-                    comment=score_entry.get("reasoning", ""),
-                )
-            except Exception as e:
-                log.warning("LangSmith feedback sync failed for rule %s: %s",
-                            score_entry.get("rule_id"), e)
+    def _sync_feedback(ls_run_id, eval_results):
+        client = Client()
+        for result in eval_results:
+            for score_entry in result.get("rubric_scores", []):
+                try:
+                    client.create_feedback(
+                        run_id=ls_run_id,
+                        key=score_entry.get("rule_id", "unknown"),
+                        score=score_entry.get("score", 0.0),
+                        comment=score_entry.get("reasoning", ""),
+                    )
+                except Exception as e:
+                    log.warning("LangSmith feedback sync failed for rule %s: %s",
+                                score_entry.get("rule_id"), e)
+
+    await asyncio.to_thread(_sync_feedback, langsmith_run_id, results)
 
 
 @activity.defn
@@ -441,10 +445,12 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         log.info("Agent completed: %d messages, tools=%s", len(messages), tools_used)
 
         # Create durable Trace entity (non-blocking)
+        _correlation_id = os.environ.get("INDEMN_CAUSATION_MESSAGE_ID")
         try:
             await _create_trace(
                 input, associate, messages, tools_used,
                 _langsmith_run_id, _start_time, _start_ts,
+                correlation_id=_correlation_id,
             )
         except Exception as e:
             log.warning("Trace creation failed (non-blocking): %s", e)
@@ -493,6 +499,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             await _create_trace(
                 input, associate, [], [],
                 _langsmith_run_id, _start_time, _start_ts,
+                correlation_id=os.environ.get("INDEMN_CAUSATION_MESSAGE_ID"),
                 execution_status="error", error_msg=str(e)[:500],
             )
         except Exception:

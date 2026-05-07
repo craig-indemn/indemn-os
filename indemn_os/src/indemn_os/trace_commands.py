@@ -21,18 +21,23 @@ def list_traces(
     limit: int = typer.Option(20, "--limit"),
 ):
     """List Trace entities with optional filters."""
+    import json as json_mod
+
     client = CLIClient()
     params: dict = {"limit": limit}
-    if associate:
-        params["associate_name"] = associate
-    if entity_type:
-        params["entity_type"] = entity_type
     if status:
         params["status"] = status
+    filter_fields: dict = {}
+    if associate:
+        filter_fields["associate_name"] = associate
+    if entity_type:
+        filter_fields["entity_type"] = entity_type
     if execution_status:
-        params["execution_status"] = execution_status
+        filter_fields["execution_status"] = execution_status
     if correlation_id:
-        params["correlation_id"] = correlation_id
+        filter_fields["correlation_id"] = correlation_id
+    if filter_fields:
+        params["filter"] = json_mod.dumps(filter_fields)
     result = client.get("/api/traces/", params=params)
     render(result)
 
@@ -66,7 +71,7 @@ def transition_trace(
     client = CLIClient()
     result = client.post(
         f"/api/traces/{trace_id}/transition",
-        json={"to_state": to},
+        json={"to": to},
     )
     render(result)
 
