@@ -389,6 +389,82 @@ async def get_eval_results(
     return _safe(results)
 
 
+@eval_router.post("/runs/{run_id}/complete")
+async def complete_eval_run(
+    run_id: str,
+    actor=Depends(get_current_actor),
+):
+    """Aggregate results and complete an EvaluationRun.
+
+    Called after all evaluator messages for a batch run have been processed.
+    Reads EvaluationResults, computes aggregate metrics (pass_rate,
+    scores_by_rule, failure_attribution), updates the run, and transitions
+    to completed.
+    """
+    org_id = current_org_id.get()
+    EvalRunCls = ENTITY_REGISTRY.get("EvaluationRun")
+    EvalResultCls = ENTITY_REGISTRY.get("EvaluationResult")
+    if not EvalRunCls or not EvalResultCls:
+        return {"error": "Evaluation entities not registered"}
+
+    eval_run = await EvalRunCls.get_scoped(run_id)
+    if not eval_run:
+        return {"error": "Run not found"}
+
+    results = await EvalResultCls.get_motor_collection().find(
+        {"org_id": org_id, "run_id": ObjectId(run_id)}
+    ).to_list(length=1000)
+
+    if not results:
+        return {"error": "No results found for this run"}
+
+    total = len(results)
+    passed = sum(1 for r in results if r.get("passed"))
+    failed = total - passed
+    pass_rate = round(passed / total, 4) if total > 0 else 0.0
+
+    scores_by_rule = {}
+    failure_attribution = {}
+    for result in results:
+        for score in (result.get("rubric_scores") or []):
+            rid = score.get("rule_id", "unknown")
+            if rid not in scores_by_rule:
+                scores_by_rule[rid] = {"passed": 0, "total": 0}
+            scores_by_rule[rid]["total"] += 1
+            if score.get("passed"):
+                scores_by_rule[rid]["passed"] += 1
+
+            attr = score.get("failure_attribution")
+            if attr and not score.get("passed"):
+                failure_attribution[attr] = failure_attribution.get(attr, 0) + 1
+
+    for rid, counts in scores_by_rule.items():
+        counts["pass_rate"] = round(counts["passed"] / counts["total"], 4) if counts["total"] > 0 else 0.0
+
+    eval_run.total = total
+    eval_run.passed = passed
+    eval_run.failed = failed
+    eval_run.pass_rate = pass_rate
+    eval_run.scores_by_rule = scores_by_rule
+    eval_run.failure_attribution = failure_attribution
+    eval_run.completed_at = datetime.now(timezone.utc)
+    await eval_run.save_tracked()
+
+    eval_run.transition_to("completed")
+    created_messages = await eval_run.save_tracked(method="transition")
+    _fire_dispatch(created_messages)
+
+    return {
+        "status": "completed",
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "pass_rate": pass_rate,
+        "scores_by_rule": _safe(scores_by_rule),
+        "failure_attribution": _safe(failure_attribution),
+    }
+
+
 @eval_router.post("/runs/{run_id}/create-experiment")
 async def create_langsmith_experiment(
     run_id: str,

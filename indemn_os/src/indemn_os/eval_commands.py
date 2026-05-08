@@ -112,6 +112,14 @@ def get_results(
     render(result)
 
 
+@eval_app.command("complete")
+def complete_run(run_id: str):
+    """Aggregate results and complete a batch evaluation run."""
+    client = CLIClient()
+    result = client.post(f"/api/_eval/runs/{run_id}/complete", json={})
+    render(result)
+
+
 @eval_app.command("create-experiment")
 def create_experiment(run_id: str):
     """Create a LangSmith Experiment from a completed evaluation run."""
