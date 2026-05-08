@@ -147,9 +147,17 @@ async def _create_trace(
 
     serialized = serialize_messages(messages)
     if collected_run:
+        cr_children = getattr(collected_run, "child_runs", []) or []
+        log.info("collect_runs captured: name=%s run_type=%s children=%d",
+                 getattr(collected_run, "name", "?"), getattr(collected_run, "run_type", "?"), len(cr_children))
         child_runs = serialize_run_tree(collected_run)
+        if not child_runs:
+            log.warning("serialize_run_tree returned empty, falling back to derive_child_runs")
+            child_runs = derive_child_runs(messages)
     else:
+        log.info("collect_runs did not capture a run, using derive_child_runs")
         child_runs = derive_child_runs(messages)
+    log.info("child_runs: %d items", len(child_runs))
     prompt_tokens, completion_tokens, total_tokens = aggregate_tokens(messages)
 
     trace_data = {
