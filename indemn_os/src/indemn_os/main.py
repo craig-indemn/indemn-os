@@ -129,6 +129,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         limit: int = 20,
         offset: int = 0,
         status: str = None,
+        associate: str = typer.Option(None, "--associate", help="Filter by associate name"),
         data: str = typer.Option(
             None,
             "--data",
@@ -140,7 +141,12 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         params = {"limit": limit, "offset": offset}
         if status:
             params["status"] = status
-        if data:
+        if associate:
+            import orjson
+            filter_dict = orjson.loads(data) if data else {}
+            filter_dict["associate_name"] = associate
+            params["filter"] = orjson.dumps(filter_dict).decode()
+        elif data:
             params["filter"] = data
         result = client.get(f"/api/{slug}/", params=params)
         render(result, fmt)
@@ -150,9 +156,14 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         entity_id: str,
         depth: int = typer.Option(1, "--depth", help="Resolve related entities (1-5)"),
         include_related: bool = typer.Option(False, "--include-related"),
+        version: int = typer.Option(None, "--version", help="Get at specific version (for versioned entities)"),
         fmt: str = typer.Option("json", "--format"),
     ):
         """Get entity by ID with optional related entity resolution."""
+        if version is not None:
+            result = client.get(f"/api/_eval/versions/{name}/{entity_id}/at/{version}")
+            render(result, fmt)
+            return
         params = {}
         if depth > 1:
             params["depth"] = depth
@@ -269,6 +280,14 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             },
         )
         render(result, "json")
+
+    has_version = any(f.get("name") == "version" for f in meta.get("fields", []))
+    if has_version:
+        @entity_app.command("versions")
+        def versions_cmd(entity_id: str):
+            """List version history from the changes collection."""
+            result = client.get(f"/api/_eval/versions/{name}/{entity_id}")
+            render(result, "json")
 
     # Register capability commands.
     # NOTE: closure values (cap_name, slug_name) are bound via factory

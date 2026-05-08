@@ -151,7 +151,7 @@ def eval_stats(
 def rubric_versions(rubric_id: str):
     """List version history for a rubric."""
     client = CLIClient()
-    result = client.get(f"/api/_eval/rubric/{rubric_id}/versions")
+    result = client.get(f"/api/_eval/versions/Rubric/{rubric_id}")
     render(result)
 
 
@@ -159,5 +159,5 @@ def rubric_versions(rubric_id: str):
 def rubric_at_version(rubric_id: str, version: int = typer.Option(..., "--version")):
     """Get a rubric at a specific version."""
     client = CLIClient()
-    result = client.get(f"/api/_eval/rubric/{rubric_id}/at-version/{version}")
+    result = client.get(f"/api/_eval/versions/Rubric/{rubric_id}/at/{version}")
     render(result)

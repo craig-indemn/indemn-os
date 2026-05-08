@@ -621,19 +621,20 @@ async def eval_stats(
     return _safe(results)
 
 
-@eval_router.get("/rubric/{rubric_id}/versions")
-async def rubric_versions(
-    rubric_id: str,
+@eval_router.get("/versions/{entity_type}/{entity_id}")
+async def entity_versions(
+    entity_type: str,
+    entity_id: str,
     actor=Depends(get_current_actor),
 ):
-    """List version history for a rubric from the changes collection."""
+    """List version history for any entity from the changes collection."""
     org_id = current_org_id.get()
     db = get_database()
 
     changes = (
         await db["changes"]
         .find(
-            {"org_id": org_id, "entity_type": "Rubric", "entity_id": ObjectId(rubric_id)},
+            {"org_id": org_id, "entity_type": entity_type, "entity_id": ObjectId(entity_id)},
         )
         .sort("timestamp", -1)
         .to_list(length=100)
@@ -663,24 +664,25 @@ async def rubric_versions(
     return _safe(versions)
 
 
-@eval_router.get("/rubric/{rubric_id}/at-version/{version}")
-async def rubric_at_version(
-    rubric_id: str,
+@eval_router.get("/versions/{entity_type}/{entity_id}/at/{version}")
+async def entity_at_version(
+    entity_type: str,
+    entity_id: str,
     version: int,
     actor=Depends(get_current_actor),
 ):
-    """Reconstruct a rubric at a specific version from the changes collection."""
+    """Reconstruct any entity at a specific version from the changes collection."""
     org_id = current_org_id.get()
     db = get_database()
-    RubricCls = ENTITY_REGISTRY.get("Rubric")
-    if not RubricCls:
-        return {"error": "Rubric entity not registered"}
+    entity_cls = ENTITY_REGISTRY.get(entity_type)
+    if not entity_cls:
+        return {"error": f"{entity_type} entity not registered"}
 
-    current = await RubricCls.get_motor_collection().find_one(
-        {"_id": ObjectId(rubric_id), "org_id": org_id}
+    current = await entity_cls.get_motor_collection().find_one(
+        {"_id": ObjectId(entity_id), "org_id": org_id}
     )
     if not current:
-        return {"error": "Rubric not found"}
+        return {"error": f"{entity_type} not found"}
 
     current_version = current.get("version", 1)
     if version == current_version:
@@ -691,7 +693,7 @@ async def rubric_at_version(
     changes = (
         await db["changes"]
         .find(
-            {"org_id": org_id, "entity_type": "Rubric", "entity_id": ObjectId(rubric_id)},
+            {"org_id": org_id, "entity_type": entity_type, "entity_id": ObjectId(entity_id)},
         )
         .sort("timestamp", -1)
         .to_list(length=100)

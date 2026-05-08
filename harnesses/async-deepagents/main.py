@@ -281,6 +281,7 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
         synced = 0
         ls_run_uuid = UUID(ls_run_id) if ls_run_id else None
         source_uuid = UUID(source_run_id) if source_run_id else None
+        feedback_stats = {}
 
         for result in eval_results:
             eval_result_id = result.get("_id", "")
@@ -290,6 +291,8 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
                 source_info["evaluation_result_id"] = eval_result_id
             if eval_run_id:
                 source_info["evaluation_run_id"] = eval_run_id
+
+            feedback_ids = []
 
             for score_entry in result.get("rubric_scores", []):
                 try:
@@ -304,38 +307,73 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
                     if recommendation:
                         comment_parts.append(f"Recommendation: {recommendation}")
 
-                    extra = {
-                        "severity": score_entry.get("severity", ""),
-                        "rule_name": score_entry.get("rule_name", ""),
-                    }
-                    if attribution:
-                        extra["failure_attribution"] = attribution
-                    if recommendation:
-                        extra["recommendation"] = recommendation
-
-                    fb_kwargs = {
-                        "run_id": ls_run_uuid,
-                        "trace_id": ls_run_uuid,
-                        "key": score_entry.get("rule_id", "unknown"),
-                        "score": score_entry.get("score", 0.0),
-                        "value": "Pass" if passed else "Fail",
-                        "comment": " | ".join(p for p in comment_parts if p),
-                        "extra": extra,
-                        "feedback_source_type": "model",
-                    }
-                    if source_uuid:
-                        fb_kwargs["source_run_id"] = source_uuid
-                    if source_info:
-                        fb_kwargs["source_info"] = source_info
-                    client.create_feedback(**fb_kwargs)
+                    fb = client.create_feedback(
+                        run_id=ls_run_uuid,
+                        trace_id=ls_run_uuid,
+                        key=score_entry.get("rule_id", "unknown"),
+                        score=score_entry.get("score", 0.0),
+                        value="Pass" if passed else "Fail",
+                        comment=" | ".join(p for p in comment_parts if p),
+                        feedback_source_type="model",
+                        source_run_id=source_uuid,
+                        source_info=source_info if source_info else None,
+                    )
+                    if fb and hasattr(fb, "id"):
+                        feedback_ids.append(str(fb.id))
                     synced += 1
+                    rid = score_entry.get("rule_id", "unknown")
+                    feedback_stats[rid] = {"score": score_entry.get("score", 0.0), "passed": passed}
                 except Exception as e:
                     log.warning("LangSmith feedback failed for rule %s: %s",
                                 score_entry.get("rule_id"), e)
 
+            for criteria in result.get("criteria_scores", []):
+                try:
+                    fb = client.create_feedback(
+                        run_id=ls_run_uuid,
+                        trace_id=ls_run_uuid,
+                        key=f"criteria:{criteria.get('criterion', 'unknown')}",
+                        score=criteria.get("score", 0.0),
+                        value="Pass" if criteria.get("passed") else "Fail",
+                        comment=criteria.get("reasoning", ""),
+                        feedback_source_type="model",
+                        source_run_id=source_uuid,
+                        source_info=source_info if source_info else None,
+                    )
+                    if fb and hasattr(fb, "id"):
+                        feedback_ids.append(str(fb.id))
+                    synced += 1
+                    ckey = f"criteria:{criteria.get('criterion', 'unknown')}"
+                    feedback_stats[ckey] = {"score": criteria.get("score", 0.0), "passed": criteria.get("passed", False)}
+                except Exception as e:
+                    log.warning("LangSmith feedback failed for criteria %s: %s",
+                                criteria.get("criterion"), e)
+
+            for check in result.get("outcome_checks", []):
+                try:
+                    fb = client.create_feedback(
+                        run_id=ls_run_uuid,
+                        trace_id=ls_run_uuid,
+                        key=f"outcome:{check.get('check_name', 'unknown')}",
+                        score=1.0 if check.get("passed") else 0.0,
+                        value="Pass" if check.get("passed") else "Fail",
+                        comment=json.dumps({"actual": check.get("actual_value"), "expected": check.get("expected")}),
+                        feedback_source_type="model",
+                        source_run_id=source_uuid,
+                        source_info=source_info if source_info else None,
+                    )
+                    if fb and hasattr(fb, "id"):
+                        feedback_ids.append(str(fb.id))
+                    synced += 1
+                    okey = f"outcome:{check.get('check_name', 'unknown')}"
+                    feedback_stats[okey] = {"score": 1.0 if check.get("passed") else 0.0, "passed": check.get("passed", False)}
+                except Exception as e:
+                    log.warning("LangSmith feedback failed for outcome %s: %s",
+                                check.get("check_name"), e)
+
             try:
                 overall_passed = result.get("passed", False)
-                client.create_feedback(
+                fb = client.create_feedback(
                     run_id=ls_run_uuid,
                     trace_id=ls_run_uuid,
                     key="evaluation_passed",
@@ -346,25 +384,23 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
                     source_run_id=source_uuid,
                     source_info=source_info if source_info else None,
                 )
+                if fb and hasattr(fb, "id"):
+                    feedback_ids.append(str(fb.id))
                 synced += 1
+                feedback_stats["evaluation_passed"] = {"score": 1.0 if overall_passed else 0.0, "passed": overall_passed}
             except Exception as e:
                 log.warning("LangSmith feedback failed for evaluation_passed: %s", e)
 
+            if feedback_ids and eval_result_id:
+                try:
+                    indemn("evaluationresult", "update", eval_result_id,
+                           "--data", json.dumps({"langsmith_feedback_ids": feedback_ids}))
+                    indemn("evaluationresult", "transition", eval_result_id, "--to", "synced")
+                except CLIError as e:
+                    log.warning("Failed to update EvaluationResult %s: %s", eval_result_id, e)
+
         log.info("LangSmith sync: %d feedback entries synced to run %s", synced, ls_run_id)
 
-        # Update Trace.feedback_stats with aggregated scores
-        feedback_stats = {}
-        for result in eval_results:
-            for score_entry in result.get("rubric_scores", []):
-                rid = score_entry.get("rule_id", "unknown")
-                feedback_stats[rid] = {
-                    "score": score_entry.get("score", 0.0),
-                    "passed": score_entry.get("passed", False),
-                }
-            feedback_stats["evaluation_passed"] = {
-                "score": 1.0 if result.get("passed") else 0.0,
-                "passed": result.get("passed", False),
-            }
         try:
             indemn("trace", "update", trace_entity_id,
                    "--data", json.dumps({"feedback_stats": feedback_stats}))
