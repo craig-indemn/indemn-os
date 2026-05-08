@@ -33,15 +33,15 @@ def get_skill(
     fmt: str = typer.Option("json", "--format"),
 ):
     """Get a skill by name. Returns content directly (use --raw for full entity)."""
+    import os
     client = CLIClient()
     result = client.get(f"/api/skills/by-name/{name}")
-    if raw or fmt != "json":
-        render(result, fmt)
+    if raw or os.environ.get("INDEMN_OUTPUT_FORMAT") == "json":
+        render(result, fmt, raw=True)
+    elif isinstance(result, dict):
+        typer.echo(result.get("content", ""))
     else:
-        if isinstance(result, dict):
-            typer.echo(result.get("content", ""))
-        else:
-            render(result, fmt)
+        render(result, fmt)
 
 
 @skill_app.command("create")
