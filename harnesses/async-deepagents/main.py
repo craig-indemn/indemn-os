@@ -276,8 +276,12 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
     log.info("LangSmith sync: found %d results, syncing feedback", len(results))
 
     def _sync_feedback(ls_run_id, eval_results, source_run_id):
+        from uuid import UUID
         client = Client()
         synced = 0
+        ls_run_uuid = UUID(ls_run_id) if ls_run_id else None
+        source_uuid = UUID(source_run_id) if source_run_id else None
+
         for result in eval_results:
             eval_result_id = result.get("_id", "")
             eval_run_id = result.get("run_id", "")
@@ -310,7 +314,8 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
                         extra["recommendation"] = recommendation
 
                     fb_kwargs = {
-                        "run_id": ls_run_id,
+                        "run_id": ls_run_uuid,
+                        "trace_id": ls_run_uuid,
                         "key": score_entry.get("rule_id", "unknown"),
                         "score": score_entry.get("score", 0.0),
                         "value": "Pass" if passed else "Fail",
@@ -318,8 +323,8 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
                         "extra": extra,
                         "feedback_source_type": "model",
                     }
-                    if source_run_id:
-                        fb_kwargs["source_run_id"] = source_run_id
+                    if source_uuid:
+                        fb_kwargs["source_run_id"] = source_uuid
                     if source_info:
                         fb_kwargs["source_info"] = source_info
                     client.create_feedback(**fb_kwargs)
@@ -331,13 +336,14 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
             try:
                 overall_passed = result.get("passed", False)
                 client.create_feedback(
-                    run_id=ls_run_id,
+                    run_id=ls_run_uuid,
+                    trace_id=ls_run_uuid,
                     key="evaluation_passed",
                     score=1.0 if overall_passed else 0.0,
                     value="Pass" if overall_passed else "Fail",
                     comment="All rules passed" if overall_passed else "One or more rules failed",
                     feedback_source_type="model",
-                    source_run_id=source_run_id if source_run_id else None,
+                    source_run_id=source_uuid,
                     source_info=source_info if source_info else None,
                 )
                 synced += 1
