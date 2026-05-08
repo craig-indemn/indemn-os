@@ -316,7 +316,7 @@ async def trigger_eval_run(
             await msg.insert()
 
     # Transition to running
-    eval_run.transition("running")
+    eval_run.transition_to("running")
     await eval_run.save_tracked(method="transition")
 
     logger.info("Evaluation run %s started: %d items, rubrics=%s, mode=%s",
