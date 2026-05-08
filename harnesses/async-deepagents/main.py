@@ -194,7 +194,22 @@ async def _create_trace(
     }
 
     payload = json.dumps(trace_data, default=str)
-    await asyncio.to_thread(indemn, "trace", "create", "--data", payload, timeout=60.0)
+    if len(payload) > 800_000:
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(payload)
+            tmp_path = f.name
+        try:
+            await asyncio.to_thread(
+                indemn, "trace", "create", "--data-file", tmp_path, timeout=60.0
+            )
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    else:
+        await asyncio.to_thread(indemn, "trace", "create", "--data", payload, timeout=60.0)
     log.info("Trace created for %s -> %s %s", associate.get("name"), input.entity_type, str(input.entity_id)[:8])
 
 

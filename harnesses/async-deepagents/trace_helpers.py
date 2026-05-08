@@ -38,60 +38,59 @@ def serialize_run_tree(run) -> list[dict]:
     def _is_middleware(name):
         return any(name.startswith(p) for p in _MIDDLEWARE_PREFIXES)
 
-    def _safe_dict(d):
-        """Convert to JSON-safe dict without truncation."""
-        if not isinstance(d, dict):
-            return d
-        return d
+    def _collect_steps(node):
+        """Recursively collect LLM + tool execution steps.
 
-    def _collect_from(node):
-        """Recursively collect meaningful nodes, skipping middleware wrappers.
-
-        When a middleware node is encountered, its children are promoted
-        to the parent level — the middleware wrapper is invisible but
-        its contents (the actual LLM/tool calls) are preserved.
+        Skips middleware wrappers and chain nodes (model, tools) which
+        carry redundant accumulated conversation data. Promotes their
+        children to find the actual LLM calls and tool executions.
         """
         name = getattr(node, "name", "unknown")
         run_type = getattr(node, "run_type", "chain")
         children = getattr(node, "child_runs", []) or []
 
-        if _is_middleware(name):
-            # Skip this node but collect its children
-            promoted = []
-            for child in children:
-                promoted.extend(_collect_from(child))
-            return promoted
+        # LLM and tool runs are the meaningful execution steps — serialize them
+        if run_type in ("llm", "tool"):
+            start = getattr(node, "start_time", None)
+            end = getattr(node, "end_time", None)
+            inputs_raw = getattr(node, "inputs", {}) or {}
+            outputs_raw = getattr(node, "outputs", {}) or {}
 
-        # Meaningful node — serialize it with its filtered children
-        serialized_children = []
+            # For LLM nodes, inputs carry the full accumulated conversation
+            # (redundant — the trajectory in `messages` already has this).
+            # Keep only the input message count as metadata.
+            if run_type == "llm":
+                msgs_in = inputs_raw.get("messages", [])
+                inputs_clean = {"message_count": len(msgs_in) if isinstance(msgs_in, list) else 0}
+            else:
+                inputs_clean = inputs_raw
+
+            result = {
+                "id": str(getattr(node, "id", "")),
+                "name": name,
+                "run_type": run_type,
+                "inputs": inputs_clean,
+                "outputs": outputs_raw,
+                "error": getattr(node, "error", None),
+            }
+            if start:
+                result["start_time"] = start.isoformat() if hasattr(start, "isoformat") else str(start)
+            if end:
+                result["end_time"] = end.isoformat() if hasattr(end, "isoformat") else str(end)
+            return [result]
+
+        # Chain nodes (model, tools, middleware) — skip but collect from children
+        steps = []
         for child in children:
-            serialized_children.extend(_collect_from(child))
+            steps.extend(_collect_steps(child))
+        return steps
 
-        start = getattr(node, "start_time", None)
-        end = getattr(node, "end_time", None)
-
-        result = {
-            "id": str(getattr(node, "id", "")),
-            "name": name,
-            "run_type": run_type,
-            "inputs": _safe_dict(getattr(node, "inputs", {}) or {}),
-            "outputs": _safe_dict(getattr(node, "outputs", {}) or {}),
-            "child_runs": serialized_children,
-            "error": getattr(node, "error", None),
-        }
-        if start:
-            result["start_time"] = start.isoformat() if hasattr(start, "isoformat") else str(start)
-        if end:
-            result["end_time"] = end.isoformat() if hasattr(end, "isoformat") else str(end)
-
-        return [result]
-
-    # Collect from root's children (skip the root chain itself)
-    nodes = []
+    # Collect from root's children
+    steps = []
     for child in getattr(run, "child_runs", []) or []:
-        nodes.extend(_collect_from(child))
+        steps.extend(_collect_steps(child))
 
-    return nodes
+    return steps
 
 
 def _clean_message(msg) -> dict:

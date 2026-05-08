@@ -61,13 +61,27 @@ def get_trace(
 
 @trace_app.command("create")
 def create_trace(
-    data: str = typer.Option(..., "--data", help="JSON trace data"),
+    data: str = typer.Option(None, "--data", help="JSON trace data"),
+    data_file: str = typer.Option(None, "--data-file", help="Path to JSON file"),
 ):
-    """Create a Trace entity from JSON data."""
+    """Create a Trace entity from JSON data or file."""
     import orjson
 
+    if data_file:
+        with open(data_file, "r") as f:
+            payload = orjson.loads(f.read())
+    elif data:
+        if data.startswith("@"):
+            with open(data[1:], "r") as f:
+                payload = orjson.loads(f.read())
+        else:
+            payload = orjson.loads(data)
+    else:
+        typer.echo("Either --data or --data-file is required", err=True)
+        raise typer.Exit(1)
+
     client = CLIClient()
-    result = client.post("/api/traces/", json=orjson.loads(data))
+    result = client.post("/api/traces/", json=payload)
     render(result)
 
 
