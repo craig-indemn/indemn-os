@@ -294,7 +294,7 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
 
             feedback_ids = []
 
-            for score_entry in result.get("rubric_scores", []):
+            for score_entry in (result.get("rubric_scores") or []):
                 try:
                     passed = score_entry.get("passed", False)
                     reasoning = score_entry.get("reasoning", "")
@@ -327,7 +327,7 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
                     log.warning("LangSmith feedback failed for rule %s: %s",
                                 score_entry.get("rule_id"), e)
 
-            for criteria in result.get("criteria_scores", []):
+            for criteria in (result.get("criteria_scores") or []):
                 try:
                     fb = client.create_feedback(
                         run_id=ls_run_uuid,
@@ -349,7 +349,7 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
                     log.warning("LangSmith feedback failed for criteria %s: %s",
                                 criteria.get("criterion"), e)
 
-            for check in result.get("outcome_checks", []):
+            for check in (result.get("outcome_checks") or []):
                 try:
                     fb = client.create_feedback(
                         run_id=ls_run_uuid,
