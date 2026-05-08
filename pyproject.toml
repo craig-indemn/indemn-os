@@ -30,6 +30,7 @@ dependencies = [
     "google-api-python-client>=2.0",
     "rapidfuzz>=3.9",
     "inflect>=7.0",
+    "langsmith>=0.1",
     "indemn-os",
 ]
 

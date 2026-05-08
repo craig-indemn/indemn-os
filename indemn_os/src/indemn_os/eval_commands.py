@@ -26,11 +26,15 @@ def run_evaluation(
     correlation_id: str = typer.Option(None, "--correlation-id", help="Evaluate a specific cascade"),
     test_set: str = typer.Option(None, "--test-set", help="TestSet ID for prospective evaluation"),
     entity_type: str = typer.Option(None, "--entity-type", help="Filter by processed entity type"),
+    experiment: str = typer.Option(None, "--experiment", help="LangSmith experiment ID for retroactive evaluation"),
+    limit: int = typer.Option(None, "--limit", help="Max items to evaluate (for prospective mode)"),
+    data: str = typer.Option(None, "--data", help="JSON metadata filter on traces"),
 ):
-    """Trigger a batch evaluation run.
+    """Trigger an evaluation run.
 
-    Creates an EvaluationRun entity, queries matching Traces, and creates
-    queue messages for the evaluator to process each one.
+    Creates an EvaluationRun entity, selects items to evaluate (from traces,
+    test sets, or existing experiments), and creates queue messages for the
+    evaluator to process each one.
     """
     client = CLIClient()
     body: dict = {"associate_name": associate}
@@ -52,6 +56,12 @@ def run_evaluation(
         body["test_set_id"] = test_set
     if entity_type:
         body["entity_type"] = entity_type
+    if experiment:
+        body["experiment"] = experiment
+    if limit:
+        body["limit"] = limit
+    if data:
+        body["data"] = json.loads(data)
 
     result = client.post("/api/_eval/run", json=body)
     render(result)

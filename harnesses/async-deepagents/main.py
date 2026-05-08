@@ -117,6 +117,26 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
             "trigger_schedule": associate.get("trigger_schedule"),
         }
 
+    if entity_type == "Trace":
+        trace = indemn("trace", "get", entity_id)
+        return {
+            "_entity_type": "Trace",
+            "_id": trace.get("_id"),
+            "associate_id": trace.get("associate_id"),
+            "associate_name": trace.get("associate_name"),
+            "entity_type": trace.get("entity_type"),
+            "entity_id": trace.get("entity_id"),
+            "correlation_id": trace.get("correlation_id"),
+            "name": trace.get("name"),
+            "execution_status": trace.get("execution_status"),
+            "status": trace.get("status"),
+            "prompt_tokens": trace.get("prompt_tokens"),
+            "total_tokens": trace.get("total_tokens"),
+            "duration_ms": trace.get("duration_ms"),
+            "messages_count": len(trace.get("messages", [])),
+            "child_runs_count": len(trace.get("child_runs", [])),
+        }
+
     entity_slug = entity_type.lower()
     context = indemn(
         entity_slug, "get", entity_id, "--depth", "2", "--include-related"
@@ -173,7 +193,10 @@ async def _create_trace(
         "name": f"{associate.get('name', 'agent')} → {input.entity_type} {str(input.entity_id)[:8]}",
         "run_type": "chain",
         "inputs": serialized[0] if serialized else {},
-        "outputs": serialized[-1] if serialized else {},
+        "outputs": next(
+            (m for m in reversed(serialized) if m.get("type") == "ai"),
+            serialized[-1] if serialized else {},
+        ),
         "messages": serialized,
         "child_runs": child_runs,
         "tags": [
@@ -333,11 +356,12 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
     Harness orchestration uses the CLI for I/O (load context, mark complete).
     Agent's own tool execution uses deepagents' built-in execute via backend.
     """
-    # Initialize trace variables early so the except block can create error traces
     _langsmith_run_id = uuid.uuid4()
     _start_time = datetime.now(timezone.utc)
     _start_ts = time.monotonic()
     associate: dict = {"name": "unknown"}
+    _captured_messages: list = []
+    _captured_tools: list[str] = []
 
     try:
         # Heartbeat immediately — before any CLI calls. Under concurrency
@@ -511,6 +535,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
 
         # Log what the agent did — every message, every tool call
         messages = result.get("messages", [])
+        _captured_messages = messages
         tools_used = []
         for msg in messages:
             msg_type = getattr(msg, "type", type(msg).__name__)
@@ -535,6 +560,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                 if not tool_calls:
                     log.info("Agent response: %s", str(getattr(msg, "content", ""))[:300])
 
+        _captured_tools = tools_used
         log.info("Agent completed: %d messages, tools=%s", len(messages), tools_used)
 
         # Rebuild the run tree from the flat traced_runs list.
@@ -634,10 +660,9 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             )
 
     except Exception as e:
-        # Create error trace — variables initialized before the try block
         try:
             await _create_trace(
-                input, associate, [], [],
+                input, associate, _captured_messages, _captured_tools,
                 _langsmith_run_id, _start_time, _start_ts,
                 correlation_id=input.correlation_id,
                 execution_status="error", error_msg=str(e)[:500],
