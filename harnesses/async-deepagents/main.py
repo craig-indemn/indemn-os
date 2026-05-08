@@ -468,19 +468,30 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
 
         log.info("Agent completed: %d messages, tools=%s", len(messages), tools_used)
 
-        # Find the root run from collector (last completed = root chain)
+        # Rebuild the run tree from the flat traced_runs list.
+        # RunCollectorCallbackHandler persists runs as they complete (leaves
+        # first, root last). The persisted copies have shallow child_runs —
+        # we need to reconstruct the parent-child hierarchy ourselves.
         _collected_run = None
         if _run_collector.traced_runs:
+            runs_by_id = {str(getattr(r, "id", "")): r for r in _run_collector.traced_runs}
+            children_map: dict[str, list] = {}
+            for r in _run_collector.traced_runs:
+                pid = getattr(r, "parent_run_id", None)
+                if pid:
+                    children_map.setdefault(str(pid), []).append(r)
+            for r in _run_collector.traced_runs:
+                r.child_runs = children_map.get(str(getattr(r, "id", "")), [])
+
             for r in reversed(_run_collector.traced_runs):
                 if getattr(r, "parent_run_id", None) is None:
                     _collected_run = r
                     break
             if not _collected_run:
                 _collected_run = _run_collector.traced_runs[-1]
-            log.info("RunCollector: %d runs captured, root=%s type=%s children=%d",
+            log.info("RunCollector: %d runs captured, root=%s children=%d",
                      len(_run_collector.traced_runs),
                      getattr(_collected_run, "name", "?"),
-                     getattr(_collected_run, "run_type", "?"),
                      len(getattr(_collected_run, "child_runs", []) or []))
 
         # Create durable Trace entity (non-blocking)
