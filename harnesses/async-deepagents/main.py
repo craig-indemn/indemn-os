@@ -186,13 +186,7 @@ async def _create_trace(
     }
 
     payload = json.dumps(trace_data, default=str)
-    if len(payload) > 200_000:
-        for m in trace_data["messages"]:
-            if isinstance(m, dict) and isinstance(m.get("content"), str) and len(m["content"]) > 500:
-                m["content"] = m["content"][:500] + "... [truncated]"
-        payload = json.dumps(trace_data, default=str)
-
-    await asyncio.to_thread(indemn, "trace", "create", "--data", payload, timeout=30.0)
+    await asyncio.to_thread(indemn, "trace", "create", "--data", payload, timeout=60.0)
     log.info("Trace created for %s -> %s %s", associate.get("name"), input.entity_type, str(input.entity_id)[:8])
 
 

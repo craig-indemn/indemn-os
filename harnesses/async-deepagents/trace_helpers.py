@@ -25,45 +25,47 @@ def serialize_run_tree(run) -> list[dict]:
     if not run:
         return []
 
-    def _serialize_node(node, depth=0) -> dict | None:
+    _MIDDLEWARE_PREFIXES = (
+        "TodoListMiddleware",
+        "AnthropicPromptCachingMiddleware",
+        "SummarizationMiddleware",
+        "SubAgentMiddleware",
+        "FilesystemMiddleware",
+        "ExecuteErrorStatusMiddleware",
+        "PatchToolCallsMiddleware",
+    )
+
+    def _is_middleware(name):
+        return any(name.startswith(p) for p in _MIDDLEWARE_PREFIXES)
+
+    def _safe_dict(d):
+        """Convert to JSON-safe dict without truncation."""
+        if not isinstance(d, dict):
+            return d
+        return d
+
+    def _collect_from(node):
+        """Recursively collect meaningful nodes, skipping middleware wrappers.
+
+        When a middleware node is encountered, its children are promoted
+        to the parent level — the middleware wrapper is invisible but
+        its contents (the actual LLM/tool calls) are preserved.
+        """
         name = getattr(node, "name", "unknown")
         run_type = getattr(node, "run_type", "chain")
+        children = getattr(node, "child_runs", []) or []
 
-        # Skip middleware wrappers — they add noise without evaluation value
-        _MIDDLEWARE_PREFIXES = (
-            "TodoListMiddleware",
-            "AnthropicPromptCachingMiddleware",
-            "SummarizationMiddleware",
-            "SubAgentMiddleware",
-            "FilesystemMiddleware",
-            "ExecuteErrorStatusMiddleware",
-            "PatchToolCallsMiddleware",
-        )
-        if any(name.startswith(prefix) for prefix in _MIDDLEWARE_PREFIXES):
-            return None
+        if _is_middleware(name):
+            # Skip this node but collect its children
+            promoted = []
+            for child in children:
+                promoted.extend(_collect_from(child))
+            return promoted
 
-        inputs_raw = getattr(node, "inputs", {}) or {}
-        outputs_raw = getattr(node, "outputs", {}) or {}
-
-        # Clean inputs/outputs — truncate large values for storage
-        def _clean_dict(d, max_val_len=5000):
-            if not isinstance(d, dict):
-                return d
-            cleaned = {}
-            for k, v in d.items():
-                if isinstance(v, str) and len(v) > max_val_len:
-                    cleaned[k] = v[:max_val_len] + f"... [{len(v)} chars total]"
-                elif isinstance(v, list) and len(str(v)) > max_val_len:
-                    cleaned[k] = f"[list with {len(v)} items, {len(str(v))} chars total]"
-                else:
-                    cleaned[k] = v
-            return cleaned
-
+        # Meaningful node — serialize it with its filtered children
         serialized_children = []
-        for child in getattr(node, "child_runs", []) or []:
-            child_dict = _serialize_node(child, depth + 1)
-            if child_dict:
-                serialized_children.append(child_dict)
+        for child in children:
+            serialized_children.extend(_collect_from(child))
 
         start = getattr(node, "start_time", None)
         end = getattr(node, "end_time", None)
@@ -72,8 +74,8 @@ def serialize_run_tree(run) -> list[dict]:
             "id": str(getattr(node, "id", "")),
             "name": name,
             "run_type": run_type,
-            "inputs": _clean_dict(inputs_raw),
-            "outputs": _clean_dict(outputs_raw),
+            "inputs": _safe_dict(getattr(node, "inputs", {}) or {}),
+            "outputs": _safe_dict(getattr(node, "outputs", {}) or {}),
             "child_runs": serialized_children,
             "error": getattr(node, "error", None),
         }
@@ -82,16 +84,14 @@ def serialize_run_tree(run) -> list[dict]:
         if end:
             result["end_time"] = end.isoformat() if hasattr(end, "isoformat") else str(end)
 
-        return result
+        return [result]
 
-    # Serialize root's children (skip the root itself — it's the top-level chain)
-    children = []
+    # Collect from root's children (skip the root chain itself)
+    nodes = []
     for child in getattr(run, "child_runs", []) or []:
-        child_dict = _serialize_node(child)
-        if child_dict:
-            children.append(child_dict)
+        nodes.extend(_collect_from(child))
 
-    return children
+    return nodes
 
 
 def _clean_message(msg) -> dict:
