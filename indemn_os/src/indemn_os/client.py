@@ -159,30 +159,120 @@ def clean_entity(data):
     return data
 
 
-def render(data, fmt: str = "json", raw: bool = False):
-    """Render output in the requested format. Strips internal fields unless raw=True."""
-    if not raw:
-        data = clean_entity(data)
-    if fmt == "json":
-        print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
-    elif fmt == "table":
-        if isinstance(data, list) and data:
-            # Domain fields first, infrastructure last. Show 5 columns max.
-            all_keys = list(data[0].keys())
-            domain_keys = [k for k in all_keys if k not in _INFRASTRUCTURE_FIELDS]
-            keys = domain_keys[:5] if domain_keys else all_keys[:5]
+_LONG_TEXT_THRESHOLD = 200
 
-            # Column widths: first column gets 30, rest get 25
-            widths = [30] + [25] * (len(keys) - 1)
 
-            header = " | ".join(k.ljust(w)[:w] for k, w in zip(keys, widths))
-            print(header)
-            print("-" * len(header))
-            for row in data:
-                vals = []
-                for k, w in zip(keys, widths):
-                    v = str(row.get(k, ""))
-                    vals.append(v.ljust(w)[:w])
-                print(" | ".join(vals))
+def _format_md_value(value, indent=0):
+    """Format a value for markdown output."""
+    prefix = "  " * indent
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        if not value:
+            return ""
+        if all(isinstance(v, str) for v in value):
+            if len(value) <= 3 and all(len(v) < 40 for v in value):
+                return ", ".join(value)
+            return "\n" + "\n".join(f"{prefix}- {v}" for v in value)
+        if all(isinstance(v, dict) for v in value):
+            parts = []
+            for i, item in enumerate(value):
+                parts.append("")
+                parts.append(_format_md_dict(item, indent + 1))
+            return "\n".join(parts)
+        return ", ".join(str(v) for v in value)
+    if isinstance(value, dict):
+        return "\n" + _format_md_dict(value, indent + 1)
+    return str(value)
+
+
+def _format_md_dict(data, indent=0):
+    """Format a dict as markdown key-value pairs."""
+    prefix = "  " * indent
+    lines = []
+    long_fields = []
+
+    for k, v in data.items():
+        if v is None or v == [] or v == {} or v == "":
+            continue
+
+        if isinstance(v, str) and len(v) > _LONG_TEXT_THRESHOLD:
+            long_fields.append((k, v))
+            continue
+
+        formatted = _format_md_value(v, indent)
+        if "\n" in formatted:
+            lines.append(f"{prefix}**{k}:**{formatted}")
         else:
-            print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
+            lines.append(f"{prefix}**{k}:** {formatted}")
+
+    for k, v in long_fields:
+        lines.append("")
+        lines.append(f"{prefix}**{k}:**")
+        lines.append(v)
+
+    return "\n".join(lines)
+
+
+def _format_md_entity(data):
+    """Format a single entity as markdown."""
+    entity_type = data.pop("_entity_type", None)
+    entity_id = data.get("_id", "")
+    short_id = entity_id[:8] if isinstance(entity_id, str) and len(entity_id) > 8 else entity_id
+
+    if entity_type:
+        header = f"# {entity_type} {short_id}"
+    elif entity_id:
+        header = f"# {short_id}"
+    else:
+        header = ""
+
+    body = _format_md_dict(data)
+    return f"{header}\n\n{body}" if header else body
+
+
+def _format_md_list(data):
+    """Format a list of entities as markdown."""
+    if not data:
+        return "(empty)"
+    if all(isinstance(item, dict) for item in data):
+        parts = []
+        for item in data:
+            entity_id = item.get("_id", "")
+            short_id = entity_id[:8] if isinstance(entity_id, str) and len(entity_id) > 8 else entity_id
+            name = item.get("name") or item.get("subject") or item.get("associate_name") or ""
+            status = item.get("status", "")
+
+            summary_parts = [f"**{short_id}**"]
+            if name:
+                summary_parts.append(name)
+            if status:
+                summary_parts.append(f"({status})")
+            parts.append(" — ".join(summary_parts))
+        return "\n".join(parts)
+    return "\n".join(f"- {item}" for item in data)
+
+
+def render(data, fmt: str = "json", raw: bool = False):
+    """Render output. Default: markdown. Use --format json for structured data."""
+    if raw:
+        print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
+        return
+
+    data = clean_entity(data)
+
+    if fmt == "json":
+        if isinstance(data, dict):
+            print(_format_md_entity(data))
+        elif isinstance(data, list):
+            print(_format_md_list(data))
+        else:
+            print(data)
+    elif fmt == "raw":
+        print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
