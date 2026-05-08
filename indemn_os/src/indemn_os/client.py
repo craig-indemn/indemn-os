@@ -260,19 +260,20 @@ def _format_md_list(data):
 
 
 def render(data, fmt: str = "json", raw: bool = False):
-    """Render output. Default: markdown. Use --format json for structured data."""
-    if raw:
+    """Render output. Markdown by default, JSON when INDEMN_OUTPUT_FORMAT=json."""
+    if raw or fmt == "raw":
         print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
         return
 
     data = clean_entity(data)
 
-    if fmt == "json":
-        if isinstance(data, dict):
-            print(_format_md_entity(data))
-        elif isinstance(data, list):
-            print(_format_md_list(data))
-        else:
-            print(data)
-    elif fmt == "raw":
+    if os.environ.get("INDEMN_OUTPUT_FORMAT") == "json":
         print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
+        return
+
+    if isinstance(data, dict):
+        print(_format_md_entity(data))
+    elif isinstance(data, list):
+        print(_format_md_list(data))
+    else:
+        print(data)

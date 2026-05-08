@@ -64,6 +64,7 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
     env = {
         "INDEMN_API_URL": os.environ["INDEMN_API_URL"],
         "INDEMN_SERVICE_TOKEN": os.environ["INDEMN_SERVICE_TOKEN"],
+        "INDEMN_OUTPUT_FORMAT": "json",
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
         "PYTHONUNBUFFERED": "1",
     }
