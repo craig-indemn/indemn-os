@@ -28,6 +28,7 @@ from kernel.api.health import health_router
 from kernel.api.human_review import review_router
 from kernel.api.integration_routes import integration_mgmt_router
 from kernel.api.diagnose_routes import diagnose_router
+from kernel.api.eval_routes import eval_router
 from kernel.api.interaction import interaction_router
 from kernel.api.lookup_routes import lookup_router
 from kernel.api.meta import meta_router
@@ -149,6 +150,7 @@ def create_app() -> FastAPI:
     app.include_router(webhook_router)
     app.include_router(queue_router)
     app.include_router(diagnose_router)
+    app.include_router(eval_router)
     app.include_router(lookup_router)
     app.include_router(admin_router)
     app.include_router(skill_router)

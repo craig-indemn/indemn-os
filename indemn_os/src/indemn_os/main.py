@@ -36,6 +36,7 @@ def main():
     from indemn_os.runtime_commands import runtime_app
     from indemn_os.skill_commands import skill_app
     from indemn_os.trace_commands import trace_app
+    from indemn_os.eval_commands import eval_app
 
     app.add_typer(init_app, name="init")
     app.add_typer(auth_app, name="auth")
@@ -56,6 +57,7 @@ def main():
     app.add_typer(runtime_app, name="runtime")
     app.add_typer(trace_app, name="trace")
     app.add_typer(diagnose_app, name="diagnose")
+    app.add_typer(eval_app, name="eval")
     app.add_typer(interaction_app, name="interaction")
     app.add_typer(attention_app, name="attention")
 
