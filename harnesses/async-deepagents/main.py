@@ -258,28 +258,65 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
         for result in eval_results:
             eval_result_id = result.get("_id", "")
             eval_run_id = result.get("run_id", "")
+            source_info = {}
+            if eval_result_id:
+                source_info["evaluation_result_id"] = eval_result_id
+            if eval_run_id:
+                source_info["evaluation_run_id"] = eval_run_id
+
+            # Per-rule feedback
             for score_entry in result.get("rubric_scores", []):
                 try:
+                    reasoning = score_entry.get("reasoning", "")
+                    attribution = score_entry.get("failure_attribution", "")
+                    recommendation = score_entry.get("recommendation", "")
+                    comment_parts = [reasoning]
+                    if attribution:
+                        comment_parts.append(f"Attribution: {attribution}")
+                    if recommendation:
+                        comment_parts.append(f"Recommendation: {recommendation}")
+
                     fb_kwargs = {
                         "run_id": ls_run_id,
                         "key": score_entry.get("rule_id", "unknown"),
                         "score": score_entry.get("score", 0.0),
-                        "comment": score_entry.get("reasoning", ""),
+                        "comment": " | ".join(p for p in comment_parts if p),
+                        "value": {
+                            "reasoning": reasoning,
+                            "severity": score_entry.get("severity", ""),
+                            "failure_attribution": attribution,
+                            "recommendation": recommendation,
+                            "rule_name": score_entry.get("rule_name", ""),
+                        },
                         "feedback_source_type": "model",
                     }
                     if source_run_id:
                         fb_kwargs["source_run_id"] = source_run_id
-                    if eval_result_id or eval_run_id:
-                        fb_kwargs["source_info"] = {
-                            "evaluation_result_id": eval_result_id,
-                            "evaluation_run_id": eval_run_id,
-                        }
+                    if source_info:
+                        fb_kwargs["source_info"] = source_info
                     client.create_feedback(**fb_kwargs)
                     synced += 1
                 except Exception as e:
                     log.warning("LangSmith feedback failed for rule %s: %s",
                                 score_entry.get("rule_id"), e)
-        log.info("LangSmith sync: %d feedback entries synced to run %s (source=%s)", synced, ls_run_id, source_run_id)
+
+            # Overall pass/fail — unified metric across all associates
+            try:
+                overall_passed = result.get("passed", False)
+                client.create_feedback(
+                    run_id=ls_run_id,
+                    key="evaluation_passed",
+                    score=1.0 if overall_passed else 0.0,
+                    comment=f"{'All rules passed' if overall_passed else 'One or more rules failed'}",
+                    feedback_source_type="model",
+                    source_run_id=source_run_id if source_run_id else None,
+                    source_info=source_info if source_info else None,
+                )
+                synced += 1
+            except Exception as e:
+                log.warning("LangSmith feedback failed for evaluation_passed: %s", e)
+
+        log.info("LangSmith sync: %d feedback entries synced to run %s", synced, ls_run_id)
 
     await asyncio.to_thread(_sync_feedback, langsmith_run_id, results, evaluator_run_id)
 
