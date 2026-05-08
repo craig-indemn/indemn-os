@@ -119,7 +119,7 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
 
     if entity_type == "Trace":
         trace = indemn("trace", "get", entity_id)
-        return {
+        ctx = {
             "_entity_type": "Trace",
             "_id": trace.get("_id"),
             "associate_id": trace.get("associate_id"),
@@ -136,6 +136,18 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
             "messages_count": len(trace.get("messages", [])),
             "child_runs_count": len(trace.get("child_runs", [])),
         }
+        msg_id = os.environ.get("INDEMN_CAUSATION_MESSAGE_ID")
+        if msg_id:
+            try:
+                msg = indemn("queue", "get", msg_id)
+                msg_context = msg.get("context") or {}
+                if msg_context.get("run_id"):
+                    ctx["run_id"] = msg_context["run_id"]
+                if msg_context.get("rubric_ids"):
+                    ctx["rubric_ids"] = msg_context["rubric_ids"]
+            except CLIError:
+                pass
+        return ctx
 
     entity_slug = entity_type.lower()
     context = indemn(
