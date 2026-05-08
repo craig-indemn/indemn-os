@@ -1,14 +1,97 @@
-"""Trace creation helpers — message serialization, child_runs derivation, token aggregation.
+"""Trace creation helpers — message serialization, run tree capture, token aggregation.
 
-Produces clean, LangSmith-aligned trace data. Messages are stored as
-a clean step-by-step execution record (not raw model_dump with internal
-metadata). Child_runs are structured as a proper execution tree matching
-LangSmith's Run tree shape.
+Produces clean, LangSmith-aligned trace data:
+- Messages: clean step-by-step execution record (stripped of LangChain internals)
+- Child_runs: the actual LangSmith run tree captured via collect_runs()
+- Tokens: aggregated from AIMessage usage_metadata
 """
 
 import logging
 
 log = logging.getLogger(__name__)
+
+
+def serialize_run_tree(run) -> list[dict]:
+    """Serialize a LangChain RunTree into a list of child run dicts.
+
+    Captures the same execution tree that LangSmith stores. Each node
+    has: id, name, run_type, inputs, outputs, child_runs (recursive),
+    error, start_time, end_time.
+
+    Filters out middleware internals (TodoListMiddleware, etc.) to keep
+    only the meaningful execution steps: model calls, tool calls, and
+    the top-level chain.
+    """
+    if not run:
+        return []
+
+    def _serialize_node(node, depth=0) -> dict | None:
+        name = getattr(node, "name", "unknown")
+        run_type = getattr(node, "run_type", "chain")
+
+        # Skip middleware wrappers — they add noise without evaluation value
+        _MIDDLEWARE_PREFIXES = (
+            "TodoListMiddleware",
+            "AnthropicPromptCachingMiddleware",
+            "SummarizationMiddleware",
+            "SubAgentMiddleware",
+            "FilesystemMiddleware",
+            "ExecuteErrorStatusMiddleware",
+            "PatchToolCallsMiddleware",
+        )
+        if any(name.startswith(prefix) for prefix in _MIDDLEWARE_PREFIXES):
+            return None
+
+        inputs_raw = getattr(node, "inputs", {}) or {}
+        outputs_raw = getattr(node, "outputs", {}) or {}
+
+        # Clean inputs/outputs — truncate large values for storage
+        def _clean_dict(d, max_val_len=5000):
+            if not isinstance(d, dict):
+                return d
+            cleaned = {}
+            for k, v in d.items():
+                if isinstance(v, str) and len(v) > max_val_len:
+                    cleaned[k] = v[:max_val_len] + f"... [{len(v)} chars total]"
+                elif isinstance(v, list) and len(str(v)) > max_val_len:
+                    cleaned[k] = f"[list with {len(v)} items, {len(str(v))} chars total]"
+                else:
+                    cleaned[k] = v
+            return cleaned
+
+        serialized_children = []
+        for child in getattr(node, "child_runs", []) or []:
+            child_dict = _serialize_node(child, depth + 1)
+            if child_dict:
+                serialized_children.append(child_dict)
+
+        start = getattr(node, "start_time", None)
+        end = getattr(node, "end_time", None)
+
+        result = {
+            "id": str(getattr(node, "id", "")),
+            "name": name,
+            "run_type": run_type,
+            "inputs": _clean_dict(inputs_raw),
+            "outputs": _clean_dict(outputs_raw),
+            "child_runs": serialized_children,
+            "error": getattr(node, "error", None),
+        }
+        if start:
+            result["start_time"] = start.isoformat() if hasattr(start, "isoformat") else str(start)
+        if end:
+            result["end_time"] = end.isoformat() if hasattr(end, "isoformat") else str(end)
+
+        return result
+
+    # Serialize root's children (skip the root itself — it's the top-level chain)
+    children = []
+    for child in getattr(run, "child_runs", []) or []:
+        child_dict = _serialize_node(child)
+        if child_dict:
+            children.append(child_dict)
+
+    return children
 
 
 def _clean_message(msg) -> dict:
