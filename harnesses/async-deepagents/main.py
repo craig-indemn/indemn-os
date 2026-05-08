@@ -264,30 +264,35 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
             if eval_run_id:
                 source_info["evaluation_run_id"] = eval_run_id
 
-            # Per-rule feedback
             for score_entry in result.get("rubric_scores", []):
                 try:
+                    passed = score_entry.get("passed", False)
                     reasoning = score_entry.get("reasoning", "")
-                    attribution = score_entry.get("failure_attribution", "")
-                    recommendation = score_entry.get("recommendation", "")
+                    attribution = score_entry.get("failure_attribution")
+                    recommendation = score_entry.get("recommendation")
+
                     comment_parts = [reasoning]
                     if attribution:
                         comment_parts.append(f"Attribution: {attribution}")
                     if recommendation:
                         comment_parts.append(f"Recommendation: {recommendation}")
 
+                    extra = {
+                        "severity": score_entry.get("severity", ""),
+                        "rule_name": score_entry.get("rule_name", ""),
+                    }
+                    if attribution:
+                        extra["failure_attribution"] = attribution
+                    if recommendation:
+                        extra["recommendation"] = recommendation
+
                     fb_kwargs = {
                         "run_id": ls_run_id,
                         "key": score_entry.get("rule_id", "unknown"),
                         "score": score_entry.get("score", 0.0),
+                        "value": "Pass" if passed else "Fail",
                         "comment": " | ".join(p for p in comment_parts if p),
-                        "value": {
-                            "reasoning": reasoning,
-                            "severity": score_entry.get("severity", ""),
-                            "failure_attribution": attribution,
-                            "recommendation": recommendation,
-                            "rule_name": score_entry.get("rule_name", ""),
-                        },
+                        "extra": extra,
                         "feedback_source_type": "model",
                     }
                     if source_run_id:
@@ -300,14 +305,14 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
                     log.warning("LangSmith feedback failed for rule %s: %s",
                                 score_entry.get("rule_id"), e)
 
-            # Overall pass/fail — unified metric across all associates
             try:
                 overall_passed = result.get("passed", False)
                 client.create_feedback(
                     run_id=ls_run_id,
                     key="evaluation_passed",
                     score=1.0 if overall_passed else 0.0,
-                    comment=f"{'All rules passed' if overall_passed else 'One or more rules failed'}",
+                    value="Pass" if overall_passed else "Fail",
+                    comment="All rules passed" if overall_passed else "One or more rules failed",
                     feedback_source_type="model",
                     source_run_id=source_run_id if source_run_id else None,
                     source_info=source_info if source_info else None,
