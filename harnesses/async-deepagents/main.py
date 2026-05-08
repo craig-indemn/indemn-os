@@ -25,7 +25,7 @@ from harness.cron_runner import run_cron_skill
 from harness.completion_logic import agent_did_useful_work
 from harness_common.cli import CLIError, indemn
 from harness.trace_helpers import serialize_messages, serialize_run_tree, derive_child_runs, aggregate_tokens
-from langchain_core.tracers.context import collect_runs
+from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from indemn_os.types import AgentExecutionInput, AgentExecutionResult
 from temporalio import activity
@@ -380,46 +380,43 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # ainvoke() may take minutes; heartbeat every 30s to prevent
         # Temporal from cancelling the activity.
         heartbeat_task = None
-        _collected_run = None
+        _run_collector = RunCollectorCallbackHandler()
         try:
             heartbeat_task = asyncio.create_task(
                 _heartbeat_with_status_check("agent_running")
             )
 
-            with collect_runs() as _runs_cb:
-                result = await agent.ainvoke(
-                    {
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": f"Process this work:\n\n{context}",
-                            }
-                        ],
+            result = await agent.ainvoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"Process this work:\n\n{context}",
+                        }
+                    ],
+                },
+                config={
+                    "run_id": _langsmith_run_id,
+                    "recursion_limit": 50,
+                    "callbacks": [_run_collector],
+                    "metadata": {
+                        "associate_id": str(input.associate_id),
+                        "associate_name": associate.get("name"),
+                        "message_id": str(input.message_id),
+                        "entity_type": input.entity_type,
+                        "entity_id": str(input.entity_id),
+                        "runtime_id": str(runtime_id),
+                        "correlation_id": input.correlation_id,
+                        "thread_id": input.correlation_id,
                     },
-                    config={
-                        "run_id": _langsmith_run_id,
-                        "recursion_limit": 50,
-                        "metadata": {
-                            "associate_id": str(input.associate_id),
-                            "associate_name": associate.get("name"),
-                            "message_id": str(input.message_id),
-                            "entity_type": input.entity_type,
-                            "entity_id": str(input.entity_id),
-                            "runtime_id": str(runtime_id),
-                            "correlation_id": input.correlation_id,
-                            "thread_id": input.correlation_id,
-                        },
-                        "tags": [
-                            f"associate:{associate.get('name', 'unknown')}",
-                            f"entity_type:{input.entity_type}",
-                            f"runtime:{RUNTIME_ID}",
-                        ],
-                        "run_name": f"{associate.get('name', 'agent')} → {input.entity_type} {str(input.entity_id)[:8]}",
-                    },
-                )
-
-            if _runs_cb.traced_runs:
-                _collected_run = _runs_cb.traced_runs[0]
+                    "tags": [
+                        f"associate:{associate.get('name', 'unknown')}",
+                        f"entity_type:{input.entity_type}",
+                        f"runtime:{RUNTIME_ID}",
+                    ],
+                    "run_name": f"{associate.get('name', 'agent')} → {input.entity_type} {str(input.entity_id)[:8]}",
+                },
+            )
         finally:
             if heartbeat_task:
                 heartbeat_task.cancel()
@@ -456,10 +453,22 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
 
         log.info("Agent completed: %d messages, tools=%s", len(messages), tools_used)
 
+        # Find the root run from collector (last completed = root chain)
+        _collected_run = None
+        if _run_collector.traced_runs:
+            for r in reversed(_run_collector.traced_runs):
+                if getattr(r, "parent_run_id", None) is None:
+                    _collected_run = r
+                    break
+            if not _collected_run:
+                _collected_run = _run_collector.traced_runs[-1]
+            log.info("RunCollector: %d runs captured, root=%s type=%s children=%d",
+                     len(_run_collector.traced_runs),
+                     getattr(_collected_run, "name", "?"),
+                     getattr(_collected_run, "run_type", "?"),
+                     len(getattr(_collected_run, "child_runs", []) or []))
+
         # Create durable Trace entity (non-blocking)
-        # Use input.correlation_id (cascade chain), NOT input.message_id
-        # (per-message unique). INDEMN_CAUSATION_MESSAGE_ID is for CLI
-        # causation tracking — different purpose.
         try:
             await _create_trace(
                 input, associate, messages, tools_used,
