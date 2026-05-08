@@ -226,21 +226,35 @@ async def _sync_eval_to_langsmith(trace_entity_id: str):
         log.warning("langsmith not installed — skipping eval sync")
         return
 
+    log.info("LangSmith sync: loading trace %s", trace_entity_id)
     trace = await asyncio.to_thread(indemn, "trace", "get", trace_entity_id, timeout=15.0)
     langsmith_run_id = trace.get("langsmith_run_id")
     if not langsmith_run_id:
+        log.info("LangSmith sync: no langsmith_run_id on trace, skipping")
         return
 
-    results = await asyncio.to_thread(
-        indemn, "evaluationresult", "list",
-        "--data", json.dumps({"trace_id": trace_entity_id}),
-        timeout=15.0,
-    )
-    if not results or not isinstance(results, list):
+    # Query evaluation results for this trace via API (not CLI filter
+    # which may not support ObjectId relationship filtering)
+    log.info("LangSmith sync: querying results for trace %s, ls_run=%s", trace_entity_id, langsmith_run_id)
+    try:
+        results = await asyncio.to_thread(
+            indemn, "evaluationresult", "list",
+            "--data", json.dumps({"trace_id": trace_entity_id}),
+            timeout=15.0,
+        )
+    except CLIError as e:
+        log.warning("LangSmith sync: failed to query results: %s", e)
         return
+
+    if not results or not isinstance(results, list):
+        log.info("LangSmith sync: no results found for trace %s (got %s)", trace_entity_id, type(results).__name__)
+        return
+
+    log.info("LangSmith sync: found %d results, syncing feedback", len(results))
 
     def _sync_feedback(ls_run_id, eval_results):
         client = Client()
+        synced = 0
         for result in eval_results:
             for score_entry in result.get("rubric_scores", []):
                 try:
@@ -250,9 +264,11 @@ async def _sync_eval_to_langsmith(trace_entity_id: str):
                         score=score_entry.get("score", 0.0),
                         comment=score_entry.get("reasoning", ""),
                     )
+                    synced += 1
                 except Exception as e:
-                    log.warning("LangSmith feedback sync failed for rule %s: %s",
+                    log.warning("LangSmith feedback failed for rule %s: %s",
                                 score_entry.get("rule_id"), e)
+        log.info("LangSmith sync: %d feedback entries synced to run %s", synced, ls_run_id)
 
     await asyncio.to_thread(_sync_feedback, langsmith_run_id, results)
 
