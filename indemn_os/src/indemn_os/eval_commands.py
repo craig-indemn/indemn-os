@@ -112,6 +112,14 @@ def get_results(
     render(result)
 
 
+@eval_app.command("create-experiment")
+def create_experiment(run_id: str):
+    """Create a LangSmith Experiment from a completed evaluation run."""
+    client = CLIClient()
+    result = client.post(f"/api/_eval/runs/{run_id}/create-experiment", json={})
+    render(result)
+
+
 @eval_app.command("compare")
 def compare_runs(run_id_1: str, run_id_2: str):
     """Compare two evaluation runs — side-by-side rule scores."""

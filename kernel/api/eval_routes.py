@@ -232,52 +232,6 @@ async def trigger_eval_run(
     _fire_dispatch(created_messages)
     run_id = eval_run.id
 
-    # Create LangSmith Dataset + Experiment for LangSmith-native tracking
-    langsmith_dataset_id = None
-    langsmith_experiment_id = None
-    try:
-        from langsmith import Client as LSClient
-        ls_client = LSClient()
-        dataset_name = f"eval-{associate_name}-{run_id}"
-        ls_dataset = ls_client.create_dataset(
-            dataset_name=dataset_name,
-            description=f"Evaluation run {run_id} ({trigger_mode}) for {associate_name}",
-            metadata={"run_id": str(run_id), "trigger_mode": trigger_mode,
-                       "associate_name": associate_name},
-        )
-        langsmith_dataset_id = str(ls_dataset.id)
-
-        if trigger_mode == "prospective" and test_items:
-            for item in test_items:
-                ls_client.create_example(
-                    inputs=item.get("inputs", {}),
-                    outputs=item.get("expected", {}),
-                    dataset_id=ls_dataset.id,
-                    metadata={"item_id": item.get("item_id", ""),
-                              "name": item.get("name", "")},
-                )
-        elif trace_ids:
-            traces_coll_ls = db["traces"]
-            for tid in trace_ids:
-                tdoc = await traces_coll_ls.find_one({"_id": tid})
-                if tdoc:
-                    ls_client.create_example(
-                        inputs=tdoc.get("inputs", {}),
-                        outputs=tdoc.get("outputs", {}),
-                        dataset_id=ls_dataset.id,
-                        metadata={"trace_id": str(tid),
-                                  "langsmith_run_id": tdoc.get("langsmith_run_id", "")},
-                    )
-
-        langsmith_experiment_id = dataset_name
-        eval_run.langsmith_experiment_id = langsmith_experiment_id
-        await eval_run.save_tracked()
-        logger.info("LangSmith dataset %s created with %d examples", langsmith_dataset_id, total)
-    except ImportError:
-        logger.info("langsmith not installed — skipping LangSmith experiment creation")
-    except Exception as e:
-        logger.warning("LangSmith experiment creation failed (non-blocking): %s", e)
-
     evaluator_role = await db["roles"].find_one({"org_id": org_id, "name": "evaluator"})
     if not evaluator_role:
         return {"error": "Evaluator role not found. Create it first.", "run_id": str(run_id)}
@@ -322,7 +276,7 @@ async def trigger_eval_run(
     logger.info("Evaluation run %s started: %d items, rubrics=%s, mode=%s",
                 run_id, total, rubric_ids, trigger_mode)
 
-    result = {
+    return {
         "run_id": str(run_id),
         "status": "running",
         "total": total,
@@ -331,11 +285,6 @@ async def trigger_eval_run(
         "rubric_versions": rubric_versions,
         "associate": associate_name,
     }
-    if langsmith_dataset_id:
-        result["langsmith_dataset_id"] = langsmith_dataset_id
-    if langsmith_experiment_id:
-        result["langsmith_experiment_id"] = langsmith_experiment_id
-    return result
 
 
 @eval_router.get("/runs")
@@ -415,6 +364,132 @@ async def get_eval_results(
         .to_list(length=500)
     )
     return _safe(results)
+
+
+@eval_router.post("/runs/{run_id}/create-experiment")
+async def create_langsmith_experiment(
+    run_id: str,
+    actor=Depends(get_current_actor),
+):
+    """Create a LangSmith Experiment from a completed EvaluationRun.
+
+    Called after the evaluator has finished processing all traces for a run.
+    Reads OS EvaluationResults and creates a proper LangSmith Experiment
+    via client.evaluate() — the LangSmith-native evaluation mechanism.
+    """
+    org_id = current_org_id.get()
+    db = get_database()
+
+    EvalRunCls = ENTITY_REGISTRY.get("EvaluationRun")
+    EvalResultCls = ENTITY_REGISTRY.get("EvaluationResult")
+    if not EvalRunCls or not EvalResultCls:
+        return {"error": "Evaluation entities not registered"}
+
+    run = await EvalRunCls.get_motor_collection().find_one(
+        {"_id": ObjectId(run_id), "org_id": org_id}
+    )
+    if not run:
+        return {"error": "Run not found"}
+
+    results = await EvalResultCls.get_motor_collection().find(
+        {"org_id": org_id, "run_id": ObjectId(run_id)}
+    ).to_list(length=1000)
+
+    if not results:
+        return {"error": "No results found for this run"}
+
+    traces_coll = db["traces"]
+
+    try:
+        from langsmith import Client as LSClient
+
+        ls_client = LSClient()
+
+        dataset_name = f"eval-{run.get('associate_name', 'unknown')}-{run_id}"
+        try:
+            ls_dataset = ls_client.create_dataset(
+                dataset_name=dataset_name,
+                description=f"Evaluation run {run_id} for {run.get('associate_name')}",
+            )
+        except Exception:
+            ls_dataset = ls_client.read_dataset(dataset_name=dataset_name)
+
+        trace_cache = {}
+        for result in results:
+            trace_id = result.get("trace_id")
+            if trace_id and trace_id not in trace_cache:
+                tdoc = await traces_coll.find_one({"_id": trace_id})
+                if tdoc:
+                    trace_cache[trace_id] = tdoc
+
+            trace = trace_cache.get(trace_id, {})
+            ls_client.create_example(
+                inputs=trace.get("inputs", {}),
+                outputs=trace.get("outputs", {}),
+                dataset_id=ls_dataset.id,
+                metadata={
+                    "trace_id": str(trace_id),
+                    "entity_type": result.get("entity_type", ""),
+                    "entity_id": str(result.get("entity_id", "")),
+                    "langsmith_run_id": trace.get("langsmith_run_id", ""),
+                },
+            )
+
+        def _target(inputs: dict) -> dict:
+            return inputs
+
+        def _make_evaluator(rule_id, rule_results):
+            def evaluator(run, example):
+                for r in rule_results:
+                    trace_id_str = str(example.metadata.get("trace_id", ""))
+                    if str(r.get("trace_id", "")) == trace_id_str:
+                        for score in r.get("rubric_scores", []):
+                            if score.get("rule_id") == rule_id:
+                                return {
+                                    "key": rule_id,
+                                    "score": score.get("score", 0.0),
+                                    "comment": score.get("reasoning", ""),
+                                }
+                return {"key": rule_id, "score": 0.0, "comment": "No result found"}
+            return evaluator
+
+        rule_ids = set()
+        for r in results:
+            for score in r.get("rubric_scores", []):
+                rule_ids.add(score.get("rule_id"))
+
+        evaluators = [_make_evaluator(rid, results) for rid in rule_ids]
+
+        experiment_results = ls_client.evaluate(
+            _target,
+            data=dataset_name,
+            evaluators=evaluators,
+            experiment_prefix=f"eval-{run.get('associate_name', 'unknown')}",
+            description=f"EvaluationRun {run_id} — {run.get('trigger_mode', 'batch')} mode",
+            max_concurrency=0,
+        )
+
+        experiment_name = getattr(experiment_results, 'experiment_name', dataset_name)
+
+        eval_run_entity = await EvalRunCls.get_scoped(run_id)
+        if eval_run_entity:
+            eval_run_entity.langsmith_experiment_id = experiment_name
+            await eval_run_entity.save_tracked()
+
+        logger.info("LangSmith experiment '%s' created for run %s", experiment_name, run_id)
+
+        return {
+            "status": "created",
+            "experiment_name": experiment_name,
+            "dataset_name": dataset_name,
+            "results_count": len(results),
+        }
+
+    except ImportError:
+        return {"error": "langsmith not installed"}
+    except Exception as e:
+        logger.exception("Failed to create LangSmith experiment for run %s", run_id)
+        return {"error": f"Failed to create experiment: {e}"}
 
 
 @eval_router.get("/compare/{run_id_1}/{run_id_2}")
