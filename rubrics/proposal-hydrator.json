@@ -1,0 +1,138 @@
+{
+  "associate_name": "Proposal Hydrator",
+  "name": "PH Behavioral Rubric",
+  "description": "Proposal Hydrator evaluation rubric — Proposal metadata hydration, stage-appropriateness checking, graph health observation, Deal scope discipline",
+  "rules": [
+    {
+      "id": "EARLY_EXIT_NO_DEAL",
+      "name": "Skip When No Deal on Touchpoint",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "PH must complete immediately when the Touchpoint has no Deal field. Internal Touchpoints without Deals do not need Proposal hydration. Attempting to hydrate without a Deal leads to null pointer errors or orphaned ReviewItems.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Agent checked Touchpoint deal field before proceeding",
+          "Agent completed immediately when deal was null",
+          "Agent did not attempt proposal list or any hydration logic when no Deal exists"
+        ],
+        "fail_conditions": [
+          "Agent attempted proposal list with a null deal ID",
+          "Agent continued hydration logic despite no Deal on the Touchpoint",
+          "Agent created a ReviewItem about a missing Deal on an internal Touchpoint (expected, not an anomaly)"
+        ]
+      },
+      "examples": {
+        "violation": "PH received an internal Touchpoint with deal=null, called proposal list with null deal ID, got an error, created a ReviewItem about missing Proposal",
+        "correct": "PH checked Touchpoint deal field (null), completed immediately — internal Touchpoint without Deal is expected"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If agent did not check deal field: missing_rule. If agent checked but misread a null as a value: associate_error."
+    },
+    {
+      "id": "METADATA_HYDRATION",
+      "name": "Proposal Metadata Populated from Deal",
+      "severity": "medium",
+      "category": "enrichment",
+      "description": "PH should fill Proposal metadata (prepared_for, prepared_by) from Deal fields (primary_contact, owner) when the Proposal fields are null. This is lightweight enrichment that keeps the Proposal presentation-ready.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Agent checked if Proposal.prepared_for is null and populated from Deal.primary_contact if available",
+          "Agent checked if Proposal.prepared_by is null and populated from Deal.owner if available",
+          "Agent did not overwrite existing non-null Proposal metadata"
+        ],
+        "fail_conditions": [
+          "Agent overwrote existing prepared_for or prepared_by values",
+          "Agent skipped metadata hydration when fields were null and Deal had the data",
+          "Agent set prepared_for/prepared_by to values not from the Deal"
+        ]
+      },
+      "examples": {
+        "violation": "Proposal already had prepared_for set to MaeLena's Contact ID. PH overwrote it with a different Contact from the Deal",
+        "correct": "PH found Proposal.prepared_for=null, checked Deal.primary_contact=MaeLena's ID, updated Proposal with prepared_for=MaeLena's ID"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If metadata hydration was skipped: associate_error. If existing values were overwritten: associate_error. If Deal had no primary_contact to hydrate from: not a failure."
+    },
+    {
+      "id": "NO_STAGE_AUTO_ADVANCE",
+      "name": "PH Does Not Auto-Advance Deal Stages",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "PH observes stage-entity alignment but must never auto-advance the Deal stage. Stage transitions are human decisions. PH creates ReviewItems to signal when advancement might be appropriate based on the entities extracted.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "No deal update calls that change the stage field",
+          "When extracted entities seemed more advanced than current stage, a ReviewItem was created",
+          "ReviewItem clearly noted what entities suggested advancement and to which stage"
+        ],
+        "fail_conditions": [
+          "Agent called deal update to advance the stage",
+          "Agent advanced the stage without creating a ReviewItem for human review",
+          "Agent skipped stage-appropriateness observation entirely"
+        ]
+      },
+      "examples": {
+        "violation": "IE extracted Phases with pricing during DISCOVERY stage. PH auto-advanced the Deal to PROPOSAL stage.",
+        "correct": "IE extracted Phases with pricing during DISCOVERY stage. PH created ReviewItem: 'Extracted Phases with pricing during DISCOVERY — Deal may be ready for DEMO/PROPOSAL advancement.' Deal stage unchanged."
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If deal stage was modified: associate_error (hard rule violation). If ReviewItem was not created for obvious stage mismatch: associate_error."
+    },
+    {
+      "id": "NO_ENTITY_CREATION",
+      "name": "PH Does Not Create Intelligence Entities",
+      "severity": "high",
+      "category": "enrichment",
+      "description": "PH reads intelligence entities that IE created but does not create Tasks, Decisions, Signals, or other intelligence entities itself. PH is a health-check observer, not an extractor. It checks that the graph is growing as expected and flags when it is not.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "No create calls for Task, Decision, Commitment, Signal, or Operation entities",
+          "PH only called proposal update and reviewitem create",
+          "Graph health observations were expressed as ReviewItems, not as created entities"
+        ],
+        "fail_conditions": [
+          "PH created a Task, Decision, Commitment, Signal, or Operation entity",
+          "PH duplicated IE's extraction work by creating intelligence entities",
+          "PH created entities beyond ReviewItem and Proposal updates"
+        ]
+      },
+      "examples": {
+        "violation": "PH noticed the Deal at PROPOSAL stage had no Phases, so it created Phase entities to fill the gap",
+        "correct": "PH noticed the Deal at PROPOSAL stage had no Phases, created ReviewItem: 'Deal at PROPOSAL stage but no Phases exist — gap may need attention'"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If PH created intelligence entities: associate_error (role boundary violation). If PH created ReviewItems for gaps: correct behavior."
+    },
+    {
+      "id": "MISSING_PROPOSAL_FLAGGED",
+      "name": "Missing Proposal Creates ReviewItem",
+      "severity": "medium",
+      "category": "entity_resolution",
+      "description": "If a Deal exists but no Proposal is found, PH must create a ReviewItem flagging the gap. TS should have created the Proposal atomically with the Deal. A missing Proposal is an upstream anomaly that needs investigation.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "When proposal list returned empty for a Deal, agent created a ReviewItem",
+          "ReviewItem reason is 'missing_proposal' or equivalent with clear context",
+          "Agent completed after creating the ReviewItem (did not attempt to create a Proposal)"
+        ],
+        "fail_conditions": [
+          "Agent created a Proposal when one was missing (PH does not create Proposals)",
+          "Agent silently completed without flagging the missing Proposal",
+          "Agent continued hydration logic without a Proposal to hydrate"
+        ]
+      },
+      "examples": {
+        "violation": "PH found no Proposal for the Deal, created one itself to fill the gap",
+        "correct": "PH found no Proposal for the Deal, created ReviewItem: 'Deal exists but no Proposal — TS should have created one. Manual investigation needed.' Then completed."
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If PH created a Proposal: associate_error (role boundary). If PH silently completed: missing_rule. If TS genuinely failed to create the Proposal: context_gap (upstream bug)."
+    }
+  ],
+  "severity_definitions": {
+    "high": "Failures violate PH's observational role — auto-advancing stages or creating entities breaks the separation of concerns and makes autonomous decisions that require human judgment",
+    "medium": "Failures miss enrichment or observation opportunities — incomplete Proposal metadata or unflagged gaps degrade quality but don't corrupt data",
+    "low": "Failures are efficiency issues — unnecessary processing or redundant checks waste resources without data impact"
+  },
+  "status": "draft"
+}

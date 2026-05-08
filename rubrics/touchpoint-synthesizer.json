@@ -1,0 +1,147 @@
+{
+  "associate_name": "Touchpoint Synthesizer",
+  "name": "TS Behavioral Rubric",
+  "description": "Touchpoint Synthesizer evaluation rubric — Touchpoint creation, Deal/Proposal atomicity, source pointer integrity, thread deduplication",
+  "rules": [
+    {
+      "id": "SOURCE_POINTERS_SET",
+      "name": "Source Entity Pointers Always Populated",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "Every Touchpoint must have source_entity_type and source_entity_id set. These are how downstream associates (IE, CE) navigate from a Touchpoint back to raw source content. A Touchpoint without source pointers is unreachable for extraction.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Touchpoint create call includes source_entity_type matching the source (Email, Meeting, SlackThread)",
+          "Touchpoint create call includes source_entity_id matching the source entity's _id",
+          "Source entity is linked back to the Touchpoint via update (bidirectional link)"
+        ],
+        "fail_conditions": [
+          "Touchpoint created without source_entity_type",
+          "Touchpoint created without source_entity_id",
+          "Source entity not updated with the new Touchpoint ID (one-way link only)"
+        ]
+      },
+      "examples": {
+        "violation": "TS created a Touchpoint from an email but omitted source_entity_id — IE later tried to read the source and found null, transitioning the Touchpoint to needs_review",
+        "correct": "TS created Touchpoint with source_entity_type='Email', source_entity_id='69ea5802...', then updated the Email with touchpoint='<new_touchpoint_id>'"
+      },
+      "outcome_check": {
+        "entity_type": "Touchpoint",
+        "check": {
+          "field": "source_entity_id",
+          "op": "exists",
+          "value": true
+        }
+      },
+      "failure_attribution_guidance": "If source pointers were omitted from create: associate_error. If source entity update (back-link) was omitted: associate_error."
+    },
+    {
+      "id": "DEAL_PROPOSAL_ATOMICITY",
+      "name": "Deal and Proposal Created Atomically",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "When scope is external and no active Deal exists for the Company, TS must create both a Deal AND an empty Proposal in the same flow. A Deal without a Proposal breaks the Proposal Hydrator downstream. A Proposal without a Deal is orphaned.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "When no active Deal existed and scope=external, both Deal and Proposal were created",
+          "Proposal references the newly created Deal ID",
+          "Deal has stage=contact and source=Inbound",
+          "Proposal has version=1"
+        ],
+        "fail_conditions": [
+          "Deal created without an accompanying Proposal",
+          "Proposal created without referencing the Deal",
+          "Deal created for an internal-scope Touchpoint",
+          "Neither Deal nor Proposal created when scope=external and no active Deal exists"
+        ]
+      },
+      "examples": {
+        "violation": "TS created a Deal for Johnson Insurance but forgot to create the Proposal — Proposal Hydrator had nothing to hydrate",
+        "correct": "TS checked deal list for Johnson Insurance (0 active), created Deal (stage=contact, source=Inbound), then created Proposal (deal=new_deal_id, version=1)"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If Deal was created without Proposal: associate_error. If Deal creation was skipped for external scope: associate_error. If Deal was created for internal scope: associate_error (misunderstood the rule)."
+    },
+    {
+      "id": "THREAD_DEDUP",
+      "name": "Email Thread Deduplication",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "For Emails with a thread_id, TS must check if a Touchpoint already exists for this thread before creating a new one. One email thread = one Touchpoint. Duplicate Touchpoints for the same thread create redundant extraction and double-counted intelligence.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "For emails with thread_id, agent checked existing emails in the same thread for an existing Touchpoint",
+          "If existing Touchpoint found, agent linked this email to it and updated the summary",
+          "If no existing Touchpoint found, agent created a new one",
+          "Meetings always create new Touchpoints (no thread dedup for meetings)"
+        ],
+        "fail_conditions": [
+          "Agent created a new Touchpoint for an email that belongs to an already-processed thread",
+          "Agent skipped the thread check for an email with thread_id set",
+          "Agent attempted thread dedup on a Meeting (meetings are always new Touchpoints)"
+        ]
+      },
+      "examples": {
+        "violation": "TS received a reply in thread_id 'abc123'. An earlier email in the same thread already had a Touchpoint. TS created a second Touchpoint instead of linking to the existing one.",
+        "correct": "TS checked email list for thread_id 'abc123', found prior email with touchpoint field set, linked this email to that existing Touchpoint, updated the summary to reflect the new exchange"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If thread check was never performed: missing_rule. If thread check was performed but missed the existing Touchpoint: associate_error. If thread_id was not set on the email (upstream issue): context_gap."
+    },
+    {
+      "id": "INTERNAL_NO_DEAL_CREATION",
+      "name": "Internal Scope Does Not Trigger Deal Creation",
+      "severity": "medium",
+      "category": "classification",
+      "description": "Internal-scope Touchpoints (all participants are Employees) should not trigger Deal creation even if no active Deal exists. Internal work without an active Deal is normal. Deal is set to null or to an existing active Deal.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Internal scope Touchpoints do not trigger deal create",
+          "If active Deals exist for the Company, internal Touchpoint links to the most recent one",
+          "If no active Deal exists for internal scope, deal is set to null"
+        ],
+        "fail_conditions": [
+          "Agent created a Deal for an internal-scope Touchpoint",
+          "Agent created a Proposal for an internal-scope Touchpoint without a Deal"
+        ]
+      },
+      "examples": {
+        "violation": "TS received an internal email (craig@indemn.ai to george@indemn.ai) about GIC. No active Deal. TS created a new Deal for GIC from internal correspondence.",
+        "correct": "TS received an internal email about GIC. Active Deal existed at stage=discovery. TS linked Touchpoint to existing Deal. No new Deal created."
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If Deal was created for internal scope: associate_error. If agent checked scope correctly but misidentified the scope: trace to scope determination logic."
+    },
+    {
+      "id": "SOURCE_TRANSITION_TO_PROCESSED",
+      "name": "Source Entity Transitioned to Processed",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "After creating the Touchpoint and linking the source, TS must transition the source entity (Email/Meeting) to processed. The transition is the receipt that TS work is done. Sources stuck at classified look like silent failures.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Source entity transitioned to processed after Touchpoint creation and linking",
+          "Transition reason includes a summary of what was synthesized",
+          "Early-exit sources (already processed) were not re-transitioned"
+        ],
+        "fail_conditions": [
+          "Source entity left at classified status after Touchpoint was created",
+          "Source entity transitioned before Touchpoint creation completed",
+          "Transition reason is empty or generic"
+        ]
+      },
+      "examples": {
+        "violation": "TS created a Touchpoint for the email and linked it, but never called email transition to processed — the email remained at classified status",
+        "correct": "TS created Touchpoint, updated email with touchpoint ID, then transitioned email to processed with reason 'Synthesized external Touchpoint for Johnson Insurance, Deal at contact stage'"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If transition was never called: associate_error. If transition failed due to state machine error: context_gap (may be a bug in transition rules)."
+    }
+  ],
+  "severity_definitions": {
+    "high": "Failures break the cascade — missing source pointers block IE/CE, missing transitions create silent stuck states, duplicate Touchpoints produce double-counted intelligence",
+    "medium": "Failures create suboptimal entity links or unnecessary entities — degrades graph quality but doesn't block downstream processing",
+    "low": "Failures affect audit trail or summary quality — no impact on entity graph or cascade flow"
+  },
+  "status": "draft"
+}

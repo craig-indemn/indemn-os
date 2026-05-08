@@ -1,0 +1,167 @@
+{
+  "associate_name": "Intelligence Extractor",
+  "name": "IE Behavioral Rubric",
+  "description": "Intelligence Extractor evaluation rubric — Option B source navigation, extraction accuracy, transition discipline, entity linking",
+  "rules": [
+    {
+      "id": "OPTION_B_SOURCE_READ",
+      "name": "Always Navigate to Source Content via Option B",
+      "severity": "high",
+      "category": "extraction",
+      "description": "IE must always read the raw source content via the Touchpoint's source_entity_type and source_entity_id fields (Option B). The Touchpoint summary is curation — extraction must be based on source, not summary. Even for thin-summary Touchpoints, a source read is mandatory to confirm there is nothing more.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Agent called get on the source entity type (email get or meeting get) using source_entity_id",
+          "Extraction decisions were based on the source content, not just the Touchpoint summary",
+          "Agent did NOT use --include-related to navigate Option B (it doesn't follow polymorphic refs)"
+        ],
+        "fail_conditions": [
+          "Agent extracted intelligence from the Touchpoint summary alone without reading source",
+          "Agent used --include-related instead of explicit two-step navigation",
+          "Agent skipped source read because the Touchpoint summary seemed sufficient"
+        ]
+      },
+      "examples": {
+        "violation": "IE read the Touchpoint summary 'Discussion about renewal approach' and extracted a Decision entity from it without reading the actual email body or meeting transcript",
+        "correct": "IE read Touchpoint (source_entity_type=Email, source_entity_id=69ea5802), then called email get 69ea5802 to read the full email body before extracting"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If source was never read: missing_rule. If --include-related was used instead of explicit get: associate_error. If source_entity_id was null (upstream TS bug): context_gap."
+    },
+    {
+      "id": "TOUCHPOINT_ALWAYS_TRANSITIONED",
+      "name": "Touchpoint Transition to Processed Is Non-Negotiable",
+      "severity": "high",
+      "category": "extraction",
+      "description": "IE must transition the Touchpoint to processed at the end of every run — even when zero entities are extracted. The transition is the signal that IE work is complete. A Touchpoint stuck at logged looks like a silent failure to operators. The reason field is the audit trail.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Touchpoint transitioned to processed at the end of the run",
+          "Transition reason describes what was extracted (or why nothing was extracted)",
+          "Thin-content Touchpoints still get transitioned with reason like 'thin content — no extractions'"
+        ],
+        "fail_conditions": [
+          "Touchpoint left at logged status after IE completed",
+          "Transition was skipped because no entities were extracted",
+          "Transition reason is empty or does not describe the extraction outcome"
+        ]
+      },
+      "examples": {
+        "violation": "IE read the source, found only a scheduling reply with no actionable content, and completed without transitioning the Touchpoint — it remained at logged",
+        "correct": "IE read the source (scheduling reply), determined no extractions warranted, transitioned Touchpoint to processed with reason 'Thin scheduling content — no extractions warranted'"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If transition was never called: missing_rule (non-negotiable hard rule). If transition failed due to state machine: context_gap."
+    },
+    {
+      "id": "EXTRACTION_GROUNDED_IN_SOURCE",
+      "name": "Extract Only What Is Clearly Stated",
+      "severity": "high",
+      "category": "extraction",
+      "description": "IE must only extract entities that are clearly stated in the source content. Do not infer Tasks that were not stated, manufacture Signals from neutral content, or create Decisions where none were explicitly made. Bad intelligence erodes trust in the system.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Every extracted Task corresponds to an explicit action item in the source",
+          "Every extracted Decision corresponds to an explicit choice stated in the source",
+          "Every extracted Commitment corresponds to an explicit promise in the source",
+          "Every extracted Signal corresponds to a clear indicator in the source content"
+        ],
+        "fail_conditions": [
+          "Task extracted from implied but not stated action (inference beyond source text)",
+          "Signal manufactured from neutral or routine content",
+          "Decision extracted where no choice was explicitly made",
+          "Commitment created from vague language without a clear promise"
+        ]
+      },
+      "examples": {
+        "violation": "Source email said 'We talked about the proposal.' IE extracted a Task 'Update the proposal' — the email never said anyone needed to update it",
+        "correct": "Source email said 'We need to update the proposal by Friday.' IE extracted Task with due_date=Friday, correctly grounded in the explicit statement"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If an entity was manufactured from neutral content: associate_error. If the source was genuinely ambiguous: skill_gap. If the extraction was reasonable but debatable: note as borderline."
+    },
+    {
+      "id": "ENTITY_LINKING",
+      "name": "Touchpoint and Company Linked on Every Entity",
+      "severity": "high",
+      "category": "extraction",
+      "description": "Every created entity (Task, Decision, Commitment, Signal) must have touchpoint and company fields set. These are the navigation paths for downstream queries — per-customer rollups, per-touchpoint trace. Deal should be set when present on the Touchpoint.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Every created entity has touchpoint field set to the source Touchpoint ID",
+          "Every created entity has company field set to the Touchpoint's Company ID",
+          "Deal field set on entities when the Touchpoint has a Deal",
+          "Entity types match the correct schema (Task, Decision, Commitment, Signal)"
+        ],
+        "fail_conditions": [
+          "Entity created without touchpoint field",
+          "Entity created without company field",
+          "Deal field missing when the Touchpoint had an active Deal",
+          "Entity created with wrong Touchpoint or Company ID"
+        ]
+      },
+      "examples": {
+        "violation": "IE created a Signal for 'champion' but omitted the company field — the Signal cannot be found in per-customer rollups",
+        "correct": "IE created Signal with touchpoint=69f0d8cb..., company=69f22186..., deal=69f0d8cc..., type=champion, attributed_to='Christopher Cook'"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If touchpoint or company was omitted: associate_error. If the Touchpoint itself was missing company (upstream issue): context_gap."
+    },
+    {
+      "id": "INVESTOR_PARTNER_SCOPE",
+      "name": "Investor/Partner Touchpoints Get Signals Only",
+      "severity": "medium",
+      "category": "extraction",
+      "description": "Touchpoints from investor, partner, or referrer interactions (scope=external but participant is not a customer Contact) should only produce Signal entities. Customer-style Tasks and Commitments do not apply to investor conversations.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Investor/partner Touchpoints produced only Signal entities (or no entities)",
+          "Transition reason notes that the Touchpoint was investor/partner-side",
+          "No customer-style Tasks or Commitments extracted from investor conversations"
+        ],
+        "fail_conditions": [
+          "Tasks extracted from an investor email (e.g., 'Send investor the pitch deck')",
+          "Commitments created with customer-side semantics for an investor interaction",
+          "Agent treated investor Touchpoints identically to customer Touchpoints"
+        ]
+      },
+      "examples": {
+        "violation": "IE processed a Touchpoint from Justin Li (Level Equity investor), extracted a Task 'Send deck to Justin by Thursday' — this is investor outreach, not customer pipeline",
+        "correct": "IE identified the Touchpoint as investor-side (Level Equity), extracted only a Signal (type=insight, 'Level Equity interested in Indemn — quote-to-bind automation called out'), noted in transition reason"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If agent did not distinguish investor from customer Touchpoints: skill_gap. If the participant was ambiguous (could be customer or investor): context_gap."
+    },
+    {
+      "id": "DUPLICATE_DETECTION",
+      "name": "Lightweight Duplicate Check Before Creation",
+      "severity": "medium",
+      "category": "extraction",
+      "description": "Before creating entities, IE should check for near-duplicates for the same Company. Same-title Tasks or same-description Commitments from overlapping email threads are the common case. A quick list query catches the obvious duplicates.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Agent checked existing Tasks/Commitments for the Company before creating new ones",
+          "Near-duplicate entities were not re-created",
+          "New, genuinely distinct entities were still created (dedup didn't suppress valid extractions)"
+        ],
+        "fail_conditions": [
+          "Agent created a duplicate Task that already existed for this Company",
+          "Agent created a duplicate Commitment with the same made_by and description",
+          "Agent skipped duplicate check entirely"
+        ]
+      },
+      "examples": {
+        "violation": "Email thread produced Task 'Send API credentials by Friday' from message 1. Message 3 in the same thread repeated the ask. IE created a second identical Task.",
+        "correct": "IE checked task list for the Company, found an existing 'Send API credentials by Friday' Task, skipped creating a duplicate"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If duplicate check was never performed: missing_rule. If check was performed but missed the duplicate (different wording): skill_gap. If the entities are similar but meaningfully distinct: not a failure."
+    }
+  ],
+  "severity_definitions": {
+    "high": "Failures break the extraction pipeline — missing source reads produce hallucinated intelligence, missing transitions create silent stuck states, unlinked entities are unreachable for queries",
+    "medium": "Failures produce suboptimal intelligence — duplicates, wrong entity scope, or missed dedup degrade trust but don't block the cascade",
+    "low": "Failures affect audit trail quality or secondary metadata — no impact on entity graph or cascade flow"
+  },
+  "status": "draft"
+}

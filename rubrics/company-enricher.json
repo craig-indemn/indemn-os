@@ -1,0 +1,139 @@
+{
+  "associate_name": "Company Enricher",
+  "name": "CE Behavioral Rubric",
+  "description": "Company Enricher evaluation rubric — evidence-based field population, null-only writes, source content navigation, enrichment boundaries",
+  "rules": [
+    {
+      "id": "SOURCE_CONTENT_READ",
+      "name": "Source Content Read via Option B",
+      "severity": "high",
+      "category": "enrichment",
+      "description": "CE must navigate to the raw source content via the Touchpoint's Option B pointers (source_entity_type + source_entity_id) before extracting Company fields. The Touchpoint summary is insufficient — enrichment requires reading the actual email body, meeting transcript, or Slack text.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Agent read the source entity using source_entity_type and source_entity_id from the Touchpoint",
+          "Enrichment fields were extracted from the source content, not the Touchpoint summary",
+          "For meetings, agent used summary + notes first and only read transcript if those were thin"
+        ],
+        "fail_conditions": [
+          "Agent attempted enrichment without reading the source content",
+          "Agent extracted fields from the Touchpoint summary alone",
+          "Agent read the full transcript immediately when summary + notes would have sufficed (excessive)"
+        ]
+      },
+      "examples": {
+        "violation": "CE read the Touchpoint summary 'Discussion about claims operations' and inferred industry='Insurance' without reading the actual meeting transcript",
+        "correct": "CE read the meeting summary via Option B, found 'David says I'm in Atlanta, been at Armadillo three years', extracted hq_location='Atlanta, GA'"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If source was never read: missing_rule. If source was read but agent still extracted from summary: associate_error. If source_entity_id was null: context_gap (TS bug)."
+    },
+    {
+      "id": "EVIDENCE_ONLY_ENRICHMENT",
+      "name": "Only Populate Fields with Clear Evidence",
+      "severity": "high",
+      "category": "enrichment",
+      "description": "CE must only populate Company fields where the source content provides clear, explicit evidence. Do not infer, guess, or extrapolate. If a transcript says 'I'm in Atlanta' that is clear evidence for hq_location. If someone discusses renewals, that is NOT clear evidence that the company specializes in renewals.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Every populated field traces to a specific statement in the source content",
+          "Ambiguous or implied data was left as null rather than guessed",
+          "Industry, location, and tech stack were extracted only from explicit mentions"
+        ],
+        "fail_conditions": [
+          "Field populated from inference rather than explicit statement",
+          "Industry guessed from conversation topic rather than stated",
+          "Employee count or revenue populated from vague references",
+          "Technologies populated from context clues rather than explicit mentions"
+        ]
+      },
+      "examples": {
+        "violation": "Meeting discussed renewal workflows extensively. CE set specialties=['Renewals'] — the customer never said renewals was their specialty; they were discussing a product feature",
+        "correct": "Email body stated 'We currently use Applied Epic and Dialpad.' CE set ams_system='Applied Epic', technologies=['Dialpad'] — both explicitly named by the customer"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If a field was populated from inference: associate_error. If the source was genuinely ambiguous between stated and implied: skill_gap. If the extraction was reasonable and debatable: note as borderline."
+    },
+    {
+      "id": "NULL_ONLY_WRITES",
+      "name": "Never Overwrite Existing Non-Null Fields",
+      "severity": "high",
+      "category": "enrichment",
+      "description": "CE must not overwrite existing non-null Company fields. Current values may be more authoritative than what CE is extracting (from prior enrichment or manual entry). CE should only populate fields that are currently null.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Agent loaded the Company and checked which fields are already populated",
+          "Only null fields were included in the update call",
+          "Existing non-null fields were preserved unchanged"
+        ],
+        "fail_conditions": [
+          "Agent overwrote an existing non-null field with a new value",
+          "Agent did not check current Company state before updating",
+          "Agent included already-populated fields in the update call"
+        ]
+      },
+      "examples": {
+        "violation": "Company already had industry='Insurance'. CE extracted industry='MGA' from a meeting and overwrote it",
+        "correct": "CE loaded the Company, found industry='Insurance' already set. Extracted hq_location from source (was null). Updated only hq_location, left industry untouched."
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If agent did not load current Company state: missing_rule. If agent loaded state but overwrote anyway: associate_error."
+    },
+    {
+      "id": "EARLY_EXIT_WELL_POPULATED",
+      "name": "Skip Enrichment When Company Is Well-Populated",
+      "severity": "low",
+      "category": "enrichment",
+      "description": "If the Company already has 10+ non-null enrichable fields, CE should skip enrichment entirely. Diminishing returns make additional enrichment from each Touchpoint not worth the cost. CE should also skip when there is no company on the Touchpoint (internal touchpoint without customer link).",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Agent completed immediately when Touchpoint had no company field",
+          "Agent loaded the Company and counted enrichable fields before proceeding",
+          "Agent skipped enrichment when 10+ enrichable fields were already populated"
+        ],
+        "fail_conditions": [
+          "Agent attempted enrichment on a Touchpoint with no company",
+          "Agent did not check field count and enriched an already-rich Company",
+          "Agent processed the full source content for a Company with 10+ fields populated"
+        ]
+      },
+      "examples": {
+        "violation": "Company had 12 non-null enrichable fields. CE still read the meeting transcript and attempted extraction, finding nothing new to add",
+        "correct": "CE loaded Company, counted 11 populated enrichable fields, completed immediately without reading the source content"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If early exit was skipped: associate_error (wasted effort but no harm). If field count check was not performed: missing_rule."
+    },
+    {
+      "id": "NO_ENTITY_CREATION",
+      "name": "CE Only Updates Company — No Entity Creation",
+      "severity": "medium",
+      "category": "enrichment",
+      "description": "CE only updates the Company entity. It does not create Contacts, Operations, Signals, or any other entity type. That is IE's responsibility. CE is focused solely on enriching Company fields.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Only company update calls were made",
+          "No create calls for any entity type (Contact, Signal, Task, etc.)",
+          "Information that belongs on other entity types was not forced into Company fields"
+        ],
+        "fail_conditions": [
+          "CE created a Contact, Signal, Task, or any non-Company entity",
+          "CE forced operation-level data into Company fields (e.g., renewal volume as employee_count)",
+          "CE created a ReviewItem for data that IE should extract"
+        ]
+      },
+      "examples": {
+        "violation": "CE found '4000 renewals per year' in the transcript and set employee_count=4000 on the Company — that is operations data, not a Company field",
+        "correct": "CE found 'about 50 agents across 3 states' and set employee_count=50 — a direct statement about company size"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If CE created non-Company entities: associate_error. If CE forced data into wrong fields: associate_error."
+    }
+  ],
+  "severity_definitions": {
+    "high": "Failures corrupt Company data — overwriting authoritative values, populating fields from speculation, or missing source reads lead to unreliable Company records",
+    "medium": "Failures create entity boundary violations — CE doing IE's job or forcing data into wrong fields degrades system coherence",
+    "low": "Failures are efficiency issues — unnecessary work on well-populated Companies wastes resources but causes no data harm"
+  },
+  "status": "draft"
+}

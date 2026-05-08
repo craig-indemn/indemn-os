@@ -1,0 +1,145 @@
+{
+  "associate_name": "Slack Classifier",
+  "name": "SC Behavioral Rubric",
+  "description": "Slack Classifier evaluation rubric — noise filtering, Company resolution from unstructured text, thread context usage, classification accuracy",
+  "rules": [
+    {
+      "id": "NOISE_FILTERING",
+      "name": "Bot and Noise Message Filtering",
+      "severity": "high",
+      "category": "classification",
+      "description": "Bot messages, join/leave notifications, integration alerts, and very short reactions (ok, thanks, emoji-only) must be classified as irrelevant. These should be filtered early before Company resolution is attempted.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Bot-generated messages transitioned to irrelevant",
+          "Very short non-substantive messages (emoji, ok, thanks) transitioned to irrelevant",
+          "Automated report outputs transitioned to irrelevant even when they mention customer names",
+          "No Company resolution attempted for noise messages"
+        ],
+        "fail_conditions": [
+          "Bot notification classified as customer-relevant",
+          "Automated report output classified as customer-relevant despite being bot-generated",
+          "Company entity_resolve called for a message that is clearly noise"
+        ]
+      },
+      "examples": {
+        "violation": "SC classified a #test-reports automated weekly report as customer-relevant because it mentioned 'Insurica' in the report title",
+        "correct": "SC identified the message as a bot-generated report in #test-reports and transitioned to irrelevant without attempting Company resolution"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If the message was clearly bot-generated (format, channel, sender) but not filtered: missing_rule. If the message was ambiguous between bot and human content: skill_gap."
+    },
+    {
+      "id": "THREAD_CONTEXT_LOADED",
+      "name": "Thread Context Loaded for Threaded Messages",
+      "severity": "high",
+      "category": "classification",
+      "description": "When a message has thread_ts set (it is part of a thread), SC must load the thread via slackmessage list before classifying. Short replies like 'on it' or 'updating now' are only classifiable with the parent message that names the customer.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "When thread_ts is present, agent called slackmessage list with the thread_ts to load thread context",
+          "Classification decision incorporated thread context, not just the individual message",
+          "Standalone messages (no thread_ts) were classified without attempting thread load"
+        ],
+        "fail_conditions": [
+          "Agent classified a threaded reply without loading thread context",
+          "Agent marked a threaded reply as irrelevant when the parent message clearly referenced a customer",
+          "Agent called slackmessage list for a standalone message (wasted call)"
+        ]
+      },
+      "examples": {
+        "violation": "SC received message 'on it, will update the config now' with thread_ts set, classified as irrelevant without loading the parent message that said 'INSURICA needs their CTA button updated'",
+        "correct": "SC loaded thread context via slackmessage list, found parent message referencing INSURICA, classified the reply as customer-relevant with company=INSURICA"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If thread context was never loaded despite thread_ts being present: missing_rule. If thread was loaded but customer reference in parent was missed: associate_error."
+    },
+    {
+      "id": "COMPANY_RESOLUTION_FROM_TEXT",
+      "name": "Company Resolution Uses entity_resolve",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "When SC identifies a customer name in the message text, it must call company entity_resolve to link to an existing Company. SC must never auto-create Companies from Slack — Slack mentions are noisy and Company creation should come from stronger signals (email, meetings).",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Agent called company entity_resolve with the identified customer name",
+          "If resolve returned 1 candidate with score 1.0, agent linked to that Company",
+          "If resolve returned 0 candidates, agent classified with company=null (no auto-create)",
+          "No company create calls were made"
+        ],
+        "fail_conditions": [
+          "Agent created a new Company from a Slack message mention",
+          "Agent identified a customer name but did not call company entity_resolve",
+          "Agent set company to a string name instead of a resolved entity ID"
+        ]
+      },
+      "examples": {
+        "violation": "SC identified 'Alliance' in a Slack message and created a new Company entity instead of resolving to the existing Alliance Insurance",
+        "correct": "SC identified 'Alliance' in the message, called company entity_resolve with name 'Alliance', got 1 candidate (Alliance Insurance), linked the message to that Company ID"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If company create was called: missing_rule (hard rule violation). If entity_resolve was not called: missing_rule. If resolve returned 0 for a known company name (name mismatch): context_gap."
+    },
+    {
+      "id": "MULTI_CUSTOMER_HANDLING",
+      "name": "Multi-Customer Messages Link Primary and Flag Secondary",
+      "severity": "medium",
+      "category": "classification",
+      "description": "When a message mentions multiple customers (e.g., a status update covering several accounts), SC must link to the first/primary customer mentioned and create a ReviewItem noting the additional customers.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Company field set to the primary (first) customer mentioned",
+          "ReviewItem created noting the additional customer references",
+          "Message classified as customer-relevant (not irrelevant despite multi-customer ambiguity)"
+        ],
+        "fail_conditions": [
+          "Agent only linked one customer and silently dropped the others without a ReviewItem",
+          "Agent classified as irrelevant because of multi-customer ambiguity",
+          "Agent attempted to link multiple companies to a single SlackMessage entity"
+        ]
+      },
+      "examples": {
+        "violation": "SC received a status update mentioning Union General and Johnson Insurance, linked to Union General but did not create a ReviewItem for Johnson Insurance",
+        "correct": "SC linked to Union General (first mentioned), created ReviewItem noting Johnson Insurance also mentioned in the same update"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If ReviewItem was not created: missing_rule. If agent attempted multi-company linking: associate_error (not supported yet). If the secondary mention was too ambiguous to identify: skill_gap."
+    },
+    {
+      "id": "SCOPE_ALWAYS_INTERNAL",
+      "name": "Slack Scope Is Always Internal",
+      "severity": "medium",
+      "category": "classification",
+      "description": "All Slack messages are internal scope because only team members are in the workspace. SC must never set scope to external.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Scope field set to 'internal' on every classified SlackMessage",
+          "No scope determination logic attempted beyond setting internal"
+        ],
+        "fail_conditions": [
+          "Scope set to 'external' on any SlackMessage",
+          "Scope field missing from the update call"
+        ]
+      },
+      "examples": {
+        "violation": "SC set scope=external on a message in #customer-implementation because it discussed a customer",
+        "correct": "SC set scope=internal on a customer-related message in #customer-implementation — discussing customers does not make the Slack message external"
+      },
+      "outcome_check": {
+        "entity_type": "SlackMessage",
+        "check": {
+          "field": "scope",
+          "op": "eq",
+          "value": "internal"
+        }
+      },
+      "failure_attribution_guidance": "If scope was set to external: associate_error. If scope field was missing: associate_error."
+    }
+  ],
+  "severity_definitions": {
+    "high": "Failures create wrong Company links, miss customer-relevant messages, or create entities that should not exist — directly causes data quality issues",
+    "medium": "Failures produce incomplete classifications or miss secondary context — degrades quality but doesn't corrupt the entity graph",
+    "low": "Failures affect audit trail or metadata completeness — no impact on entity graph or downstream processing"
+  },
+  "status": "draft"
+}

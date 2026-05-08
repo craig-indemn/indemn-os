@@ -1,0 +1,184 @@
+{
+  "associate_name": "Meeting Classifier",
+  "name": "MC Behavioral Rubric",
+  "description": "Meeting Classifier evaluation rubric — attendee resolution, Company identification, scope determination, classification accuracy",
+  "rules": [
+    {
+      "id": "RESOLVE_BEFORE_CREATE",
+      "name": "Resolve Before Create on All Entities",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "MC must call entity_resolve for Employee, Contact, and Company before creating any new entity. This is the primary dedup defense — the skill's single most important rule.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Agent called employee entity_resolve for each participant before any contact entity_resolve",
+          "Agent called contact entity_resolve (by email) for non-Employee participants before any contact create",
+          "Agent called company entity_resolve (by domain) before any company create",
+          "If resolve returned 0 candidates, agent created the entity (correct auto-create)",
+          "If resolve returned 1 candidate with score 1.0, agent linked to existing entity"
+        ],
+        "fail_conditions": [
+          "Agent created Contact without calling contact entity_resolve first",
+          "Agent created Company without calling company entity_resolve first",
+          "Agent created an entity despite resolve returning a matching candidate (score 1.0)"
+        ]
+      },
+      "examples": {
+        "violation": "MC received meeting with participant david@armadillo.one, created a new Contact without calling entity_resolve — Contact already existed in the system",
+        "correct": "MC called employee entity_resolve for david@armadillo.one (0 candidates), then contact entity_resolve (1 candidate, score 1.0 matched on email), linked to existing Contact"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If resolve was never called: missing_rule. If resolve returned candidates but agent ignored them: associate_error. If resolve returned 0 for a known entity (data issue): context_gap."
+    },
+    {
+      "id": "EMPLOYEE_FIRST_RESOLUTION_ORDER",
+      "name": "Employee Resolution Precedes Contact Resolution",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "For each participant, MC must try Employee entity_resolve FIRST before Contact. @indemn.ai addresses match as Employees; the fallthrough to Contact only happens when Employee returns 0 candidates. Wrong order creates duplicate Contacts for Indemn team members.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "For every participant, employee entity_resolve was called before contact entity_resolve",
+          "@indemn.ai participants resolved as Employees and placed in attendees_employees",
+          "Non-@indemn.ai participants that returned 0 from employee entity_resolve proceeded to contact entity_resolve"
+        ],
+        "fail_conditions": [
+          "Agent called contact entity_resolve for a participant without first calling employee entity_resolve",
+          "@indemn.ai participant was resolved as Contact instead of Employee",
+          "Agent skipped employee entity_resolve entirely for any participant"
+        ]
+      },
+      "examples": {
+        "violation": "MC received participant kyle@indemn.ai, called contact entity_resolve first, created a Contact for an Indemn Employee",
+        "correct": "MC called employee entity_resolve for kyle@indemn.ai (1 candidate, Employee ID), recorded in attendees_employees. Then for external participant, employee entity_resolve returned 0, proceeded to contact entity_resolve"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If employee entity_resolve was never called for the participant: missing_rule. If called but result was misinterpreted: associate_error."
+    },
+    {
+      "id": "AMBIGUITY_HALTS_CLASSIFICATION",
+      "name": "Multiple 1.0 Candidates Trigger needs_review",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "When entity_resolve returns multiple candidates all with score 1.0, MC must NOT pick one. It must transition the meeting to needs_review. Ambiguous resolution is a human decision.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "When resolve returned multiple 1.0-score candidates, agent transitioned to needs_review",
+          "The needs_review reason included the candidate IDs for human review"
+        ],
+        "fail_conditions": [
+          "Agent picked one candidate when multiple 1.0-score candidates were returned",
+          "Agent created a new entity despite ambiguous resolve results",
+          "Agent continued classification without flagging the ambiguity"
+        ]
+      },
+      "examples": {
+        "violation": "Company entity_resolve returned 2 candidates both with score 1.0, MC picked the first one and classified the meeting",
+        "correct": "Company entity_resolve returned 2 candidates with score 1.0, MC transitioned to needs_review with reason listing both candidate IDs"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If agent did not check for multiple candidates: missing_rule. If agent saw multiple candidates but chose one anyway: associate_error."
+    },
+    {
+      "id": "SCOPE_DETERMINATION",
+      "name": "Correct Scope Classification",
+      "severity": "high",
+      "category": "classification",
+      "description": "Meeting scope must be set correctly: external when any participant resolves as Contact, internal when all resolve as Employee. Internal meetings still get classified — they are not skipped.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Scope is 'external' when at least one participant resolved as Contact",
+          "Scope is 'internal' when all participants resolved as Employee",
+          "Internal meetings were classified (not skipped or transitioned to needs_review)",
+          "Meeting update includes the scope field"
+        ],
+        "fail_conditions": [
+          "Scope set to 'internal' when external Contacts were present",
+          "Scope set to 'external' when all participants were Employees",
+          "Internal meeting was skipped or not classified",
+          "Scope field missing from the meeting update"
+        ]
+      },
+      "examples": {
+        "violation": "Meeting with Kyle (Employee) and David Wellner (Contact at Armadillo) was classified as scope=internal",
+        "correct": "Meeting with all @indemn.ai participants classified as scope=internal, company=null, attendees_employees populated, transitioned to classified"
+      },
+      "outcome_check": {
+        "entity_type": "Meeting",
+        "check": {
+          "field": "scope",
+          "op": "in",
+          "value": ["external", "internal"]
+        }
+      },
+      "failure_attribution_guidance": "If scope was set incorrectly despite correct participant resolution: associate_error. If participant resolution was wrong leading to wrong scope: trace back to the resolution rule that failed."
+    },
+    {
+      "id": "RESOLVE_ERROR_HALTS",
+      "name": "Resolve Errors Are Showstoppers",
+      "severity": "high",
+      "category": "entity_resolution",
+      "description": "If any entity_resolve call returns an error (not 0 candidates — an actual error), MC must halt and transition to needs_review with the verbatim error message. Never fall through to create on a failed resolve.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "When entity_resolve returned an error, agent halted further processing",
+          "Agent transitioned to needs_review with verbatim error in the reason field",
+          "No entity creation was attempted after a resolve error"
+        ],
+        "fail_conditions": [
+          "Agent continued processing after a resolve error",
+          "Agent created an entity after resolve errored (treated error as 0 candidates)",
+          "Agent did not include the verbatim error in the needs_review reason"
+        ]
+      },
+      "examples": {
+        "violation": "Employee entity_resolve returned a 500 error, MC treated it as 0 candidates and proceeded to contact entity_resolve",
+        "correct": "Employee entity_resolve returned a connection error, MC immediately transitioned meeting to needs_review with reason 'Employee entity-resolve failed: connection timeout at ...'"
+      },
+      "outcome_check": null,
+      "failure_attribution_guidance": "If agent did not check for errors: missing_rule. If agent misinterpreted an error as an empty result: associate_error. If the error was transient infrastructure: context_gap."
+    },
+    {
+      "id": "CLASSIFICATION_COMPLETENESS",
+      "name": "Meeting Update Contains All Required Fields",
+      "severity": "medium",
+      "category": "classification",
+      "description": "The meeting update call must include company, attendees_contacts, attendees_employees, and scope. Missing fields create incomplete classifications that break downstream processing.",
+      "evaluation_criteria": {
+        "pass_conditions": [
+          "Meeting update includes 'company' field (ID or null for internal)",
+          "Meeting update includes 'attendees_contacts' array",
+          "Meeting update includes 'attendees_employees' array",
+          "Meeting update includes 'scope' field",
+          "Every resolved participant appears in exactly one attendee array",
+          "Participants with attended=false are still included in attendee arrays"
+        ],
+        "fail_conditions": [
+          "Meeting update missing any of the four required fields",
+          "A resolved participant is missing from both attendee arrays",
+          "A participant appears in both attendees_contacts and attendees_employees",
+          "Participants with attended=false were excluded from attendee arrays"
+        ]
+      },
+      "examples": {
+        "violation": "MC updated the meeting with company and scope but omitted attendees_employees, leaving it as the default empty array",
+        "correct": "MC updated meeting with all four fields: company=Armadillo ID, attendees_contacts=[David's ID], attendees_employees=[Kyle's ID, Marlon's ID], scope=external"
+      },
+      "outcome_check": {
+        "entity_type": "Meeting",
+        "check": {
+          "field": "attendees_employees",
+          "op": "not_empty",
+          "value": true
+        }
+      },
+      "failure_attribution_guidance": "If a field was omitted from the update call: associate_error. If the field was included but empty because resolution failed upstream: trace to the resolution failure."
+    }
+  ],
+  "severity_definitions": {
+    "high": "Failures create duplicate entities, wrong classifications, or corrupt the customer graph — directly causes data quality issues downstream",
+    "medium": "Failures create incomplete but not wrong classifications — degrades downstream processing but doesn't corrupt data",
+    "low": "Failures affect audit trail or secondary metadata — no impact on entity graph or downstream processing"
+  },
+  "status": "draft"
+}
