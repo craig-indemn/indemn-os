@@ -157,12 +157,13 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         depth: int = typer.Option(1, "--depth", help="Resolve related entities (1-5)"),
         include_related: bool = typer.Option(False, "--include-related"),
         version: int = typer.Option(None, "--version", help="Get at specific version (for versioned entities)"),
+        raw: bool = typer.Option(False, "--raw", help="Show full entity with all internal fields"),
         fmt: str = typer.Option("json", "--format"),
     ):
-        """Get entity by ID with optional related entity resolution."""
+        """Get entity by ID. Strips internal fields by default (use --raw for full dump)."""
         if version is not None:
             result = client.get(f"/api/_eval/versions/{name}/{entity_id}/at/{version}")
-            render(result, fmt)
+            render(result, fmt, raw=raw)
             return
         params = {}
         if depth > 1:
@@ -170,7 +171,7 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         if include_related:
             params["include_related"] = "true"
         result = client.get(f"/api/{slug}/{entity_id}", params=params)
-        render(result, fmt)
+        render(result, fmt, raw=raw)
 
     @entity_app.command("create")
     def create_cmd(

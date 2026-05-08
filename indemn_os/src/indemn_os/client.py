@@ -135,9 +135,34 @@ _INFRASTRUCTURE_FIELDS = {
     "revision_id",
 }
 
+_CLEAN_STRIP_FIELDS = {
+    "org_id",
+    "version",
+    "revision_id",
+    "created_by",
+    "updated_at",
+}
 
-def render(data, fmt: str = "json"):
-    """Render output in the requested format."""
+
+def clean_entity(data):
+    """Strip internal infrastructure fields from entity data for clean output.
+
+    Keeps _id (useful for referencing), created_at (useful for timing),
+    and all domain fields. Strips org_id, version, created_by, updated_at,
+    revision_id.
+    """
+    if isinstance(data, dict):
+        return {k: clean_entity(v) for k, v in data.items()
+                if k not in _CLEAN_STRIP_FIELDS}
+    if isinstance(data, list):
+        return [clean_entity(item) for item in data]
+    return data
+
+
+def render(data, fmt: str = "json", raw: bool = False):
+    """Render output in the requested format. Strips internal fields unless raw=True."""
+    if not raw:
+        data = clean_entity(data)
     if fmt == "json":
         print(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode())
     elif fmt == "table":

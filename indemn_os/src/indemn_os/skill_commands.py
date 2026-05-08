@@ -29,12 +29,19 @@ def list_skills(
 @skill_app.command("get")
 def get_skill(
     name: str,
+    raw: bool = typer.Option(False, "--raw", help="Show full entity JSON"),
     fmt: str = typer.Option("json", "--format"),
 ):
-    """Get a skill by name."""
+    """Get a skill by name. Returns content directly (use --raw for full entity)."""
     client = CLIClient()
     result = client.get(f"/api/skills/by-name/{name}")
-    render(result, fmt)
+    if raw or fmt != "json":
+        render(result, fmt)
+    else:
+        if isinstance(result, dict):
+            typer.echo(result.get("content", ""))
+        else:
+            render(result, fmt)
 
 
 @skill_app.command("create")
