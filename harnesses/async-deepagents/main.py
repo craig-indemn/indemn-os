@@ -116,6 +116,29 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
             "trigger_schedule": associate.get("trigger_schedule"),
         }
 
+    # For Trace entities (evaluator processing), inject only metadata.
+    # The full trace data (messages, child_runs) is too large to inline —
+    # the evaluator loads it via its skill procedure.
+    if entity_type == "Trace":
+        trace = indemn("trace", "get", entity_id)
+        return {
+            "_entity_type": "Trace",
+            "_id": trace.get("_id"),
+            "associate_id": trace.get("associate_id"),
+            "associate_name": trace.get("associate_name"),
+            "entity_type": trace.get("entity_type"),
+            "entity_id": trace.get("entity_id"),
+            "correlation_id": trace.get("correlation_id"),
+            "name": trace.get("name"),
+            "execution_status": trace.get("execution_status"),
+            "status": trace.get("status"),
+            "prompt_tokens": trace.get("prompt_tokens"),
+            "total_tokens": trace.get("total_tokens"),
+            "duration_ms": trace.get("duration_ms"),
+            "child_runs_count": len(trace.get("child_runs", [])),
+            "messages_count": len(trace.get("messages", [])),
+        }
+
     entity_slug = entity_type.lower()
     context = indemn(
         entity_slug, "get", entity_id, "--depth", "2", "--include-related"
@@ -159,8 +182,8 @@ async def _create_trace(
         "entity_id": str(input.entity_id),
         "name": f"{associate.get('name', 'agent')} → {input.entity_type} {str(input.entity_id)[:8]}",
         "run_type": "chain",
-        "inputs": {"role": "user", "content": "Process this work: <entity context>"},
-        "outputs": {"messages_count": len(messages), "tools_used": tools_used},
+        "inputs": serialized[0] if serialized else {},
+        "outputs": serialized[-1] if serialized else {},
         "messages": serialized,
         "child_runs": child_runs,
         "tags": [

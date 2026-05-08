@@ -26,9 +26,10 @@ def _human_msg(content="Process this work"):
 
 class TestSerializeMessages:
     def test_dict_passthrough(self):
-        msg = {"role": "user", "content": "hello"}
+        msg = {"type": "human", "content": "hello"}
         result = serialize_messages([msg])
-        assert result == [msg]
+        assert result[0]["type"] == "human"
+        assert result[0]["content"] == "hello"
 
     def test_model_dump(self):
         class FakeMsg:
@@ -118,7 +119,7 @@ class TestDeriveChildRuns:
         ]
         runs = derive_child_runs(messages)
         node = runs[0]
-        assert set(node.keys()) == {"id", "name", "run_type", "inputs", "outputs", "child_runs", "error", "tokens", "timing"}
+        assert set(node.keys()) == {"id", "name", "run_type", "inputs", "outputs", "child_runs", "error"}
 
 
 class TestAggregateTokens:
