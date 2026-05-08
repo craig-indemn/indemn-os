@@ -469,30 +469,48 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         log.info("Agent completed: %d messages, tools=%s", len(messages), tools_used)
 
         # Rebuild the run tree from the flat traced_runs list.
-        # RunCollectorCallbackHandler persists runs as they complete (leaves
-        # first, root last). The persisted copies have shallow child_runs —
-        # we need to reconstruct the parent-child hierarchy ourselves.
+        # RunCollectorCallbackHandler persists copies with shallow child_runs.
+        # Convert to plain dicts and reconstruct the parent-child hierarchy.
         _collected_run = None
         if _run_collector.traced_runs:
-            runs_by_id = {str(getattr(r, "id", "")): r for r in _run_collector.traced_runs}
-            children_map: dict[str, list] = {}
+            from types import SimpleNamespace
+            flat = []
             for r in _run_collector.traced_runs:
-                pid = getattr(r, "parent_run_id", None)
-                if pid:
-                    children_map.setdefault(str(pid), []).append(r)
-            for r in _run_collector.traced_runs:
-                r.child_runs = children_map.get(str(getattr(r, "id", "")), [])
+                flat.append({
+                    "id": str(getattr(r, "id", "")),
+                    "parent_run_id": str(getattr(r, "parent_run_id", "")) if getattr(r, "parent_run_id", None) else None,
+                    "name": getattr(r, "name", "unknown"),
+                    "run_type": getattr(r, "run_type", "chain"),
+                    "inputs": getattr(r, "inputs", {}) or {},
+                    "outputs": getattr(r, "outputs", {}) or {},
+                    "error": getattr(r, "error", None),
+                    "start_time": getattr(r, "start_time", None),
+                    "end_time": getattr(r, "end_time", None),
+                    "child_runs": [],
+                })
 
-            for r in reversed(_run_collector.traced_runs):
-                if getattr(r, "parent_run_id", None) is None:
-                    _collected_run = r
+            by_id = {d["id"]: d for d in flat}
+            for d in flat:
+                if d["parent_run_id"] and d["parent_run_id"] in by_id:
+                    by_id[d["parent_run_id"]]["child_runs"].append(d)
+
+            root_dict = None
+            for d in flat:
+                if d["parent_run_id"] is None:
+                    root_dict = d
                     break
-            if not _collected_run:
-                _collected_run = _run_collector.traced_runs[-1]
-            log.info("RunCollector: %d runs captured, root=%s children=%d",
-                     len(_run_collector.traced_runs),
-                     getattr(_collected_run, "name", "?"),
-                     len(getattr(_collected_run, "child_runs", []) or []))
+
+            if root_dict:
+                _collected_run = SimpleNamespace(**root_dict)
+                # Recursively convert children to SimpleNamespace
+                def _to_ns(d):
+                    ns = SimpleNamespace(**d)
+                    ns.child_runs = [_to_ns(c) for c in d.get("child_runs", [])]
+                    return ns
+                _collected_run = _to_ns(root_dict)
+                log.info("RunCollector: %d runs, root=%s children=%d",
+                         len(flat), root_dict["name"],
+                         len(root_dict["child_runs"]))
 
         # Create durable Trace entity (non-blocking)
         try:
