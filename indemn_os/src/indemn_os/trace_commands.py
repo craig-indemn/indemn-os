@@ -85,6 +85,19 @@ def create_trace(
     render(result)
 
 
+@trace_app.command("update")
+def update_trace(
+    trace_id: str,
+    data: str = typer.Option(..., "--data", help="JSON fields to update"),
+):
+    """Update Trace entity fields."""
+    import orjson
+
+    client = CLIClient()
+    result = client.put(f"/api/traces/{trace_id}", json=orjson.loads(data))
+    render(result)
+
+
 @trace_app.command("transition")
 def transition_trace(
     trace_id: str,
