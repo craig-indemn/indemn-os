@@ -162,19 +162,42 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         render(result, fmt)
 
     @entity_app.command("create")
-    def create_cmd(data: str = typer.Option(..., "--data")):
-        """Create entity. Data as JSON string."""
+    def create_cmd(
+        data: str = typer.Option(None, "--data"),
+        data_file: str = typer.Option(None, "--data-file", "--content-from-file",
+                                       help="Path to JSON file"),
+    ):
+        """Create entity. Data as JSON string or from file."""
         import orjson
 
-        result = client.post(f"/api/{slug}/", json=orjson.loads(data))
+        if data_file:
+            with open(data_file, "r") as f:
+                payload = orjson.loads(f.read())
+        elif data:
+            payload = orjson.loads(data)
+        else:
+            raise typer.BadParameter("Either --data or --data-file is required")
+        result = client.post(f"/api/{slug}/", json=payload)
         render(result, "json")
 
     @entity_app.command("update")
-    def update_cmd(entity_id: str, data: str = typer.Option(..., "--data")):
+    def update_cmd(
+        entity_id: str,
+        data: str = typer.Option(None, "--data"),
+        data_file: str = typer.Option(None, "--data-file", "--content-from-file",
+                                       help="Path to JSON file"),
+    ):
         """Update entity fields."""
         import orjson
 
-        result = client.put(f"/api/{slug}/{entity_id}", json=orjson.loads(data))
+        if data_file:
+            with open(data_file, "r") as f:
+                payload = orjson.loads(f.read())
+        elif data:
+            payload = orjson.loads(data)
+        else:
+            raise typer.BadParameter("Either --data or --data-file is required")
+        result = client.put(f"/api/{slug}/{entity_id}", json=payload)
         render(result, "json")
 
     if meta.get("state_machine"):

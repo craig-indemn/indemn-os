@@ -148,7 +148,9 @@ async def trigger_eval_run(
             return {"error": f"No OS Traces found matching experiment runs (checked {len(ls_run_ids)} LangSmith runs)"}
         filter_criteria["experiment"] = experiment_ref
 
-    # Prospective mode: read TestSet items, not existing traces
+    # Prospective mode: run the associate on TestSet inputs, then evaluate
+    # the resulting traces. Two-phase: pipeline associate runs → creates
+    # Trace → evaluator watch fires → evaluates against rubric + criteria.
     elif trigger_mode == "prospective":
         test_set_id = body.get("test_set_id")
         test_set_coll = db["test_sets"]
@@ -239,13 +241,34 @@ async def trigger_eval_run(
     # Create queue messages via Message schema (proper formatting)
     run_id_str = str(run_id)
     if trigger_mode == "prospective":
+        # Prospective: create test entities, then send to the pipeline
+        # associate's role. The associate processes them → creates Traces →
+        # evaluator watch fires → evaluates against rubric + TestSet criteria.
+        associate_role = await db["roles"].find_one({"_id": {"$in": [ObjectId(r) for r in associate_doc.get("role_ids", [])]}})
+        if not associate_role:
+            return {"error": f"No role found for associate '{associate_name}'", "run_id": str(run_id)}
+        target_role = associate_role.get("name", "")
+
         for item in test_items:
+            inputs = item.get("inputs", {})
+            entity_type = inputs.get("entity_type", "Email")
+            entity_data = inputs.get("entity_data", {})
+
+            entity_cls = ENTITY_REGISTRY.get(entity_type)
+            if not entity_cls:
+                logger.warning("Prospective: entity type %s not registered, skipping", entity_type)
+                continue
+
+            test_entity = entity_cls(org_id=org_id, **entity_data)
+            entity_msgs = await test_entity.save_tracked(method="create")
+            _fire_dispatch(entity_msgs)
+
             msg = Message(
                 org_id=org_id,
-                entity_type="Trace",
-                entity_id=ObjectId(),
+                entity_type=entity_type,
+                entity_id=test_entity.id,
                 event_type="prospective_eval",
-                target_role="evaluator",
+                target_role=target_role,
                 correlation_id=run_id_str,
                 causation_id=run_id_str,
                 depth=0,
@@ -596,3 +619,92 @@ async def eval_stats(
     ]
     results = await coll.aggregate(pipeline).to_list(length=100)
     return _safe(results)
+
+
+@eval_router.get("/rubric/{rubric_id}/versions")
+async def rubric_versions(
+    rubric_id: str,
+    actor=Depends(get_current_actor),
+):
+    """List version history for a rubric from the changes collection."""
+    org_id = current_org_id.get()
+    db = get_database()
+
+    changes = (
+        await db["changes"]
+        .find(
+            {"org_id": org_id, "entity_type": "Rubric", "entity_id": ObjectId(rubric_id)},
+        )
+        .sort("timestamp", -1)
+        .to_list(length=100)
+    )
+
+    versions = []
+    for change in changes:
+        version_entry = {
+            "version": None,
+            "change_type": change.get("change_type"),
+            "timestamp": change.get("timestamp"),
+            "actor_id": str(change.get("actor_id", "")),
+            "effective_actor_id": str(change.get("effective_actor_id", "")),
+        }
+        for field_change in change.get("changes", []):
+            if field_change.get("field") == "version":
+                version_entry["version"] = field_change.get("new_value")
+            if field_change.get("field") == "rules":
+                version_entry["rules_changed"] = True
+            if field_change.get("field") == "status":
+                version_entry["status_from"] = field_change.get("old_value")
+                version_entry["status_to"] = field_change.get("new_value")
+        if change.get("change_type") == "create":
+            version_entry["version"] = 1
+        versions.append(version_entry)
+
+    return _safe(versions)
+
+
+@eval_router.get("/rubric/{rubric_id}/at-version/{version}")
+async def rubric_at_version(
+    rubric_id: str,
+    version: int,
+    actor=Depends(get_current_actor),
+):
+    """Reconstruct a rubric at a specific version from the changes collection."""
+    org_id = current_org_id.get()
+    db = get_database()
+    RubricCls = ENTITY_REGISTRY.get("Rubric")
+    if not RubricCls:
+        return {"error": "Rubric entity not registered"}
+
+    current = await RubricCls.get_motor_collection().find_one(
+        {"_id": ObjectId(rubric_id), "org_id": org_id}
+    )
+    if not current:
+        return {"error": "Rubric not found"}
+
+    current_version = current.get("version", 1)
+    if version == current_version:
+        return _safe(current)
+    if version > current_version:
+        return {"error": f"Version {version} does not exist (current: {current_version})"}
+
+    changes = (
+        await db["changes"]
+        .find(
+            {"org_id": org_id, "entity_type": "Rubric", "entity_id": ObjectId(rubric_id)},
+        )
+        .sort("timestamp", -1)
+        .to_list(length=100)
+    )
+
+    doc = dict(current)
+    for change in changes:
+        doc_version = doc.get("version", 1)
+        if doc_version <= version:
+            break
+        for field_change in change.get("changes", []):
+            field = field_change.get("field")
+            if field and field in doc:
+                doc[field] = field_change.get("old_value")
+
+    return _safe(doc)

@@ -523,6 +523,107 @@ register_sweep(cleanup_expired_attentions)
 register_sweep(handle_zombie_sessions)
 
 
+# --- Cascade completion detection ---
+
+
+_CASCADE_IDLE_SECONDS = 120
+
+
+@register_sweep
+async def check_cascade_completion():
+    """Detect completed cascades and create cascade-level evaluator messages.
+
+    A cascade is "complete" when all messages sharing a correlation_id have
+    reached terminal status (completed/failed/dead_letter) and no new messages
+    have been created for that correlation_id within the idle threshold.
+
+    Creates a single evaluator message per completed cascade with
+    event_type=cascade_eval, so the evaluator can assess the full cascade.
+    """
+    from kernel_entities.trace import Trace
+
+    now = datetime.now(timezone.utc)
+    idle_cutoff = now - timedelta(seconds=_CASCADE_IDLE_SECONDS)
+
+    pipeline = [
+        {"$match": {"correlation_id": {"$ne": None, "$exists": True}}},
+        {"$group": {
+            "_id": "$correlation_id",
+            "total": {"$sum": 1},
+            "pending": {"$sum": {"$cond": [{"$eq": ["$status", "pending"]}, 1, 0]}},
+            "processing": {"$sum": {"$cond": [{"$eq": ["$status", "processing"]}, 1, 0]}},
+            "parked": {"$sum": {"$cond": [{"$eq": ["$status", "parked"]}, 1, 0]}},
+            "last_created": {"$max": "$created_at"},
+            "roles": {"$addToSet": "$target_role"},
+        }},
+        {"$match": {
+            "pending": 0,
+            "processing": 0,
+            "parked": 0,
+            "last_created": {"$lt": idle_cutoff},
+        }},
+        {"$limit": 20},
+    ]
+
+    completed_cascades = await Message.get_motor_collection().aggregate(pipeline).to_list(length=20)
+
+    for cascade in completed_cascades:
+        corr_id = cascade["_id"]
+        if not corr_id or corr_id.startswith("reemit:"):
+            continue
+
+        existing_eval = await Message.get_motor_collection().find_one({
+            "correlation_id": corr_id,
+            "event_type": "cascade_eval",
+            "target_role": "evaluator",
+        })
+        if existing_eval:
+            continue
+
+        traces = await Trace.get_motor_collection().find(
+            {"correlation_id": corr_id}
+        ).to_list(length=50)
+        if not traces:
+            continue
+
+        org_id = traces[0].get("org_id")
+        if not org_id:
+            continue
+
+        from kernel_entities.role import Role
+        from kernel_entities.actor import Actor
+
+        evaluator_role = await Role.get_motor_collection().find_one(
+            {"org_id": org_id, "name": "evaluator"}
+        )
+        if not evaluator_role:
+            continue
+
+        active_evaluator = await Actor.get_motor_collection().find_one(
+            {"org_id": org_id, "role_ids": evaluator_role["_id"], "status": "active"}
+        )
+        if not active_evaluator:
+            continue
+
+        msg = Message(
+            org_id=org_id,
+            entity_type="Trace",
+            entity_id=traces[0]["_id"],
+            event_type="cascade_eval",
+            target_role="evaluator",
+            correlation_id=corr_id,
+            causation_id=corr_id,
+            depth=0,
+            context={
+                "cascade_correlation_id": corr_id,
+                "trace_ids": [str(t["_id"]) for t in traces],
+                "trace_count": len(traces),
+            },
+        )
+        await msg.insert()
+        logger.info("Cascade eval triggered for correlation_id=%s (%d traces)", corr_id, len(traces))
+
+
 # --- Sweep loop ---
 
 

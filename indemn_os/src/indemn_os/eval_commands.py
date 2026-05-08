@@ -145,3 +145,19 @@ def eval_stats(
         params["group_by"] = group_by
     result = client.get("/api/_eval/stats", params=params)
     render(result)
+
+
+@eval_app.command("rubric-versions")
+def rubric_versions(rubric_id: str):
+    """List version history for a rubric."""
+    client = CLIClient()
+    result = client.get(f"/api/_eval/rubric/{rubric_id}/versions")
+    render(result)
+
+
+@eval_app.command("rubric-at-version")
+def rubric_at_version(rubric_id: str, version: int = typer.Option(..., "--version")):
+    """Get a rubric at a specific version."""
+    client = CLIClient()
+    result = client.get(f"/api/_eval/rubric/{rubric_id}/at-version/{version}")
+    render(result)

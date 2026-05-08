@@ -352,6 +352,25 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
 
         log.info("LangSmith sync: %d feedback entries synced to run %s", synced, ls_run_id)
 
+        # Update Trace.feedback_stats with aggregated scores
+        feedback_stats = {}
+        for result in eval_results:
+            for score_entry in result.get("rubric_scores", []):
+                rid = score_entry.get("rule_id", "unknown")
+                feedback_stats[rid] = {
+                    "score": score_entry.get("score", 0.0),
+                    "passed": score_entry.get("passed", False),
+                }
+            feedback_stats["evaluation_passed"] = {
+                "score": 1.0 if result.get("passed") else 0.0,
+                "passed": result.get("passed", False),
+            }
+        try:
+            indemn("trace", "update", trace_entity_id,
+                   "--data", json.dumps({"feedback_stats": feedback_stats}))
+        except CLIError as e:
+            log.warning("Failed to update Trace.feedback_stats: %s", e)
+
     await asyncio.to_thread(_sync_feedback, langsmith_run_id, results, evaluator_run_id)
 
 
