@@ -397,8 +397,8 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                         "entity_type": input.entity_type,
                         "entity_id": str(input.entity_id),
                         "runtime_id": str(runtime_id),
-                        "correlation_id": os.environ.get("INDEMN_CAUSATION_MESSAGE_ID"),
-                        "thread_id": os.environ.get("INDEMN_CAUSATION_MESSAGE_ID"),
+                        "correlation_id": input.correlation_id,
+                        "thread_id": input.correlation_id,
                     },
                     "tags": [
                         f"associate:{associate.get('name', 'unknown')}",
@@ -445,12 +445,14 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         log.info("Agent completed: %d messages, tools=%s", len(messages), tools_used)
 
         # Create durable Trace entity (non-blocking)
-        _correlation_id = os.environ.get("INDEMN_CAUSATION_MESSAGE_ID")
+        # Use input.correlation_id (cascade chain), NOT input.message_id
+        # (per-message unique). INDEMN_CAUSATION_MESSAGE_ID is for CLI
+        # causation tracking — different purpose.
         try:
             await _create_trace(
                 input, associate, messages, tools_used,
                 _langsmith_run_id, _start_time, _start_ts,
-                correlation_id=_correlation_id,
+                correlation_id=input.correlation_id,
             )
         except Exception as e:
             log.warning("Trace creation failed (non-blocking): %s", e)
@@ -499,7 +501,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             await _create_trace(
                 input, associate, [], [],
                 _langsmith_run_id, _start_time, _start_ts,
-                correlation_id=os.environ.get("INDEMN_CAUSATION_MESSAGE_ID"),
+                correlation_id=input.correlation_id,
                 execution_status="error", error_msg=str(e)[:500],
             )
         except Exception:
