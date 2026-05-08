@@ -213,7 +213,7 @@ async def _create_trace(
     log.info("Trace created for %s -> %s %s", associate.get("name"), input.entity_type, str(input.entity_id)[:8])
 
 
-async def _sync_eval_to_langsmith(trace_entity_id: str):
+async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | None = None):
     """Sync evaluation results to LangSmith after evaluator completes.
 
     Called when entity_type == "Trace" — the evaluator processed a Trace.
@@ -252,25 +252,36 @@ async def _sync_eval_to_langsmith(trace_entity_id: str):
 
     log.info("LangSmith sync: found %d results, syncing feedback", len(results))
 
-    def _sync_feedback(ls_run_id, eval_results):
+    def _sync_feedback(ls_run_id, eval_results, source_run_id):
         client = Client()
         synced = 0
         for result in eval_results:
+            eval_result_id = result.get("_id", "")
+            eval_run_id = result.get("run_id", "")
             for score_entry in result.get("rubric_scores", []):
                 try:
-                    client.create_feedback(
-                        run_id=ls_run_id,
-                        key=score_entry.get("rule_id", "unknown"),
-                        score=score_entry.get("score", 0.0),
-                        comment=score_entry.get("reasoning", ""),
-                    )
+                    fb_kwargs = {
+                        "run_id": ls_run_id,
+                        "key": score_entry.get("rule_id", "unknown"),
+                        "score": score_entry.get("score", 0.0),
+                        "comment": score_entry.get("reasoning", ""),
+                        "feedback_source_type": "model",
+                    }
+                    if source_run_id:
+                        fb_kwargs["source_run_id"] = source_run_id
+                    if eval_result_id or eval_run_id:
+                        fb_kwargs["source_info"] = {
+                            "evaluation_result_id": eval_result_id,
+                            "evaluation_run_id": eval_run_id,
+                        }
+                    client.create_feedback(**fb_kwargs)
                     synced += 1
                 except Exception as e:
                     log.warning("LangSmith feedback failed for rule %s: %s",
                                 score_entry.get("rule_id"), e)
-        log.info("LangSmith sync: %d feedback entries synced to run %s", synced, ls_run_id)
+        log.info("LangSmith sync: %d feedback entries synced to run %s (source=%s)", synced, ls_run_id, source_run_id)
 
-    await asyncio.to_thread(_sync_feedback, langsmith_run_id, results)
+    await asyncio.to_thread(_sync_feedback, langsmith_run_id, results, evaluator_run_id)
 
 
 @activity.defn
@@ -553,7 +564,10 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             # Sync evaluation results to LangSmith for evaluator runs
             if input.entity_type == "Trace":
                 try:
-                    await _sync_eval_to_langsmith(str(input.entity_id))
+                    await _sync_eval_to_langsmith(
+                        str(input.entity_id),
+                        evaluator_run_id=str(_langsmith_run_id),
+                    )
                 except Exception as e:
                     log.warning("LangSmith eval sync failed (non-blocking): %s", e)
 
