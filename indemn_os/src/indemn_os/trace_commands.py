@@ -43,10 +43,19 @@ def list_traces(
 
 
 @trace_app.command("get")
-def get_trace(trace_id: str):
+def get_trace(
+    trace_id: str,
+    depth: int = typer.Option(1, "--depth", help="Resolve related entities (1-5)"),
+    include_related: bool = typer.Option(False, "--include-related"),
+):
     """Get a Trace entity by ID."""
     client = CLIClient()
-    result = client.get(f"/api/traces/{trace_id}")
+    params: dict = {}
+    if depth > 1:
+        params["depth"] = depth
+    if include_related:
+        params["include_related"] = "true"
+    result = client.get(f"/api/traces/{trace_id}", params=params)
     render(result)
 
 
