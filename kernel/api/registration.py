@@ -461,12 +461,24 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         data = await _resolve_relationship_dict_inputs(entity_cls, entity_name, data)
         data = _coerce_objectid_fields(entity_cls, data)
         data = _coerce_datetime_fields(entity_cls, data)
+        updated_fields = {}
         for key, value in data.items():
             if key not in ("id", "_id", "org_id", "version"):
                 setattr(entity, key, value)
+                updated_fields[key] = value
         created_messages = await entity.save_tracked()
         _fire_dispatch(created_messages)
-        return to_dict(entity)
+        result = {
+            "_id": str(entity.id),
+            "_entity_type": entity_name,
+            "updated": list(updated_fields.keys()),
+        }
+        for k, v in updated_fields.items():
+            if isinstance(v, ObjectId):
+                result[k] = str(v)
+            else:
+                result[k] = v
+        return result
 
     @router.post("/{entity_id}/transition")
     async def transition_entity(
