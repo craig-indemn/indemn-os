@@ -81,6 +81,40 @@ def _truncate_large_fields(data: dict, threshold: int = _TRUNCATE_THRESHOLD) -> 
     return data
 
 
+def _format_context_xml(data: dict, entity_type: str) -> str:
+    """Format entity context dict as XML for the agent's user message."""
+    if not isinstance(data, dict):
+        return str(data)
+
+    tag = entity_type.lower() if entity_type else "entity"
+    entity_id = data.get("_id", "")
+    short_id = entity_id[:8] if isinstance(entity_id, str) and len(entity_id) > 8 else entity_id
+
+    lines = [f"<{tag} id=\"{short_id}\">"]
+    for k, v in data.items():
+        if v is None or v == "" or v == [] or v == {}:
+            continue
+        if isinstance(v, dict):
+            lines.append(f"  <{k}>")
+            for dk, dv in v.items():
+                if dv is not None and dv != "":
+                    lines.append(f"    <{dk}>{dv}</{dk}>")
+            lines.append(f"  </{k}>")
+        elif isinstance(v, list):
+            if all(isinstance(i, str) for i in v):
+                lines.append(f"  <{k}>{', '.join(v)}</{k}>")
+            else:
+                lines.append(f"  <{k}>{v}</{k}>")
+        elif isinstance(v, str) and len(v) > 200:
+            lines.append(f"  <{k}>")
+            lines.append(v)
+            lines.append(f"  </{k}>")
+        else:
+            lines.append(f"  <{k}>{v}</{k}>")
+    lines.append(f"</{tag}>")
+    return "\n".join(lines)
+
+
 def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> dict:
     """Build the agent's working context dict from the message's
     `(entity_type, entity_id)`.
@@ -567,12 +601,14 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                 _heartbeat_with_status_check("agent_running")
             )
 
+            context_str = _format_context_xml(context, input.entity_type)
+
             result = await agent.ainvoke(
                 {
                     "messages": [
                         {
                             "role": "user",
-                            "content": f"Process this work:\n\n{context}",
+                            "content": f"Process this work:\n\n{context_str}",
                         }
                     ],
                 },

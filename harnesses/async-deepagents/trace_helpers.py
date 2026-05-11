@@ -114,6 +114,9 @@ def _serialize_message(msg) -> dict:
         if field == "content":
             if isinstance(val, list):
                 result[field] = val
+                text_parts = [p.get("text", "") for p in val if isinstance(p, dict) and p.get("text")]
+                if text_parts:
+                    result["content_text"] = "\n".join(text_parts)
             elif val:
                 result[field] = str(val)
             else:
