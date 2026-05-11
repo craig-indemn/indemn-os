@@ -61,62 +61,38 @@ class ExecuteErrorStatusMiddleware(AgentMiddleware):
 
 DEFAULT_PROMPT = (
     "You are an Indemn OS Associate.\n\n"
-    "Your work follows this order on every task:\n"
-    "  1. Load your operating skill(s) via `execute('indemn skill get <name>')`\n"
-    "     (the names are listed in the 'Your Operating Skill' section below). "
-    "These define the procedure for the kind of work you do.\n"
-    "  2. Follow your operating skill's instructions. If it says to run a rules\n"
-    "     check first (e.g., `auto-classify --auto`), do that BEFORE loading\n"
-    "     entity skills. If rules handle the work, you're done — no entity\n"
-    "     skills needed.\n"
-    "  3. Only if the operating skill requires full reasoning: load entity\n"
+    "Your context contains two sections:\n"
+    "- <skill> — your operating instructions. Follow them.\n"
+    "- <entity> — the entity you are processing.\n\n"
+    "Your work follows this order:\n"
+    "  1. Read your skill in the context — it defines your procedure.\n"
+    "  2. Follow the skill's instructions. If it says to run a rules\n"
+    "     check first (e.g., `auto-classify --auto`), do that BEFORE\n"
+    "     loading entity skills. If rules handle the work, you're done.\n"
+    "  3. Only if the skill requires full reasoning: load entity\n"
     "     skill(s) via `execute('indemn skill get <EntityName>')` for each\n"
     "     entity type you'll touch.\n"
-    "  4. Use the todo tool to plan every step your operating skill prescribes "
-    "for this work item. Be specific: name the CLI calls, the decision points, "
-    "the expected outcomes. The plan IS the procedure made concrete.\n"
+    "  4. Use the todo tool to plan every step your skill prescribes.\n"
     "  5. Execute the plan via `indemn` CLI calls. Update todos as you "
     "complete each step.\n\n"
     "RULES:\n"
     "- ALWAYS use execute for entity operations — entity data lives in the OS, "
     "never in files.\n"
-    "- ALWAYS load your operating skill first — it tells you what to do.\n"
-    "- If your skill has a rules/auto-classify check, run it BEFORE loading "
-    "entity skills. Skip entity skills entirely if rules handle the work.\n"
+    "- Your skill in the context takes precedence over these general guidelines.\n"
     "- write_file is fine for intermediate scratch (notes, drafts) but "
     "never for entity data — that goes through the CLI.\n"
     "- NEVER use task subagents for entity lookups.\n"
     "- Lead with the action. Be concise.\n"
 )
 
-OPERATING_SKILL_SECTION = (
-    "\n\n## Your Operating Skill{plural}\n\n"
-    "Step 1 of every task: run these CLI calls to load your operating "
-    "instructions:\n"
-    "{calls}\n"
-    "These skills define WHO you are and HOW you process this kind of work. "
-    "They take precedence over the general guidance above when they conflict.\n"
-)
-
 
 def build_system_prompt(associate: dict) -> str:
-    """Compose the system prompt: base prompt + per-associate skill section.
+    """Compose the system prompt.
 
     base = `associate.prompt` if set (operator override), else DEFAULT_PROMPT.
-    Suffix lists the associate's skill refs with the exact `execute(...)`
-    invocations the agent should make in step 1 of its procedure. Empty
-    skills list → no suffix appended.
+    Skills are included in the user message context, not the system prompt.
     """
-    base = associate.get("prompt") or DEFAULT_PROMPT
-    skill_refs = associate.get("skills") or []
-    if not skill_refs:
-        return base
-    calls = "\n".join(f"  execute('indemn skill get {ref}')" for ref in skill_refs)
-    suffix = OPERATING_SKILL_SECTION.format(
-        plural="s" if len(skill_refs) > 1 else "",
-        calls=calls,
-    )
-    return base + suffix
+    return associate.get("prompt") or DEFAULT_PROMPT
 
 
 def build_agent(

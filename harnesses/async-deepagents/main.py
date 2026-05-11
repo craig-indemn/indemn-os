@@ -52,15 +52,16 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
     }
 
 
-_TRUNCATE_THRESHOLD = 1000
+_FIELD_TRUNCATE_LIMIT = 20_000
 
 
-def _truncate_large_fields(data: dict, threshold: int = _TRUNCATE_THRESHOLD) -> dict:
-    """Truncate large string fields in entity context to keep initial LLM
-    context lean. The agent can always read the full entity via CLI if
-    it needs more detail.
+def _truncate_large_fields(data: dict, threshold: int = _FIELD_TRUNCATE_LIMIT) -> dict:
+    """Safety truncation on individual string fields to prevent
+    dangerously large context injection (spam emails, huge HTML bodies).
 
-    Modifies the dict in place and returns it."""
+    20K per field preserves virtually all real content. Anything beyond
+    is almost certainly noise. The agent can read full content via CLI.
+    """
     if not isinstance(data, dict):
         return data
     for key, value in data.items():
@@ -81,16 +82,15 @@ def _truncate_large_fields(data: dict, threshold: int = _TRUNCATE_THRESHOLD) -> 
     return data
 
 
-def _format_context_xml(data: dict, entity_type: str) -> str:
-    """Format entity context dict as XML for the agent's user message."""
+def _format_entity_xml(data: dict, entity_type: str) -> str:
+    """Format entity context dict as XML."""
     if not isinstance(data, dict):
         return str(data)
 
     tag = entity_type.lower() if entity_type else "entity"
     entity_id = data.get("_id", "")
-    short_id = entity_id[:8] if isinstance(entity_id, str) and len(entity_id) > 8 else entity_id
 
-    lines = [f"<{tag} id=\"{short_id}\">"]
+    lines = [f"<{tag} id=\"{entity_id}\">"]
     for k, v in data.items():
         if v is None or v == "" or v == [] or v == {}:
             continue
@@ -115,31 +115,36 @@ def _format_context_xml(data: dict, entity_type: str) -> str:
     return "\n".join(lines)
 
 
+def _build_context_with_skills(entity_data: dict, entity_type: str, associate: dict) -> str:
+    """Build the full initial context: skills + entity, formatted as XML sections."""
+    parts = ["<context>"]
+
+    skill_refs = associate.get("skills") or []
+    for ref in skill_refs:
+        try:
+            skill = indemn("skill", "get", ref)
+            content = skill.get("content", "") if isinstance(skill, dict) else str(skill)
+            parts.append(f'<skill name="{ref}">')
+            parts.append(content)
+            parts.append("</skill>")
+            parts.append("")
+        except CLIError as e:
+            log.warning("Failed to load skill %s: %s", ref, e)
+
+    parts.append(_format_entity_xml(entity_data, entity_type))
+    parts.append("</context>")
+    return "\n".join(parts)
+
+
 def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> dict:
-    """Build the agent's working context dict from the message's
-    `(entity_type, entity_id)`.
+    """Load the entity the associate will process.
 
-    Watch-driven messages — `entity_type` is a real domain or kernel entity
-    (`Email`, `Meeting`, `Touchpoint`, …) — load the focus entity via the CLI
-    with `--depth 2 --include-related` so the agent has both forward and
-    reverse relationship context for its working set.
+    One path for all entity types — load the full entity with
+    relationships. Safety truncation at 20K per field prevents
+    dangerously large content injection.
 
-    Synthetic kernel-internal messages — `entity_type` starts with `_` —
-    skip the entity-load. The leading underscore is the kernel's convention
-    for "this is not a real entity type" (currently `_scheduled` from
-    `kernel/queue_processor.py::check_scheduled_associates`; reserved for
-    future synthetic types like `_circuit_broken`, `_zombie_recovery`).
-    There is no `indemn _<sentinel>` CLI command; running it would
-    `CLIError`. Instead build a trigger descriptor — event name, the actor
-    `entity_id` points at, plus the actor's identity and schedule — so the
-    agent's prompt has structured context for what fired this run.
-
-    Bug #41 fix shape (framing B): honor the `_` sentinel. Watch-driven
-    behavior is unchanged; the helper just routes between the two cases.
-    The Bug #41 row in `os-learnings.md` documents the full reasoning,
-    including why this was preferred over framing A (changing the kernel
-    sweep to `entity_type="Actor"`) and framing C (a separate
-    `ScheduledActorWorkflow` with its own harness activity).
+    Synthetic kernel-internal messages (`_scheduled`, etc.) get a
+    trigger descriptor instead of entity data.
     """
     if entity_type.startswith("_"):
         return {
@@ -151,43 +156,25 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
             "trigger_schedule": associate.get("trigger_schedule"),
         }
 
-    if entity_type == "Trace":
-        trace = indemn("trace", "get", entity_id)
-        ctx = {
-            "_entity_type": "Trace",
-            "_id": trace.get("_id"),
-            "associate_id": trace.get("associate_id"),
-            "associate_name": trace.get("associate_name"),
-            "entity_type": trace.get("entity_type"),
-            "entity_id": trace.get("entity_id"),
-            "correlation_id": trace.get("correlation_id"),
-            "name": trace.get("name"),
-            "execution_status": trace.get("execution_status"),
-            "status": trace.get("status"),
-            "prompt_tokens": trace.get("prompt_tokens"),
-            "total_tokens": trace.get("total_tokens"),
-            "duration_ms": trace.get("duration_ms"),
-            "messages_count": len(trace.get("messages", [])),
-            "child_runs_count": len(trace.get("child_runs", [])),
-        }
-        msg_id = os.environ.get("INDEMN_CAUSATION_MESSAGE_ID")
-        if msg_id:
-            try:
-                msg = indemn("queue", "get", msg_id)
-                msg_context = msg.get("context") or {}
-                if msg_context.get("run_id"):
-                    ctx["run_id"] = msg_context["run_id"]
-                if msg_context.get("rubric_ids"):
-                    ctx["rubric_ids"] = msg_context["rubric_ids"]
-            except CLIError:
-                pass
-        return ctx
-
     entity_slug = entity_type.lower()
     context = indemn(
         entity_slug, "get", entity_id, "--depth", "2", "--include-related"
     )
-    return _truncate_large_fields(context)
+    context = _truncate_large_fields(context)
+
+    msg_id = os.environ.get("INDEMN_CAUSATION_MESSAGE_ID")
+    if msg_id:
+        try:
+            msg = indemn("queue", "get", msg_id)
+            msg_context = msg.get("context") or {}
+            if msg_context.get("run_id"):
+                context["run_id"] = msg_context["run_id"]
+            if msg_context.get("rubric_ids"):
+                context["rubric_ids"] = msg_context["rubric_ids"]
+        except CLIError:
+            pass
+
+    return context
 
 
 async def _create_trace(
@@ -601,7 +588,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                 _heartbeat_with_status_check("agent_running")
             )
 
-            context_str = _format_context_xml(context, input.entity_type)
+            context_str = _build_context_with_skills(context, input.entity_type, associate)
 
             result = await agent.ainvoke(
                 {
