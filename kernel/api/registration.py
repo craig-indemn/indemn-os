@@ -482,10 +482,16 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         reason = data.get("reason")
         if not to:
             raise HTTPException(400, "'to' state is required")
+        from_state = getattr(entity, getattr(entity_cls, "_state_field_name", "status"), None)
         entity.transition_to(to, reason)
         created_messages = await entity.save_tracked(method="transition")
         _fire_dispatch(created_messages)
-        return to_dict(entity)
+        return {
+            "_id": str(entity.id),
+            "_entity_type": entity_name,
+            "transitioned": f"{from_state} → {to}",
+            "status": to,
+        }
 
     @router.post("/{entity_id}/reprocess")
     async def reprocess_entity(
