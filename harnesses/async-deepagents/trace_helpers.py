@@ -133,7 +133,7 @@ def _serialize_message(msg) -> dict:
             result[field] = dict(val) if hasattr(val, "items") else val
         elif field == "additional_kwargs" and val:
             result[field] = dict(val) if hasattr(val, "items") else val
-        elif val is not None and val != "" and val != []:
+        elif val is not None and val != "":
             result[field] = val
 
     if "type" not in result:
