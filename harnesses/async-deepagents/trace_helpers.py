@@ -93,72 +93,63 @@ def serialize_run_tree(run) -> list[dict]:
     return steps
 
 
-def _clean_message(msg) -> dict:
-    """Extract only the evaluation-relevant fields from a LangChain message.
+def _serialize_message(msg) -> dict:
+    """Serialize a LangChain message to a dict matching LangSmith's shape.
 
-    Strips internal metadata (additional_kwargs, response_metadata,
-    usage_metadata) that bloats the trace without helping evaluation.
-    Keeps: type, content, tool_calls (cleaned), tool_call_id, name, status.
+    Preserves ALL fields — content, tool_calls, additional_kwargs,
+    response_metadata, usage_metadata, id, status, invalid_tool_calls.
+    This is the durable execution record for RL training + audit.
     """
     if isinstance(msg, dict):
-        mtype = msg.get("type", "unknown")
-        result = {"type": mtype}
-        if msg.get("content"):
-            result["content"] = msg["content"]
-        if msg.get("tool_calls"):
-            result["tool_calls"] = [
-                {"name": tc.get("name", ""), "args": tc.get("args", {}), "id": tc.get("id", "")}
-                for tc in msg["tool_calls"]
+        return msg
+
+    result = {}
+
+    for field in ("type", "content", "id", "name", "status",
+                  "tool_call_id", "tool_calls", "invalid_tool_calls",
+                  "additional_kwargs", "response_metadata", "usage_metadata"):
+        val = getattr(msg, field, None)
+        if val is None:
+            continue
+        if field == "content":
+            if isinstance(val, list):
+                result[field] = val
+            elif val:
+                result[field] = str(val)
+            else:
+                result[field] = ""
+        elif field == "tool_calls" and val:
+            result[field] = [
+                {
+                    "name": tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", ""),
+                    "args": tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {}),
+                    "id": tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
+                }
+                for tc in val
             ]
-        if msg.get("tool_call_id"):
-            result["tool_call_id"] = msg["tool_call_id"]
-        if msg.get("name"):
-            result["name"] = msg["name"]
-        if msg.get("status") and msg["status"] != "success":
-            result["status"] = msg["status"]
-        return result
+        elif field == "usage_metadata" and val:
+            result[field] = dict(val) if hasattr(val, "items") else val
+        elif field == "response_metadata" and val:
+            result[field] = dict(val) if hasattr(val, "items") else val
+        elif field == "additional_kwargs" and val:
+            result[field] = dict(val) if hasattr(val, "items") else val
+        elif val is not None and val != "" and val != []:
+            result[field] = val
 
-    mtype = getattr(msg, "type", "unknown")
-    result = {"type": mtype}
-
-    content = getattr(msg, "content", "")
-    if content:
-        result["content"] = str(content)
-
-    tool_calls = getattr(msg, "tool_calls", [])
-    if tool_calls:
-        result["tool_calls"] = [
-            {
-                "name": tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", ""),
-                "args": tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {}),
-                "id": tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
-            }
-            for tc in tool_calls
-        ]
-
-    tool_call_id = getattr(msg, "tool_call_id", "")
-    if tool_call_id:
-        result["tool_call_id"] = tool_call_id
-
-    name = getattr(msg, "name", "")
-    if name:
-        result["name"] = name
-
-    status = getattr(msg, "status", "success")
-    if status != "success":
-        result["status"] = status
+    if "type" not in result:
+        result["type"] = "unknown"
 
     return result
 
 
 def serialize_messages(messages: list) -> list[dict]:
-    """Serialize LangChain messages to clean dicts for Trace storage.
+    """Serialize LangChain messages to dicts matching LangSmith's shape.
 
-    Strips internal LangChain metadata (additional_kwargs, response_metadata,
-    usage_metadata). Keeps only what matters for evaluation: the conversation
-    flow (type, content, tool_calls, tool results).
+    Preserves everything — full execution record for RL training,
+    evaluation, and audit. Matches the root run outputs.messages
+    structure in LangSmith.
     """
-    return [_clean_message(msg) for msg in messages]
+    return [_serialize_message(msg) for msg in messages]
 
 
 def derive_child_runs(messages: list) -> list[dict]:
