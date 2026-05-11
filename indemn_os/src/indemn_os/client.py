@@ -159,16 +159,12 @@ def clean_entity(data):
     return data
 
 
-_LONG_TEXT_THRESHOLD = 200
-
-
-def _format_md_value(value, indent=0):
-    """Format a value for markdown output."""
-    prefix = "  " * indent
+def _format_xml_value(value, indent=0):
+    """Format a value as XML content."""
     if value is None:
         return ""
     if isinstance(value, bool):
-        return "yes" if value else "no"
+        return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, str):
@@ -176,87 +172,88 @@ def _format_md_value(value, indent=0):
     if isinstance(value, list):
         if not value:
             return ""
-        if all(isinstance(v, str) for v in value):
-            if len(value) <= 3 and all(len(v) < 40 for v in value):
-                return ", ".join(value)
-            return "\n" + "\n".join(f"{prefix}- {v}" for v in value)
-        if all(isinstance(v, dict) for v in value):
-            parts = []
-            for i, item in enumerate(value):
-                parts.append("")
-                parts.append(_format_md_dict(item, indent + 1))
-            return "\n".join(parts)
-        return ", ".join(str(v) for v in value)
+        prefix = "  " * indent
+        parts = []
+        for item in value:
+            if isinstance(item, dict):
+                parts.append(_format_xml_dict(item, indent))
+            else:
+                parts.append(f"{prefix}<item>{item}</item>")
+        return "\n".join(parts)
     if isinstance(value, dict):
-        return "\n" + _format_md_dict(value, indent + 1)
+        return _format_xml_dict(value, indent)
     return str(value)
 
 
-def _format_md_dict(data, indent=0):
-    """Format a dict as markdown key-value pairs."""
+def _format_xml_dict(data, indent=0):
+    """Format a dict as XML elements."""
     prefix = "  " * indent
     lines = []
-    long_fields = []
 
     for k, v in data.items():
-        if v is None or v == [] or v == {} or v == "":
+        if v is None or v == "" or v == [] or v == {}:
             continue
 
-        if isinstance(v, str) and len(v) > _LONG_TEXT_THRESHOLD:
-            long_fields.append((k, v))
-            continue
-
-        formatted = _format_md_value(v, indent)
-        if "\n" in formatted:
-            lines.append(f"{prefix}**{k}:**{formatted}")
+        if isinstance(v, dict):
+            inner = _format_xml_dict(v, indent + 1)
+            lines.append(f"{prefix}<{k}>")
+            lines.append(inner)
+            lines.append(f"{prefix}</{k}>")
+        elif isinstance(v, list):
+            if not v:
+                continue
+            lines.append(f"{prefix}<{k}>")
+            inner_prefix = "  " * (indent + 1)
+            for item in v:
+                if isinstance(item, dict):
+                    lines.append(_format_xml_dict(item, indent + 1))
+                else:
+                    lines.append(f"{inner_prefix}<item>{item}</item>")
+            lines.append(f"{prefix}</{k}>")
+        elif isinstance(v, str) and len(v) > 200:
+            lines.append(f"{prefix}<{k}>")
+            lines.append(v)
+            lines.append(f"{prefix}</{k}>")
         else:
-            lines.append(f"{prefix}**{k}:** {formatted}")
-
-    for k, v in long_fields:
-        lines.append("")
-        lines.append(f"{prefix}**{k}:**")
-        lines.append(v)
+            lines.append(f"{prefix}<{k}>{v}</{k}>")
 
     return "\n".join(lines)
 
 
-def _format_md_entity(data):
-    """Format a single entity as markdown."""
-    entity_type = data.pop("_entity_type", None)
+def _format_xml_entity(data):
+    """Format a single entity as XML."""
+    entity_type = data.pop("_entity_type", None) or "entity"
     entity_id = data.get("_id", "")
     short_id = entity_id[:8] if isinstance(entity_id, str) and len(entity_id) > 8 else entity_id
 
-    if entity_type:
-        header = f"# {entity_type} {short_id}"
-    elif entity_id:
-        header = f"# {short_id}"
-    else:
-        header = ""
-
-    body = _format_md_dict(data)
-    return f"{header}\n\n{body}" if header else body
+    lines = [f"<{entity_type} id=\"{short_id}\">"]
+    lines.append(_format_xml_dict(data, 1))
+    lines.append(f"</{entity_type}>")
+    return "\n".join(lines)
 
 
-def _format_md_list(data):
-    """Format a list of entities as markdown."""
+def _format_xml_list(data):
+    """Format a list of entities as XML."""
     if not data:
-        return "(empty)"
-    if all(isinstance(item, dict) for item in data):
-        parts = []
-        for item in data:
+        return "<results />"
+    lines = ["<results>"]
+    for item in data:
+        if isinstance(item, dict):
+            entity_type = item.pop("_entity_type", None) or "item"
             entity_id = item.get("_id", "")
             short_id = entity_id[:8] if isinstance(entity_id, str) and len(entity_id) > 8 else entity_id
             name = item.get("name") or item.get("subject") or item.get("associate_name") or ""
             status = item.get("status", "")
-
-            summary_parts = [f"**{short_id}**"]
+            attrs = f' id="{short_id}"'
             if name:
-                summary_parts.append(name)
+                attrs += f' name="{name}"'
             if status:
-                summary_parts.append(f"({status})")
-            parts.append(" — ".join(summary_parts))
-        return "\n".join(parts)
-    return "\n".join(f"- {item}" for item in data)
+                attrs += f' status="{status}"'
+            lines.append(f"  <{entity_type}{attrs} />")
+        else:
+            lines.append(f"  <item>{item}</item>")
+    lines.append("</results>")
+    return "\n".join(lines)
 
 
 def render(data, fmt: str = "json", raw: bool = False):
@@ -272,8 +269,8 @@ def render(data, fmt: str = "json", raw: bool = False):
         return
 
     if isinstance(data, dict):
-        print(_format_md_entity(data))
+        print(_format_xml_entity(data))
     elif isinstance(data, list):
-        print(_format_md_list(data))
+        print(_format_xml_list(data))
     else:
         print(data)
