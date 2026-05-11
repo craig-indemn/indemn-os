@@ -644,12 +644,27 @@ class GoogleWorkspaceAdapter(Adapter):
 
         walk_parts(parts)
 
-        # Prefer plain text, fall back to HTML
+        # Prefer plain text, fall back to HTML with tags stripped
         if text_parts:
             return "\n".join(text_parts)
         if html_parts:
-            return "\n".join(html_parts)
+            return self._strip_html("\n".join(html_parts))
         return ""
+
+    @staticmethod
+    def _strip_html(html_content: str) -> str:
+        """Strip HTML tags and decode entities to plain text."""
+        import re
+        from html import unescape
+        text = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<br\s*/?\s*>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r'</?p[^>]*>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r'</?div[^>]*>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = unescape(text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
 
     def _has_attachments(self, payload: dict) -> bool:
         """Check if the message has file attachments."""
