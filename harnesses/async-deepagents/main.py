@@ -250,7 +250,7 @@ async def _create_trace(
     }
 
     payload = json.dumps(trace_data, default=str)
-    if len(payload) > 800_000:
+    if len(payload) > 200_000:
         import tempfile
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write(payload)

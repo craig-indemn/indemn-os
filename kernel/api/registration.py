@@ -16,6 +16,7 @@ entity-definition iteration safe without a process restart.
 import asyncio
 from typing import Optional
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from kernel.api.serialize import to_dict
