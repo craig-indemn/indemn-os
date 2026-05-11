@@ -20,19 +20,20 @@ async def auto_classify(entity, config: dict, org_id) -> dict:
         )
 
         if result["matched"] and not result["vetoed"]:
-            # Deterministic match
             return {
                 "needs_reasoning": False,
                 "result": result["winning_rule"]["sets"],
-                "rule_evaluation": result,
+                "matched_rule": result["winning_rule"]["name"],
             }
         else:
             return {
                 "needs_reasoning": True,
                 "reason": result.get("reason", "no_match"),
                 "veto_reason": result.get("veto_reason"),
-                "attempted_rules": result.get("attempted_rules", []),
-                "rule_evaluation": result,
+                "attempted_rules": [
+                    {"name": r["name"], "matched": r["matched"]}
+                    for r in result.get("attempted_rules", [])
+                ],
             }
 
 
