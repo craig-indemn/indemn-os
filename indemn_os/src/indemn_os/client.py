@@ -224,9 +224,8 @@ def _format_xml_entity(data):
     """Format a single entity as XML."""
     entity_type = data.pop("_entity_type", None) or "entity"
     entity_id = data.get("_id", "")
-    short_id = entity_id[:8] if isinstance(entity_id, str) and len(entity_id) > 8 else entity_id
 
-    lines = [f"<{entity_type} id=\"{short_id}\">"]
+    lines = [f"<{entity_type} id=\"{entity_id}\">"]
     lines.append(_format_xml_dict(data, 1))
     lines.append(f"</{entity_type}>")
     return "\n".join(lines)
@@ -241,10 +240,9 @@ def _format_xml_list(data):
         if isinstance(item, dict):
             entity_type = item.pop("_entity_type", None) or "item"
             entity_id = item.get("_id", "")
-            short_id = entity_id[:8] if isinstance(entity_id, str) and len(entity_id) > 8 else entity_id
             name = item.get("name") or item.get("subject") or item.get("associate_name") or ""
             status = item.get("status", "")
-            attrs = f' id="{short_id}"'
+            attrs = f' id="{entity_id}"'
             if name:
                 attrs += f' name="{name}"'
             if status:
