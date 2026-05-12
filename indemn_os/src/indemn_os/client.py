@@ -144,16 +144,25 @@ _CLEAN_STRIP_FIELDS = {
 }
 
 
+_TRACE_STRIP_FIELDS = {"inputs", "outputs", "child_runs"}
+
+
 def clean_entity(data):
     """Strip internal infrastructure fields from entity data for clean output.
 
     Keeps _id (useful for referencing), created_at (useful for timing),
     and all domain fields. Strips org_id, version, created_by, updated_at,
     revision_id.
+
+    For Trace entities: also strips inputs, outputs, child_runs — redundant
+    with the messages array. Matches what the evaluator sees.
     """
     if isinstance(data, dict):
+        skip = _CLEAN_STRIP_FIELDS
+        if "messages" in data and "trace_id" in data:
+            skip = skip | _TRACE_STRIP_FIELDS
         return {k: clean_entity(v) for k, v in data.items()
-                if k not in _CLEAN_STRIP_FIELDS}
+                if k not in skip}
     if isinstance(data, list):
         return [clean_entity(item) for item in data]
     return data
