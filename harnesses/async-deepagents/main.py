@@ -162,6 +162,7 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
     )
     context = _truncate_large_fields(context)
 
+    log.info("_load_message_context: entity_type=%r, keys=%s", entity_type, list(context.keys())[:5])
     if entity_type == "Trace":
         removed = []
         for field in ("inputs", "outputs", "child_runs"):
