@@ -97,18 +97,27 @@ def get_run(run_id: str):
 
 @eval_app.command("results")
 def get_results(
-    run_id: str,
+    run_id: str = typer.Argument(None, help="Optional run ID — omit to query all results"),
+    associate: str = typer.Option(None, "--associate", help="Filter by associate name"),
     failed_only: bool = typer.Option(False, "--failed-only"),
     rule: str = typer.Option(None, "--rule", help="Filter by specific rule ID"),
+    since: str = typer.Option(None, "--since", help="Time window (e.g. 24h, 7d)"),
+    limit: int = typer.Option(100, "--limit"),
 ):
-    """Get per-item results for an evaluation run."""
+    """Query evaluation results. Run ID is optional — omit to query across all results."""
     client = CLIClient()
-    params: dict = {}
+    params: dict = {"limit": limit}
+    if run_id:
+        params["run_id"] = run_id
+    if associate:
+        params["associate_name"] = associate
     if failed_only:
         params["failed_only"] = "true"
     if rule:
         params["rule_id"] = rule
-    result = client.get(f"/api/_eval/runs/{run_id}/results", params=params)
+    if since:
+        params["since"] = since
+    result = client.get("/api/_eval/runs/results", params=params)
     render(result)
 
 

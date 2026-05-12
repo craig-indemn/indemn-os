@@ -361,30 +361,40 @@ async def get_eval_run(
     return _safe(run)
 
 
+@eval_router.get("/runs/results")
 @eval_router.get("/runs/{run_id}/results")
 async def get_eval_results(
-    run_id: str,
+    run_id: str = None,
+    associate_name: str = Query(None),
     failed_only: str = Query(None),
     rule_id: str = Query(None),
+    since: str = Query(None),
+    limit: int = Query(100),
     actor=Depends(get_current_actor),
 ):
-    """Per-item results for an evaluation run."""
+    """Query evaluation results. Works with or without a run_id."""
     org_id = current_org_id.get()
     EvalResultCls = ENTITY_REGISTRY.get("EvaluationResult")
     if not EvalResultCls:
         return {"error": "EvaluationResult entity not registered"}
 
-    query: dict = {"org_id": org_id, "run_id": ObjectId(run_id)}
+    query: dict = {"org_id": org_id}
+    if run_id:
+        query["run_id"] = ObjectId(run_id)
+    if associate_name:
+        query["associate_name"] = associate_name
     if failed_only == "true":
         query["passed"] = False
     if rule_id:
         query["rubric_scores.rule_id"] = rule_id
+    if since:
+        query["created_at"] = {"$gte": _parse_since(since)}
 
     results = (
         await EvalResultCls.get_motor_collection()
         .find(query)
         .sort("created_at", -1)
-        .to_list(length=500)
+        .to_list(length=limit)
     )
     return _safe(results)
 
@@ -638,14 +648,14 @@ async def eval_stats(
     group_by: str = Query(None),
     actor=Depends(get_current_actor),
 ):
-    """Aggregate evaluation stats across runs."""
+    """Aggregate evaluation stats from EvaluationResults directly."""
     org_id = current_org_id.get()
-    EvalRunCls = ENTITY_REGISTRY.get("EvaluationRun")
-    if not EvalRunCls:
-        return {"error": "EvaluationRun entity not registered"}
-    coll = EvalRunCls.get_motor_collection()
+    EvalResultCls = ENTITY_REGISTRY.get("EvaluationResult")
+    if not EvalResultCls:
+        return {"error": "EvaluationResult entity not registered"}
+    coll = EvalResultCls.get_motor_collection()
 
-    match: dict = {"org_id": org_id, "status": "completed"}
+    match: dict = {"org_id": org_id}
     if associate_name:
         match["associate_name"] = associate_name
     if since:
@@ -654,14 +664,17 @@ async def eval_stats(
     if group_by == "rule":
         pipeline = [
             {"$match": match},
-            {"$project": {"scores_by_rule": {"$objectToArray": "$scores_by_rule"}}},
-            {"$unwind": "$scores_by_rule"},
+            {"$unwind": "$rubric_scores"},
             {"$group": {
-                "_id": "$scores_by_rule.k",
-                "avg_pass_rate": {"$avg": "$scores_by_rule.v.pass_rate"},
-                "runs": {"$sum": 1},
+                "_id": "$rubric_scores.rule_id",
+                "total": {"$sum": 1},
+                "passed": {"$sum": {"$cond": ["$rubric_scores.passed", 1, 0]}},
+                "failed": {"$sum": {"$cond": ["$rubric_scores.passed", 0, 1]}},
             }},
-            {"$sort": {"avg_pass_rate": 1}},
+            {"$addFields": {
+                "pass_rate": {"$round": [{"$divide": ["$passed", "$total"]}, 4]},
+            }},
+            {"$sort": {"pass_rate": 1}},
         ]
         results = await coll.aggregate(pipeline).to_list(length=100)
         return _safe(results)
@@ -669,14 +682,14 @@ async def eval_stats(
     if group_by == "failure_attribution":
         pipeline = [
             {"$match": match},
-            {"$project": {"failure_attribution": {"$objectToArray": "$failure_attribution"}}},
-            {"$unwind": "$failure_attribution"},
+            {"$unwind": "$rubric_scores"},
+            {"$match": {"rubric_scores.passed": False}},
             {"$group": {
-                "_id": "$failure_attribution.k",
-                "total_count": {"$sum": "$failure_attribution.v"},
-                "runs": {"$sum": 1},
+                "_id": {"$ifNull": ["$rubric_scores.failure_attribution", "unattributed"]},
+                "count": {"$sum": 1},
+                "rules": {"$addToSet": "$rubric_scores.rule_id"},
             }},
-            {"$sort": {"total_count": -1}},
+            {"$sort": {"count": -1}},
         ]
         results = await coll.aggregate(pipeline).to_list(length=100)
         return _safe(results)
@@ -685,13 +698,14 @@ async def eval_stats(
         {"$match": match},
         {"$group": {
             "_id": "$associate_name",
-            "runs": {"$sum": 1},
-            "avg_pass_rate": {"$avg": "$pass_rate"},
-            "total_evaluated": {"$sum": "$total"},
-            "total_passed": {"$sum": "$passed"},
-            "total_failed": {"$sum": "$failed"},
+            "total": {"$sum": 1},
+            "passed": {"$sum": {"$cond": ["$passed", 1, 0]}},
+            "failed": {"$sum": {"$cond": ["$passed", 0, 1]}},
         }},
-        {"$sort": {"avg_pass_rate": 1}},
+        {"$addFields": {
+            "pass_rate": {"$round": [{"$divide": ["$passed", "$total"]}, 4]},
+        }},
+        {"$sort": {"pass_rate": 1}},
     ]
     results = await coll.aggregate(pipeline).to_list(length=100)
     return _safe(results)
