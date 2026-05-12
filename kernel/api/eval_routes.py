@@ -17,7 +17,109 @@ from kernel.context import current_org_id
 from kernel.db import ENTITY_REGISTRY, get_database
 from kernel.message.schema import Message
 
+from kernel.watch.evaluator import evaluate_condition
+
 logger = logging.getLogger(__name__)
+
+
+async def evaluate_outcome_checks(data: dict) -> dict:
+    """Run outcome checks server-side when an EvaluationResult is created.
+
+    Loads the rubric(s) referenced in rubric_scores, finds rules with
+    outcome_check definitions, loads the target entity, evaluates each
+    check using the kernel condition evaluator, and populates the
+    outcome_checks array. Recomputes the overall `passed` field.
+    """
+    rubric_scores = data.get("rubric_scores") or []
+    entity_type = data.get("entity_type")
+    entity_id = data.get("entity_id")
+
+    if not rubric_scores or not entity_type or not entity_id:
+        return data
+
+    rubric_ids = set()
+    for score in rubric_scores:
+        rid = score.get("rubric_id")
+        if rid:
+            rubric_ids.add(str(rid))
+
+    if not rubric_ids:
+        return data
+
+    RubricCls = ENTITY_REGISTRY.get("Rubric")
+    if not RubricCls:
+        return data
+
+    rules_with_checks = []
+    for rid in rubric_ids:
+        try:
+            rubric = await RubricCls.get_motor_collection().find_one({"_id": ObjectId(rid)})
+        except Exception:
+            continue
+        if not rubric:
+            continue
+        for rule in (rubric.get("rules") or []):
+            oc = rule.get("outcome_check")
+            if oc and isinstance(oc, dict) and oc.get("check"):
+                rules_with_checks.append(rule)
+
+    if not rules_with_checks:
+        return data
+
+    entity_data = None
+    entity_slug = entity_type.lower()
+    EntityCls = ENTITY_REGISTRY.get(entity_type)
+    if EntityCls:
+        try:
+            entity = await EntityCls.get_motor_collection().find_one({"_id": ObjectId(str(entity_id))})
+            if entity:
+                entity_data = {k: v for k, v in entity.items() if not k.startswith("_") or k == "_id"}
+        except Exception as e:
+            logger.warning("outcome_check: failed to load %s %s: %s", entity_type, entity_id, e)
+
+    if not entity_data:
+        return data
+
+    outcome_checks = []
+    for rule in rules_with_checks:
+        oc = rule["outcome_check"]
+        check = oc["check"]
+        field = check.get("field", "?")
+        op = check.get("op", "?")
+        expected = check.get("value")
+
+        try:
+            passed = evaluate_condition(check, entity_data)
+        except Exception as e:
+            outcome_checks.append({
+                "rule_id": rule.get("id"),
+                "entity_type": oc.get("entity_type", entity_type),
+                "check": check,
+                "passed": False,
+                "actual_value": None,
+                "reasoning": f"Condition evaluation error: {e}",
+            })
+            continue
+
+        actual = entity_data.get(field)
+        actual_display = str(actual)[:100] if actual is not None else "null"
+
+        outcome_checks.append({
+            "rule_id": rule.get("id"),
+            "entity_type": oc.get("entity_type", entity_type),
+            "check": check,
+            "passed": passed,
+            "actual_value": actual_display,
+            "reasoning": f"field '{field}' is {actual_display} — {op} {expected} → {'pass' if passed else 'fail'}",
+        })
+
+    data["outcome_checks"] = outcome_checks
+
+    rubric_passed = data.get("rubric_passed", True)
+    all_outcomes_passed = all(oc["passed"] for oc in outcome_checks)
+    data["passed"] = rubric_passed and all_outcomes_passed
+
+    return data
 
 eval_router = APIRouter(prefix="/api/_eval", tags=["eval"])
 

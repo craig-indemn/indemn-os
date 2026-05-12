@@ -431,6 +431,11 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         data = await _resolve_relationship_dict_inputs(entity_cls, entity_name, data)
         data = _coerce_objectid_fields(entity_cls, data)
         data = _coerce_datetime_fields(entity_cls, data)
+
+        if entity_name == "EvaluationResult":
+            from kernel.api.eval_routes import evaluate_outcome_checks
+            data = await evaluate_outcome_checks(data)
+
         entity = entity_cls(org_id=current_org_id.get(), **data)
         created_messages = await entity.save_tracked(method="create")
         _fire_dispatch(created_messages)
