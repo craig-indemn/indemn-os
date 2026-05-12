@@ -19,7 +19,7 @@ COPY harnesses/_base/harness_common/ /app/harness_common/
 COPY harnesses/async-deepagents/pyproject.toml /tmp/async/
 RUN cd /tmp/async && uv pip install --system .
 
-# Copy harness code
+# Copy harness code (bust cache: 2026-05-12-b)
 COPY harnesses/async-deepagents/ /app/harness/
 
 # Smoke test — verify imports work before deploying. Three consecutive
