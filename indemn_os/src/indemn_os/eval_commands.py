@@ -117,7 +117,10 @@ def get_results(
         params["rule_id"] = rule
     if since:
         params["since"] = since
-    result = client.get("/api/_eval/runs/results", params=params)
+    if run_id:
+        result = client.get(f"/api/_eval/runs/{run_id}/results", params=params)
+    else:
+        result = client.get("/api/_eval/results", params=params)
     render(result)
 
 

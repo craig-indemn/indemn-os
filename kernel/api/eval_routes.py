@@ -361,7 +361,7 @@ async def get_eval_run(
     return _safe(run)
 
 
-@eval_router.get("/runs/results")
+@eval_router.get("/results")
 @eval_router.get("/runs/{run_id}/results")
 async def get_eval_results(
     run_id: str = None,
