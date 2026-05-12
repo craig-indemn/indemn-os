@@ -163,9 +163,13 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
     context = _truncate_large_fields(context)
 
     if entity_type == "Trace":
-        context.pop("inputs", None)
-        context.pop("outputs", None)
-        context.pop("child_runs", None)
+        removed = []
+        for field in ("inputs", "outputs", "child_runs"):
+            if field in context:
+                removed.append(field)
+                del context[field]
+        if removed:
+            log.info("Trace context: stripped %s (messages retained)", removed)
 
     msg_id = os.environ.get("INDEMN_CAUSATION_MESSAGE_ID")
     if msg_id:
