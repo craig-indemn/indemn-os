@@ -529,7 +529,11 @@ register_sweep(handle_zombie_sessions)
 _CASCADE_IDLE_SECONDS = 120
 
 
-@register_sweep
+# Disabled: cascade_eval creates duplicate evaluator runs because the
+# evaluator skill doesn't yet distinguish per-trace vs cascade-level
+# evaluation. Re-enable when cascade-level evaluation is implemented
+# as a distinct path. See Session 23 investigation.
+# @register_sweep
 async def check_cascade_completion():
     """Detect completed cascades and create cascade-level evaluator messages.
 
