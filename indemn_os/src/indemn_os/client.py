@@ -232,7 +232,7 @@ def _format_xml_entity(data):
 
 
 def _format_xml_list(data):
-    """Format a list of entities as XML."""
+    """Format a list of entities/results as XML."""
     if not data:
         return "<results />"
     lines = ["<results>"]
@@ -242,12 +242,26 @@ def _format_xml_list(data):
             entity_id = item.get("_id", "")
             name = item.get("name") or item.get("subject") or item.get("associate_name") or ""
             status = item.get("status", "")
-            attrs = f' id="{entity_id}"'
-            if name:
-                attrs += f' name="{name}"'
-            if status:
-                attrs += f' status="{status}"'
-            lines.append(f"  <{entity_type}{attrs} />")
+            remaining = {k: v for k, v in item.items()
+                         if k not in ("_id", "name", "subject", "associate_name", "status")
+                         and v is not None and v != "" and v != []}
+            if not remaining:
+                attrs = f' id="{entity_id}"'
+                if name:
+                    attrs += f' name="{name}"'
+                if status:
+                    attrs += f' status="{status}"'
+                lines.append(f"  <{entity_type}{attrs} />")
+            else:
+                attrs = f' id="{entity_id}"'
+                if name:
+                    attrs += f' name="{name}"'
+                if status:
+                    attrs += f' status="{status}"'
+                lines.append(f"  <{entity_type}{attrs}>")
+                for k, v in remaining.items():
+                    lines.append(f"    <{k}>{_format_xml_value(v)}</{k}>")
+                lines.append(f"  </{entity_type}>")
         else:
             lines.append(f"  <item>{item}</item>")
     lines.append("</results>")
