@@ -17,7 +17,7 @@ from kernel.context import current_org_id
 from kernel.db import ENTITY_REGISTRY, get_database
 from kernel.message.schema import Message
 
-from kernel.watch.evaluator import evaluate_condition
+from kernel.watch.evaluator import describe_condition, evaluate_condition
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +84,6 @@ async def evaluate_outcome_checks(data: dict) -> dict:
     for rule in rules_with_checks:
         oc = rule["outcome_check"]
         check = oc["check"]
-        field = check.get("field", "?")
-        op = check.get("op", "?")
-        expected = check.get("value")
 
         try:
             passed = evaluate_condition(check, entity_data)
@@ -101,16 +98,12 @@ async def evaluate_outcome_checks(data: dict) -> dict:
             })
             continue
 
-        actual = entity_data.get(field)
-        actual_display = str(actual)[:100] if actual is not None else "null"
-
         outcome_checks.append({
             "rule_id": rule.get("id"),
             "entity_type": oc.get("entity_type", entity_type),
             "check": check,
             "passed": passed,
-            "actual_value": actual_display,
-            "reasoning": f"field '{field}' is {actual_display} — {op} {expected} → {'pass' if passed else 'fail'}",
+            "reasoning": describe_condition(check, entity_data),
         })
 
     data["outcome_checks"] = outcome_checks

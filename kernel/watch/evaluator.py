@@ -75,6 +75,30 @@ def _older_than(actual, duration_str: str) -> bool:
     return actual < (now - delta)
 
 
+def describe_condition(condition: dict, entity_data: dict) -> str:
+    """Produce a human-readable explanation of a condition evaluation."""
+    if "all" in condition:
+        parts = [describe_condition(c, entity_data) for c in condition["all"]]
+        passed = all(evaluate_condition(c, entity_data) for c in condition["all"])
+        return f"all([{', '.join(parts)}]) → {'pass' if passed else 'fail'}"
+    if "any" in condition:
+        parts = [describe_condition(c, entity_data) for c in condition["any"]]
+        passed = any(evaluate_condition(c, entity_data) for c in condition["any"])
+        return f"any([{', '.join(parts)}]) → {'pass' if passed else 'fail'}"
+    if "not" in condition:
+        inner = describe_condition(condition["not"], entity_data)
+        passed = not evaluate_condition(condition["not"], entity_data)
+        return f"not({inner}) → {'pass' if passed else 'fail'}"
+
+    field = condition["field"]
+    op = condition["op"]
+    expected = condition.get("value")
+    actual = _get_nested_field(entity_data, field)
+    actual_str = str(actual)[:100] if actual is not None else "null"
+    passed = evaluate_condition(condition, entity_data)
+    return f"{field} {op} {expected}: actual={actual_str} → {'pass' if passed else 'fail'}"
+
+
 _OPERATORS = {
     "equals": lambda a, e: a == e,
     "not_equals": lambda a, e: a != e,
