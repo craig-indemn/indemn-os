@@ -188,7 +188,7 @@ export default function AssociateRunsView() {
   // Chart data — all runs in window, independent of table filters/pagination
   const { data: chartTraces } = useTraces({
     since,
-    limit: 500,
+    limit: 100,
   });
 
   // Table data — paginated, filtered within same window
