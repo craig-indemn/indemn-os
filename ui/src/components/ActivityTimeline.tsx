@@ -110,8 +110,9 @@ export function ActivityTimeline({ traces, onSelectTrace, selectedTraceId }: Act
 
   const { minTime, maxTime } = useMemo(() => {
     if (items.length === 0) return { minTime: 0, maxTime: 0 };
-    const times = items.map((t) => new Date(t.start_time).getTime());
-    return { minTime: Math.min(...times), maxTime: Math.max(...times) };
+    const starts = items.map((t) => new Date(t.start_time).getTime());
+    const ends = items.map((t) => new Date(t.start_time).getTime() + Math.max(t.duration_ms || 1000, 1000));
+    return { minTime: Math.min(...starts), maxTime: Math.max(...ends) };
   }, [items]);
 
   const timeRange = maxTime - minTime || 60_000;
@@ -163,7 +164,7 @@ export function ActivityTimeline({ traces, onSelectTrace, selectedTraceId }: Act
                     className="fill-gray-400 text-[9px] font-semibold"
                     style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "9px" }}
                   >
-                    {laneName.split(" ").map((w) => w.slice(0, 3)).join("").slice(0, 6)}
+                    {laneName.split(/[\s_]+/).map((w) => w.slice(0, 3)).join("").slice(0, 6)}
                   </text>
                   {/* Lane background */}
                   <rect

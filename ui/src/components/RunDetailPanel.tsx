@@ -15,13 +15,13 @@ interface RunDetailPanelProps {
 }
 
 function formatDuration(ms: number | undefined): string {
-  if (!ms) return "—";
+  if (ms == null) return "—";
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function formatTokens(n: number | undefined): string {
-  if (!n) return "0";
+  if (n == null) return "0";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1000) return `${Math.round(n / 1000)}K`;
   return String(n);

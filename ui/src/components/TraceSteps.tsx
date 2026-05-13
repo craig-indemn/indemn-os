@@ -195,8 +195,9 @@ export function TraceSteps({ messages, maxVisible = 50 }: TraceStepsProps) {
         (typeof msg.content === "string" ? (msg.content as string) : "");
 
       if (toolCalls.length > 0) {
-        for (const tc of toolCalls) {
-          steps.push(<ToolCallStep key={`${i}-tc-${tc.id || tc.name}`} call={tc} index={i} />);
+        for (let j = 0; j < toolCalls.length; j++) {
+          const tc = toolCalls[j];
+          steps.push(<ToolCallStep key={`${i}-tc-${j}`} call={tc} index={i} />);
         }
         if (contentText && toolCalls.every((tc) => tc.name !== "write_todos")) {
           steps.push(<AiTextStep key={`${i}-text`} content={contentText} index={i} />);

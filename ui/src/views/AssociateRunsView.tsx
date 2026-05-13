@@ -27,15 +27,17 @@ function formatTime(iso: string): string {
 }
 
 function formatDuration(ms: unknown): string {
+  if (ms == null) return "—";
   const n = Number(ms);
-  if (!n) return "—";
+  if (isNaN(n)) return "—";
   if (n < 1000) return `${n}ms`;
   return `${(n / 1000).toFixed(1)}s`;
 }
 
 function formatTokens(n: unknown): string {
+  if (n == null) return "0";
   const v = Number(n);
-  if (!v) return "0";
+  if (isNaN(v)) return "0";
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1000) return `${Math.round(v / 1000)}K`;
   return String(v);
