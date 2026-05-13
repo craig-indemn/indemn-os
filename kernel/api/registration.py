@@ -387,7 +387,7 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         # while the malformed rows are surfaced in logs for cleanup.
         # Kernel entities use Beanie's `find().to_list()` which doesn't
         # accept the kwarg — keep the existing path for those.
-        query = entity_cls.find_scoped(filter_doc).skip(offset).limit(limit)
+        query = entity_cls.find_scoped(filter_doc).sort(sort).skip(offset).limit(limit)
         if isinstance(entity_cls, type) and issubclass(entity_cls, DomainBaseEntity):
             entities = await query.to_list(skip_invalid=True)
         else:
