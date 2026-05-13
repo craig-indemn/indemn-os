@@ -21,6 +21,13 @@ interface Props {
   onSelectionChange?: (selectedIds: string[]) => void;
   storageKey?: string;
   activeRowId?: string | null;
+  pageIndex?: number;
+  hasNextPage?: boolean;
+  hasPrevPage?: boolean;
+  onNextPage?: () => void;
+  onPrevPage?: () => void;
+  isLoading?: boolean;
+  rowClassName?: (row: Record<string, unknown>) => string;
 }
 
 export function EntityTable({
@@ -32,6 +39,13 @@ export function EntityTable({
   onSelectionChange,
   storageKey,
   activeRowId,
+  pageIndex,
+  hasNextPage,
+  hasPrevPage,
+  onNextPage,
+  onPrevPage,
+  isLoading,
+  rowClassName,
 }: Props) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -230,12 +244,13 @@ export function EntityTable({
           <tbody className="bg-white divide-y divide-gray-200">
             {table.getRowModel().rows.map((row) => {
               const isActive = activeRowId === row.id;
+              const extraClass = rowClassName?.(row.original) || "";
               return (
               <tr
                 key={row.id}
                 onClick={() => onRowClick?.(row.original)}
                 onDoubleClick={() => onRowDoubleClick?.(row.original)}
-                className={`${onRowClick ? "cursor-pointer hover:bg-gray-50" : ""} ${isActive ? "bg-blue-50" : ""}`}
+                className={`${onRowClick ? "cursor-pointer hover:bg-gray-50" : ""} ${isActive ? "bg-blue-50" : ""} ${extraClass}`}
               >
                 {row.getVisibleCells().map((cell) => (
                   <td
@@ -251,7 +266,14 @@ export function EntityTable({
               </tr>
               );
             })}
-            {table.getRowModel().rows.length === 0 && (
+            {isLoading && table.getRowModel().rows.length === 0 && (
+              <tr>
+                <td colSpan={allColumns.length} className="px-4 py-12 text-center text-sm text-gray-400">
+                  Loading...
+                </td>
+              </tr>
+            )}
+            {!isLoading && table.getRowModel().rows.length === 0 && (
               <tr>
                 <td
                   colSpan={allColumns.length}
@@ -272,6 +294,29 @@ export function EntityTable({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {(onNextPage || onPrevPage) && (
+        <div className="flex items-center gap-4 p-3 border-t flex-shrink-0">
+          <button
+            onClick={onPrevPage}
+            disabled={!hasPrevPage}
+            className="px-3 py-1 text-xs border rounded-md disabled:opacity-30 hover:bg-gray-50"
+          >
+            Previous
+          </button>
+          <span className="text-xs text-gray-500">
+            Page {(pageIndex ?? 0) + 1}
+          </span>
+          <button
+            onClick={onNextPage}
+            disabled={!hasNextPage}
+            className="px-3 py-1 text-xs border rounded-md disabled:opacity-30 hover:bg-gray-50"
+          >
+            Next
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,21 +1,17 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { type ColumnDef } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { useTraces } from "@/api/hooks";
+import { useTraces, useEntities } from "@/api/hooks";
 import { ActivityTimeline, ASSOCIATE_COLORS } from "@/components/ActivityTimeline";
 import { RunDetailPanel } from "@/components/RunDetailPanel";
+import { EntityTable } from "@/components/EntityTable";
 
-function formatTime(iso: string): string {
+const PAGE_SIZE = 25;
+
+function formatTime(iso: unknown): string {
   if (!iso) return "—";
-  const d = new Date(iso);
+  const d = new Date(String(iso));
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
@@ -42,11 +38,7 @@ function shortId(id: unknown): string {
 }
 
 function associateAbbrev(name: string): string {
-  return name
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase();
+  return name.split(" ").map((w) => w[0]).join("").toUpperCase();
 }
 
 function associateColor(name: string): string {
@@ -72,12 +64,109 @@ function evalBadge(feedbackStats: unknown): React.ReactNode {
   );
 }
 
+const columns: ColumnDef<Record<string, unknown>>[] = [
+  {
+    id: "time",
+    header: "Time",
+    accessorFn: (row) => row.start_time,
+    cell: ({ getValue }) => (
+      <span className="font-mono text-xs text-gray-500">{formatTime(getValue())}</span>
+    ),
+    enableColumnFilter: false,
+  },
+  {
+    id: "associate",
+    header: "Associate",
+    accessorFn: (row) => row.associate_name,
+    cell: ({ getValue }) => {
+      const name = String(getValue() || "");
+      return (
+        <span
+          className="px-1.5 py-0.5 rounded text-[10px] font-semibold text-white"
+          style={{ backgroundColor: associateColor(name) }}
+        >
+          {associateAbbrev(name)}
+        </span>
+      );
+    },
+  },
+  {
+    id: "entity",
+    header: "Entity",
+    accessorFn: (row) => `${row.entity_type || ""} · ${shortId(row.entity_id)}`,
+    cell: ({ row: r }) => (
+      <div>
+        <span className="font-mono text-xs">
+          {String(r.original.entity_type || "")} · {shortId(r.original.entity_id)}
+        </span>
+        {r.original.execution_status === "error" && r.original.error ? (
+          <div className="text-xs text-red-600 truncate max-w-[300px]">
+            {String(r.original.error).slice(0, 80)}
+          </div>
+        ) : null}
+      </div>
+    ),
+    enableColumnFilter: false,
+  },
+  {
+    id: "status",
+    header: "Status",
+    accessorFn: (row) => row.execution_status,
+    cell: ({ getValue }) => {
+      const isError = getValue() === "error";
+      return (
+        <Badge
+          variant={isError ? "destructive" : "outline"}
+          className={isError ? "text-[10px]" : "text-green-700 border-green-300 bg-green-50 text-[10px]"}
+        >
+          {isError ? "error" : "success"}
+        </Badge>
+      );
+    },
+    meta: { enumValues: ["success", "error"] },
+  },
+  {
+    id: "duration",
+    header: "Duration",
+    accessorFn: (row) => row.duration_ms,
+    cell: ({ getValue }) => (
+      <span className="font-mono text-xs text-gray-600">{formatDuration(getValue())}</span>
+    ),
+    enableColumnFilter: false,
+  },
+  {
+    id: "tokens",
+    header: "Tokens",
+    accessorFn: (row) => row.total_tokens,
+    cell: ({ getValue }) => (
+      <span className="font-mono text-xs text-gray-600">{formatTokens(getValue())}</span>
+    ),
+    enableColumnFilter: false,
+  },
+  {
+    id: "eval",
+    header: "Eval",
+    accessorFn: (row) => row.feedback_stats,
+    cell: ({ getValue }) => evalBadge(getValue()),
+    enableColumnFilter: false,
+    enableSorting: false,
+  },
+];
+
 export default function AssociateRunsView() {
   const [associateFilter, setAssociateFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
-  const PAGE_SIZE = 25;
+
+  // Get all associate names from Actor entities — independent of current page
+  const { data: actors } = useEntities("Actor", { type: "associate" });
+  const associateNames = useMemo(() => {
+    return (actors || [])
+      .map((a) => String(a.name || ""))
+      .filter(Boolean)
+      .sort();
+  }, [actors]);
 
   const { data: traces, isLoading } = useTraces({
     associate_name: associateFilter !== "all" ? associateFilter : undefined,
@@ -88,7 +177,6 @@ export default function AssociateRunsView() {
 
   const items = traces || [];
   const hasMore = items.length === PAGE_SIZE;
-  const associates = Array.from(new Set(items.map((t) => String(t.associate_name || "")))).sort();
   const errorCount = items.filter((t) => t.execution_status === "error").length;
 
   return (
@@ -97,7 +185,7 @@ export default function AssociateRunsView() {
       <div className="h-14 bg-white border-b border-gray-200 flex items-center px-6 gap-4 flex-shrink-0">
         <h2 className="text-base font-semibold text-gray-900">Associate Runs</h2>
         <span className="text-sm text-gray-400">
-          {items.length} runs{errorCount > 0 && ` · ${errorCount} errors`}
+          Page {page + 1}{errorCount > 0 && ` · ${errorCount} errors`}
         </span>
       </div>
 
@@ -119,7 +207,7 @@ export default function AssociateRunsView() {
               className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
             >
               <option value="all">All Associates</option>
-              {associates.map((a) => (
+              {associateNames.map((a) => (
                 <option key={a} value={a}>{a}</option>
               ))}
             </select>
@@ -133,116 +221,25 @@ export default function AssociateRunsView() {
               <option value="success">Success</option>
               <option value="error">Error</option>
             </select>
-
-            <span className="ml-auto text-xs text-gray-400">{items.length} runs</span>
           </div>
 
           <Separator />
 
           {/* Table */}
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-[10px] uppercase tracking-wide w-20">Time</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wide w-16">Assoc</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wide">Entity</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wide w-20">Status</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wide w-16">Duration</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wide w-16">Tokens</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wide w-16">Eval</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {isLoading && (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-center text-sm text-gray-400 py-8">
-                      Loading...
-                    </TableCell>
-                  </TableRow>
-                )}
-                {!isLoading && items.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-center text-sm text-gray-400 py-8">
-                      No traces found
-                    </TableCell>
-                  </TableRow>
-                )}
-                {items.map((trace) => {
-                  const id = String(trace._id || "");
-                  const isError = trace.execution_status === "error";
-                  const isSelected = id === selectedTraceId;
-                  const assocName = String(trace.associate_name || "");
-
-                  return (
-                    <TableRow
-                      key={id}
-                      className={`cursor-pointer ${isError ? "bg-red-50 hover:bg-red-100" : isSelected ? "bg-blue-50" : "hover:bg-gray-50"}`}
-                      onClick={() => setSelectedTraceId(id)}
-                    >
-                      <TableCell className="font-mono text-xs text-gray-500 py-2">
-                        {formatTime(String(trace.start_time || ""))}
-                      </TableCell>
-                      <TableCell className="py-2">
-                        <span
-                          className="px-1.5 py-0.5 rounded text-[10px] font-semibold text-white"
-                          style={{ backgroundColor: associateColor(assocName) }}
-                        >
-                          {associateAbbrev(assocName)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="py-2">
-                        <div className="font-mono text-xs">
-                          {String(trace.entity_type || "")} · {shortId(trace.entity_id)}
-                        </div>
-                        {isError && trace.error ? (
-                          <div className="text-xs text-red-600 truncate max-w-[300px]">
-                            {String(trace.error).slice(0, 80)}
-                          </div>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="py-2">
-                        <Badge
-                          variant={isError ? "destructive" : "outline"}
-                          className={isError ? "text-[10px]" : "text-green-700 border-green-300 bg-green-50 text-[10px]"}
-                        >
-                          {isError ? "error" : "success"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-gray-600 py-2">
-                        {formatDuration(trace.duration_ms)}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-gray-600 py-2">
-                        {formatTokens(trace.total_tokens)}
-                      </TableCell>
-                      <TableCell className="py-2">
-                        {evalBadge(trace.feedback_stats)}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Pagination */}
-          <div className="flex items-center gap-4 mt-3 text-sm">
-            <button
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0}
-              className="px-3 py-1 border border-gray-200 rounded-md text-xs disabled:opacity-30 hover:bg-gray-50"
-            >
-              Previous
-            </button>
-            <span className="text-xs text-gray-500">Page {page + 1}</span>
-            <button
-              onClick={() => setPage((p) => p + 1)}
-              disabled={!hasMore}
-              className="px-3 py-1 border border-gray-200 rounded-md text-xs disabled:opacity-30 hover:bg-gray-50"
-            >
-              Next
-            </button>
-          </div>
+          <EntityTable
+            columns={columns}
+            data={items}
+            onRowClick={(row) => setSelectedTraceId(String(row._id || ""))}
+            activeRowId={selectedTraceId}
+            storageKey="associate-runs"
+            pageIndex={page}
+            hasNextPage={hasMore}
+            hasPrevPage={page > 0}
+            onNextPage={() => setPage((p) => p + 1)}
+            onPrevPage={() => setPage((p) => Math.max(0, p - 1))}
+            isLoading={isLoading}
+            rowClassName={(row) => row.execution_status === "error" ? "bg-red-50" : ""}
+          />
         </div>
 
         {/* Detail panel */}
