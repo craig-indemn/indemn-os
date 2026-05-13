@@ -115,3 +115,83 @@ export function useQueueDepth() {
     refetchInterval: 15000,
   });
 }
+
+// --- Associate Runs / Traces ---
+
+const TRACE_HEAVY_FIELDS = ["messages", "inputs", "outputs", "child_runs", "events"];
+
+function stripHeavyFields(trace: Record<string, unknown>): Record<string, unknown> {
+  const light: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(trace)) {
+    if (!TRACE_HEAVY_FIELDS.includes(k)) light[k] = v;
+  }
+  return light;
+}
+
+function stripRedundantTraceFields(trace: Record<string, unknown>): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(trace)) {
+    if (k !== "inputs" && k !== "outputs" && k !== "child_runs") clean[k] = v;
+  }
+  return clean;
+}
+
+export function useTraces(params?: {
+  associate_name?: string;
+  execution_status?: string;
+  limit?: number;
+}) {
+  const filter: Record<string, string> = {};
+  if (params?.associate_name) filter.associate_name = params.associate_name;
+  if (params?.execution_status) filter.execution_status = params.execution_status;
+  const filterStr = Object.keys(filter).length > 0 ? JSON.stringify(filter) : "";
+
+  return useQuery({
+    queryKey: ["traces", params],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (filterStr) qs.set("filter", filterStr);
+      qs.set("sort", "-start_time");
+      qs.set("limit", String(params?.limit ?? 50));
+      const raw = await apiClient<Record<string, unknown>[]>(`/api/traces/?${qs}`);
+      return raw.map(stripHeavyFields);
+    },
+    refetchInterval: 5000,
+  });
+}
+
+export function useTraceDetail(traceId: string) {
+  return useQuery({
+    queryKey: ["trace-detail", traceId],
+    queryFn: async () => {
+      const raw = await apiClient<Record<string, unknown>>(`/api/traces/${traceId}`);
+      return stripRedundantTraceFields(raw);
+    },
+    enabled: !!traceId,
+  });
+}
+
+export function useEvalForTrace(traceId: string) {
+  return useQuery({
+    queryKey: ["eval-for-trace", traceId],
+    queryFn: () => {
+      const filter = JSON.stringify({ trace_id: traceId });
+      return apiClient<Record<string, unknown>[]>(`/api/evaluation_results/?filter=${encodeURIComponent(filter)}&limit=1`);
+    },
+    enabled: !!traceId,
+  });
+}
+
+export function useEvaluatorTrace(ecTraceId: string) {
+  return useQuery({
+    queryKey: ["evaluator-trace", ecTraceId],
+    queryFn: async () => {
+      const filter = JSON.stringify({ entity_id: ecTraceId, associate_name: "Evaluator" });
+      const qs = new URLSearchParams({ filter, sort: "-start_time", limit: "1" });
+      const raw = await apiClient<Record<string, unknown>[]>(`/api/traces/?${qs}`);
+      if (raw.length === 0) return null;
+      return stripRedundantTraceFields(raw[0]);
+    },
+    enabled: !!ecTraceId,
+  });
+}

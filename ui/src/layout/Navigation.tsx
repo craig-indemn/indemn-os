@@ -12,6 +12,7 @@ export function Navigation() {
   });
 
   const navItems = [
+    { path: "/associates", label: "Associates" },
     { path: "/queue", label: "Queue" },
     { path: "/activity", label: "Activity" },
     { path: "/roles", label: "Roles" },

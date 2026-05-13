@@ -14,6 +14,7 @@ import { AuthEventsView } from "./views/AuthEventsView";
 import { ObservabilityView } from "./views/ObservabilityView";
 import { CascadeViewerRoute } from "./views/CascadeViewerRoute";
 import { ActivityView } from "./views/ActivityView";
+import AssociateRunsView from "./views/AssociateRunsView";
 
 export default function App() {
   const { isAuthenticated } = useAuth();
@@ -37,6 +38,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/queue" replace />} />
         <Route path="/queue" element={<QueueView />} />
+        <Route path="/associates" element={<AssociateRunsView />} />
         <Route path="/activity" element={<ActivityView />} />
         <Route path="/roles" element={<RoleOverview />} />
         <Route path="/auth-events" element={<AuthEventsView />} />
