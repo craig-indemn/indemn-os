@@ -4,7 +4,7 @@ Per vision § 14: "indemn trace entity {id}" queries all three data stores.
 "indemn trace cascade {correlation_id}" shows full execution tree.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from bson import ObjectId
@@ -324,4 +324,106 @@ async def trace_cascade(
                 "message_logs": len(message_logs),
             },
         },
+    }
+
+
+def _parse_since(since_str: str) -> datetime:
+    """Parse a 'since' value — supports durations (24h, 7d, 30m) and ISO dates."""
+    if since_str.endswith("h"):
+        return datetime.now(timezone.utc) - timedelta(hours=int(since_str[:-1]))
+    if since_str.endswith("d"):
+        return datetime.now(timezone.utc) - timedelta(days=int(since_str[:-1]))
+    if since_str.endswith("m"):
+        return datetime.now(timezone.utc) - timedelta(minutes=int(since_str[:-1]))
+    return datetime.fromisoformat(since_str)
+
+
+@trace_router.get("/activity-summary")
+async def activity_summary(
+    since: str = Query(..., description="ISO timestamp or duration (24h, 7d, 30m)"),
+    bucket_minutes: int = Query(60, description="Bucket width in minutes"),
+    associate_name: str = Query(None, description="Filter to one associate"),
+    actor=Depends(get_current_actor),
+):
+    """Aggregated activity counts for the chart — per-associate, per-bucket.
+
+    Returns bucket counts via MongoDB $group so the response is a few hundred
+    bytes regardless of trace volume.  Replaces the v1 pattern of fetching
+    100 individual Trace entities for client-side counting.
+    """
+    from kernel_entities import Trace
+
+    org_id = current_org_id.get()
+    since_dt = _parse_since(since)
+
+    match_stage: dict = {
+        "org_id": org_id,
+        "start_time": {"$gte": since_dt},
+    }
+    if associate_name:
+        match_stage["associate_name"] = associate_name
+
+    bucket_ms = bucket_minutes * 60 * 1000
+    coll = Trace.get_motor_collection()
+
+    pipeline = [
+        {"$match": match_stage},
+        {
+            "$group": {
+                "_id": {
+                    "bucket": {
+                        "$subtract": [
+                            {"$toLong": "$start_time"},
+                            {"$mod": [{"$toLong": "$start_time"}, bucket_ms]},
+                        ]
+                    },
+                    "associate_name": "$associate_name",
+                },
+                "count": {"$sum": 1},
+                "errors": {
+                    "$sum": {
+                        "$cond": [{"$eq": ["$execution_status", "error"]}, 1, 0]
+                    }
+                },
+            }
+        },
+        {
+            "$group": {
+                "_id": "$_id.bucket",
+                "entries": {
+                    "$push": {"k": "$_id.associate_name", "v": "$count"}
+                },
+                "errors": {"$sum": "$errors"},
+                "total": {"$sum": "$count"},
+            }
+        },
+        {"$sort": {"_id": 1}},
+    ]
+
+    results = await coll.aggregate(pipeline).to_list(length=500)
+    total_count = await coll.count_documents(match_stage)
+    error_count = await coll.count_documents({**match_stage, "execution_status": "error"})
+
+    assoc_pipeline = [
+        {"$match": match_stage},
+        {"$group": {"_id": "$associate_name"}},
+    ]
+    assoc_docs = await coll.aggregate(assoc_pipeline).to_list(length=100)
+
+    buckets = []
+    for r in results:
+        counts = {entry["k"]: entry["v"] for entry in r.get("entries", [])}
+        ts_ms = r["_id"]
+        buckets.append({
+            "timestamp": datetime.utcfromtimestamp(ts_ms / 1000).isoformat() + "Z",
+            "counts": counts,
+            "errors": r["errors"],
+            "total": r["total"],
+        })
+
+    return {
+        "buckets": buckets,
+        "total_count": total_count,
+        "error_count": error_count,
+        "associates": sorted(d["_id"] for d in assoc_docs if d["_id"]),
     }
