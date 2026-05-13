@@ -118,15 +118,7 @@ export function useQueueDepth() {
 
 // --- Associate Runs / Traces ---
 
-const TRACE_HEAVY_FIELDS = ["messages", "inputs", "outputs", "child_runs", "events"];
-
-function stripHeavyFields(trace: Record<string, unknown>): Record<string, unknown> {
-  const light: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(trace)) {
-    if (!TRACE_HEAVY_FIELDS.includes(k)) light[k] = v;
-  }
-  return light;
-}
+const TRACE_EXCLUDE = "messages,inputs,outputs,child_runs,events";
 
 function stripRedundantTraceFields(trace: Record<string, unknown>): Record<string, unknown> {
   const clean: Record<string, unknown> = {};
@@ -140,6 +132,7 @@ export function useTraces(params?: {
   associate_name?: string;
   execution_status?: string;
   limit?: number;
+  offset?: number;
 }) {
   const filter: Record<string, string> = {};
   if (params?.associate_name) filter.associate_name = params.associate_name;
@@ -151,10 +144,11 @@ export function useTraces(params?: {
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (filterStr) qs.set("filter", filterStr);
+      qs.set("exclude", TRACE_EXCLUDE);
       qs.set("sort", "-start_time");
-      qs.set("limit", String(params?.limit ?? 50));
-      const raw = await apiClient<Record<string, unknown>[]>(`/api/traces/?${qs}`);
-      return raw.map(stripHeavyFields);
+      qs.set("limit", String(params?.limit ?? 25));
+      if (params?.offset) qs.set("offset", String(params.offset));
+      return apiClient<Record<string, unknown>[]>(`/api/traces/?${qs}`);
     },
     refetchInterval: 5000,
   });

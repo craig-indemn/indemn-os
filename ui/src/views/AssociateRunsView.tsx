@@ -76,14 +76,18 @@ export default function AssociateRunsView() {
   const [associateFilter, setAssociateFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 25;
 
   const { data: traces, isLoading } = useTraces({
     associate_name: associateFilter !== "all" ? associateFilter : undefined,
     execution_status: statusFilter !== "all" ? statusFilter : undefined,
-    limit: 100,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
   });
 
   const items = traces || [];
+  const hasMore = items.length === PAGE_SIZE;
   const associates = Array.from(new Set(items.map((t) => String(t.associate_name || "")))).sort();
   const errorCount = items.filter((t) => t.execution_status === "error").length;
 
@@ -111,7 +115,7 @@ export default function AssociateRunsView() {
           <div className="flex items-center gap-3">
             <select
               value={associateFilter}
-              onChange={(e) => setAssociateFilter(e.target.value)}
+              onChange={(e) => { setAssociateFilter(e.target.value); setPage(0); }}
               className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
             >
               <option value="all">All Associates</option>
@@ -122,7 +126,7 @@ export default function AssociateRunsView() {
 
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
               className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
             >
               <option value="all">All Status</option>
@@ -219,6 +223,25 @@ export default function AssociateRunsView() {
                 })}
               </TableBody>
             </Table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center gap-4 mt-3 text-sm">
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="px-3 py-1 border border-gray-200 rounded-md text-xs disabled:opacity-30 hover:bg-gray-50"
+            >
+              Previous
+            </button>
+            <span className="text-xs text-gray-500">Page {page + 1}</span>
+            <button
+              onClick={() => setPage((p) => p + 1)}
+              disabled={!hasMore}
+              className="px-3 py-1 border border-gray-200 rounded-md text-xs disabled:opacity-30 hover:bg-gray-50"
+            >
+              Next
+            </button>
           </div>
         </div>
 

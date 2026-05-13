@@ -187,9 +187,14 @@ class _DomainQuery:
     def __init__(self, cls, filter_doc: dict):
         self._cls = cls
         self._filter = filter_doc
+        self._projection = None
         self._sort_key = None
         self._skip_n = 0
         self._limit_n = 0
+
+    def project(self, projection_dict: dict):
+        self._projection = projection_dict
+        return self
 
     def sort(self, key: str):
         self._sort_key = key
@@ -226,7 +231,7 @@ class _DomainQuery:
         need to know about every doc keep the strict default.
         """
         coll = self._cls._db_ref[self._cls._collection_name]
-        cursor = coll.find(self._filter)
+        cursor = coll.find(self._filter, self._projection)
         if self._sort_key:
             direction = -1 if self._sort_key.startswith("-") else 1
             field = self._sort_key.lstrip("-")

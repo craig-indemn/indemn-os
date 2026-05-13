@@ -351,6 +351,10 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
             ),
         ),
         sort: str = "-created_at",
+        exclude: str = Query(
+            None,
+            description="Comma-separated field names to exclude from the response (MongoDB projection)."
+        ),
         actor=Depends(get_current_actor),
     ):
         check_permission(actor, entity_name, "read")
@@ -387,12 +391,24 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         # while the malformed rows are surfaced in logs for cleanup.
         # Kernel entities use Beanie's `find().to_list()` which doesn't
         # accept the kwarg — keep the existing path for those.
+        exclude_fields = None
+        if exclude:
+            exclude_fields = {f.strip() for f in exclude.split(",")}
+
         query = entity_cls.find_scoped(filter_doc).sort(sort).skip(offset).limit(limit)
+
+        if exclude_fields and isinstance(entity_cls, type) and issubclass(entity_cls, DomainBaseEntity):
+            query = query.project({f: 0 for f in exclude_fields})
+
         if isinstance(entity_cls, type) and issubclass(entity_cls, DomainBaseEntity):
             entities = await query.to_list(skip_invalid=True)
         else:
             entities = await query.to_list()
-        return [to_dict(e) for e in entities]
+
+        results = [to_dict(e) for e in entities]
+        if exclude_fields:
+            results = [{k: v for k, v in r.items() if k not in exclude_fields} for r in results]
+        return results
 
     @router.get("/{entity_id}")
     async def get_entity(
