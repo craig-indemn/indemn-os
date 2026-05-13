@@ -82,6 +82,40 @@ def _truncate_large_fields(data: dict, threshold: int = _FIELD_TRUNCATE_LIMIT) -
     return data
 
 
+def _format_xml_value(value, indent=1) -> list[str]:
+    """Recursively format a value as XML lines."""
+    prefix = "  " * indent
+    if value is None or value == "" or value == [] or value == {}:
+        return []
+    if isinstance(value, dict):
+        lines = []
+        for dk, dv in value.items():
+            inner = _format_xml_value(dv, indent + 1)
+            if not inner:
+                continue
+            if len(inner) == 1 and not inner[0].strip().startswith("<"):
+                lines.append(f"{prefix}<{dk}>{inner[0].strip()}</{dk}>")
+            else:
+                lines.append(f"{prefix}<{dk}>")
+                lines.extend(inner)
+                lines.append(f"{prefix}</{dk}>")
+        return lines
+    if isinstance(value, list):
+        lines = []
+        for item in value:
+            if isinstance(item, dict):
+                lines.append(f"{prefix}<entry>")
+                lines.extend(_format_xml_value(item, indent + 1))
+                lines.append(f"{prefix}</entry>")
+            else:
+                lines.append(f"{prefix}<item>{item}</item>")
+        return lines
+    s = str(value)
+    if len(s) > 200:
+        return [s]
+    return [f"{prefix}{s}"]
+
+
 def _format_entity_xml(data: dict, entity_type: str) -> str:
     """Format entity context dict as XML."""
     if not isinstance(data, dict):
@@ -92,25 +126,15 @@ def _format_entity_xml(data: dict, entity_type: str) -> str:
 
     lines = [f"<{tag} id=\"{entity_id}\">"]
     for k, v in data.items():
-        if v is None or v == "" or v == [] or v == {}:
+        inner = _format_xml_value(v, 2)
+        if not inner:
             continue
-        if isinstance(v, dict):
-            lines.append(f"  <{k}>")
-            for dk, dv in v.items():
-                if dv is not None and dv != "":
-                    lines.append(f"    <{dk}>{dv}</{dk}>")
-            lines.append(f"  </{k}>")
-        elif isinstance(v, list):
-            if all(isinstance(i, str) for i in v):
-                lines.append(f"  <{k}>{', '.join(v)}</{k}>")
-            else:
-                lines.append(f"  <{k}>{v}</{k}>")
-        elif isinstance(v, str) and len(v) > 200:
-            lines.append(f"  <{k}>")
-            lines.append(v)
-            lines.append(f"  </{k}>")
+        if len(inner) == 1 and not inner[0].strip().startswith("<"):
+            lines.append(f"  <{k}>{inner[0].strip()}</{k}>")
         else:
-            lines.append(f"  <{k}>{v}</{k}>")
+            lines.append(f"  <{k}>")
+            lines.extend(inner)
+            lines.append(f"  </{k}>")
     lines.append(f"</{tag}>")
     return "\n".join(lines)
 
