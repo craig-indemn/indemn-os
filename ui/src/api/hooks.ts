@@ -131,12 +131,14 @@ function stripRedundantTraceFields(trace: Record<string, unknown>): Record<strin
 export function useTraces(params?: {
   associate_name?: string;
   execution_status?: string;
+  since?: string;
   limit?: number;
   offset?: number;
 }) {
-  const filter: Record<string, string> = {};
+  const filter: Record<string, unknown> = {};
   if (params?.associate_name) filter.associate_name = params.associate_name;
   if (params?.execution_status) filter.execution_status = params.execution_status;
+  if (params?.since) filter.start_time = { "$gte": params.since };
   const filterStr = Object.keys(filter).length > 0 ? JSON.stringify(filter) : "";
 
   return useQuery({

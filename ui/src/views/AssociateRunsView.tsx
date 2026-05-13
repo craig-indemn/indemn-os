@@ -154,13 +154,29 @@ const columns: ColumnDef<Record<string, unknown>>[] = [
   },
 ];
 
+const TIME_RANGES = ["1h", "6h", "24h", "7d", "30d"] as const;
+
+function computeSince(range: string): string {
+  const now = new Date();
+  switch (range) {
+    case "1h": return new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+    case "6h": return new Date(now.getTime() - 6 * 60 * 60 * 1000).toISOString();
+    case "24h": return new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    case "7d": return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    case "30d": return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    default: return new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  }
+}
+
 export default function AssociateRunsView() {
+  const [timeRange, setTimeRange] = useState<string>("24h");
   const [associateFilter, setAssociateFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
 
-  // Get all associate names from Actor entities — independent of current page
+  const since = useMemo(() => computeSince(timeRange), [timeRange]);
+
   const { data: actors } = useEntities("Actor", { type: "associate" });
   const associateNames = useMemo(() => {
     return (actors || [])
@@ -169,36 +185,59 @@ export default function AssociateRunsView() {
       .sort();
   }, [actors]);
 
-  const { data: traces, isLoading } = useTraces({
+  // Chart data — all runs in window, independent of table filters/pagination
+  const { data: chartTraces } = useTraces({
+    since,
+    limit: 500,
+  });
+
+  // Table data — paginated, filtered within same window
+  const { data: tableTraces, isLoading } = useTraces({
+    since,
     associate_name: associateFilter !== "all" ? associateFilter : undefined,
     execution_status: statusFilter !== "all" ? statusFilter : undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
 
-  const items = traces || [];
-  const hasMore = items.length === PAGE_SIZE;
-  const errorCount = items.filter((t) => t.execution_status === "error").length;
+  const chartItems = chartTraces || [];
+  const tableItems = tableTraces || [];
+  const hasMore = tableItems.length === PAGE_SIZE;
+  const errorCount = tableItems.filter((t) => t.execution_status === "error").length;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Topbar */}
       <div className="h-14 bg-white border-b border-gray-200 flex items-center px-6 gap-4 flex-shrink-0">
         <h2 className="text-base font-semibold text-gray-900">Associate Runs</h2>
+
+        {/* Time range selector */}
+        <div className="flex gap-0.5 bg-gray-100 rounded-md p-0.5">
+          {TIME_RANGES.map((r) => (
+            <button
+              key={r}
+              onClick={() => { setTimeRange(r); setPage(0); }}
+              className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+                r === timeRange
+                  ? "bg-white text-gray-900 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+
         <span className="text-sm text-gray-400">
-          Page {page + 1}{errorCount > 0 && ` · ${errorCount} errors`}
+          {chartItems.length} total{errorCount > 0 && ` · ${errorCount} errors on page`}
         </span>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
         {/* Main content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {/* Activity timeline */}
-          <ActivityTimeline
-            traces={items}
-            onSelectTrace={setSelectedTraceId}
-            selectedTraceId={selectedTraceId || undefined}
-          />
+          {/* Activity timeline — shows ALL runs in window */}
+          <ActivityTimeline traces={chartItems} timeRange={timeRange} />
 
           {/* Filters */}
           <div className="flex items-center gap-3">
@@ -226,10 +265,10 @@ export default function AssociateRunsView() {
 
           <Separator />
 
-          {/* Table */}
+          {/* Table — paginated within time window */}
           <EntityTable
             columns={columns}
-            data={items}
+            data={tableItems}
             onRowClick={(row) => setSelectedTraceId(String(row._id || ""))}
             activeRowId={selectedTraceId}
             storageKey="associate-runs"

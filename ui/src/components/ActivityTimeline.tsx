@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 
 export const ASSOCIATE_COLORS: Record<string, string> = {
@@ -19,212 +19,194 @@ export const ASSOCIATE_COLORS: Record<string, string> = {
 
 const ERROR_COLOR = "#dc2626";
 
-const LANE_HEIGHT = 32;
-const BLOCK_HEIGHT = 8;
-const BLOCK_GAP = 2;
-const MIN_BLOCK_WIDTH = 4;
-const LABEL_WIDTH = 80;
-
-interface TraceItem {
-  _id: string;
-  associate_name: string;
-  start_time: string;
-  duration_ms: number;
-  execution_status: string;
-  entity_type?: string;
-  entity_id?: string;
-}
-
-interface ActivityTimelineProps {
-  traces: Record<string, unknown>[];
-  onSelectTrace?: (traceId: string) => void;
-  selectedTraceId?: string;
-}
+const BUCKET_MS: Record<string, number> = {
+  "1h": 5 * 60 * 1000,
+  "6h": 15 * 60 * 1000,
+  "24h": 60 * 60 * 1000,
+  "7d": 4 * 60 * 60 * 1000,
+  "30d": 24 * 60 * 60 * 1000,
+};
 
 function colorForAssociate(name: string): string {
   const key = name.toLowerCase().replace(/\s+/g, "_");
   return ASSOCIATE_COLORS[key] || ASSOCIATE_COLORS._default;
 }
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-interface Block {
-  trace: TraceItem;
-  x: number;
-  width: number;
-  subLane: number;
-}
-
-function computeLaneBlocks(items: TraceItem[], minTime: number, timeRange: number, svgWidth: number): Block[] {
-  const sorted = [...items].sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
-  const subLaneEnds: number[] = [];
-  const blocks: Block[] = [];
-
-  for (const trace of sorted) {
-    const start = new Date(trace.start_time).getTime();
-    const dur = Math.max(trace.duration_ms || 1000, 1000);
-    const end = start + dur;
-
-    const x = timeRange > 0 ? ((start - minTime) / timeRange) * svgWidth : 0;
-    const width = Math.max(timeRange > 0 ? (dur / timeRange) * svgWidth : MIN_BLOCK_WIDTH, MIN_BLOCK_WIDTH);
-
-    let assigned = -1;
-    for (let i = 0; i < subLaneEnds.length; i++) {
-      if (subLaneEnds[i] <= start) {
-        assigned = i;
-        subLaneEnds[i] = end;
-        break;
-      }
-    }
-    if (assigned === -1) {
-      assigned = subLaneEnds.length;
-      subLaneEnds.push(end);
-    }
-
-    blocks.push({ trace, x, width, subLane: assigned });
+function formatBucketLabel(timestamp: number, timeRange: string): string {
+  const d = new Date(timestamp);
+  if (timeRange === "30d" || timeRange === "7d") {
+    return d.toLocaleDateString([], { month: "short", day: "numeric" });
   }
-  return blocks;
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export function ActivityTimeline({ traces, onSelectTrace, selectedTraceId }: ActivityTimelineProps) {
-  const items = useMemo(() => {
-    return traces
-      .filter((t) => t.start_time && t.associate_name)
-      .map((t) => ({
-        _id: String(t._id || ""),
-        associate_name: String(t.associate_name),
-        start_time: String(t.start_time),
-        duration_ms: Number(t.duration_ms || 0),
-        execution_status: String(t.execution_status || "success"),
-        entity_type: t.entity_type ? String(t.entity_type) : undefined,
-        entity_id: t.entity_id ? String(t.entity_id) : undefined,
-      })) as TraceItem[];
-  }, [traces]);
+interface BucketData {
+  timestamp: number;
+  counts: Map<string, number>;
+  errors: number;
+  total: number;
+}
 
-  const lanes = useMemo(() => {
-    const nameSet = new Set(items.map((t) => t.associate_name));
-    return Array.from(nameSet).sort();
-  }, [items]);
+interface ActivityTimelineProps {
+  traces: Record<string, unknown>[];
+  timeRange: string;
+}
 
-  const { minTime, maxTime } = useMemo(() => {
-    if (items.length === 0) return { minTime: 0, maxTime: 0 };
-    const starts = items.map((t) => new Date(t.start_time).getTime());
-    const ends = items.map((t) => new Date(t.start_time).getTime() + Math.max(t.duration_ms || 1000, 1000));
-    return { minTime: Math.min(...starts), maxTime: Math.max(...ends) };
-  }, [items]);
+export function ActivityTimeline({ traces, timeRange }: ActivityTimelineProps) {
+  const bucketMs = BUCKET_MS[timeRange] || BUCKET_MS["24h"];
 
-  const timeRange = maxTime - minTime || 60_000;
-  const svgWidth = 800;
-  const totalHeight = lanes.length * LANE_HEIGHT + 24;
+  const { buckets, associates, maxCount } = useMemo(() => {
+    const bucketMap = new Map<number, BucketData>();
+    const assocSet = new Set<string>();
 
-  const timeLabels = useMemo(() => {
-    if (items.length === 0) return [];
-    const labels: { x: number; label: string }[] = [];
-    const step = timeRange / 4;
-    for (let i = 0; i <= 4; i++) {
-      const t = minTime + step * i;
-      labels.push({ x: (step * i / timeRange) * svgWidth, label: formatTime(new Date(t)) });
+    for (const trace of traces) {
+      const startTime = trace.start_time as string;
+      if (!startTime) continue;
+      const t = new Date(startTime).getTime();
+      const bucketKey = Math.floor(t / bucketMs) * bucketMs;
+      const assocName = String(trace.associate_name || "Unknown");
+      const isError = trace.execution_status === "error";
+
+      assocSet.add(assocName);
+
+      let bucket = bucketMap.get(bucketKey);
+      if (!bucket) {
+        bucket = { timestamp: bucketKey, counts: new Map(), errors: 0, total: 0 };
+        bucketMap.set(bucketKey, bucket);
+      }
+      bucket.counts.set(assocName, (bucket.counts.get(assocName) || 0) + 1);
+      bucket.total += 1;
+      if (isError) bucket.errors += 1;
     }
-    return labels;
-  }, [items, minTime, timeRange, svgWidth]);
 
-  if (items.length === 0) {
+    const sorted = Array.from(bucketMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+    const max = sorted.reduce((m, b) => Math.max(m, b.total), 0);
+    return {
+      buckets: sorted,
+      associates: Array.from(assocSet).sort(),
+      maxCount: max,
+    };
+  }, [traces, bucketMs]);
+
+  if (traces.length === 0) {
     return (
       <Card>
         <CardContent className="py-8 text-center text-sm text-gray-400">
-          No traces to display
+          No activity in this time range
         </CardContent>
       </Card>
     );
   }
 
+  const svgWidth = 800;
+  const svgHeight = 140;
+  const chartTop = 10;
+  const chartBottom = svgHeight - 24;
+  const chartHeight = chartBottom - chartTop;
+  const barGap = 2;
+  const barWidth = buckets.length > 0
+    ? Math.max(Math.min((svgWidth - barGap * buckets.length) / buckets.length, 40), 4)
+    : 20;
+  const totalWidth = buckets.length * (barWidth + barGap);
+  const displayWidth = Math.max(totalWidth, svgWidth);
+
   return (
     <Card>
       <CardContent className="p-4">
         <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">
-          Activity
+          Activity — {timeRange}
         </div>
         <div className="overflow-x-auto">
-          <svg width={svgWidth + LABEL_WIDTH} height={totalHeight} className="block">
-            {lanes.map((laneName, laneIdx) => {
-              const laneItems = items.filter((t) => t.associate_name === laneName);
-              const blocks = computeLaneBlocks(laneItems, minTime, timeRange, svgWidth);
-              const y = laneIdx * LANE_HEIGHT;
-
+          <svg width={displayWidth} height={svgHeight} className="block">
+            {/* Y-axis guide lines */}
+            {maxCount > 0 && [0.25, 0.5, 0.75, 1].map((frac) => {
+              const y = chartBottom - frac * chartHeight;
               return (
-                <g key={laneName}>
-                  {/* Lane label */}
-                  <text
-                    x={LABEL_WIDTH - 4}
-                    y={y + LANE_HEIGHT / 2}
-                    textAnchor="end"
-                    dominantBaseline="central"
-                    className="fill-gray-400 text-[9px] font-semibold"
-                    style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "9px" }}
-                  >
-                    {laneName.length > 10 ? laneName.split(/[\s_]+/).map((w) => w[0]?.toUpperCase()).join("") : laneName}
+                <g key={frac}>
+                  <line x1={0} y1={y} x2={displayWidth} y2={y} stroke="#f3f4f6" strokeWidth={1} />
+                  <text x={2} y={y - 2} fill="#d1d5db" style={{ fontSize: "8px", fontFamily: "JetBrains Mono, monospace" }}>
+                    {Math.round(maxCount * frac)}
                   </text>
-                  {/* Lane background */}
-                  <rect
-                    x={LABEL_WIDTH}
-                    y={y + 1}
-                    width={svgWidth}
-                    height={LANE_HEIGHT - 2}
-                    rx={3}
-                    fill="#fafafa"
-                  />
-                  {/* Blocks */}
-                  {blocks.map((block) => {
-                    const isError = block.trace.execution_status === "error";
-                    const isSelected = block.trace._id === selectedTraceId;
-                    const color = isError ? ERROR_COLOR : colorForAssociate(laneName);
-                    const blockY = y + 2 + block.subLane * (BLOCK_HEIGHT + BLOCK_GAP);
-                    const tooltip = `${block.trace.associate_name}\n${block.trace.entity_type || ""} · ${String(block.trace.entity_id || "").slice(0, 8)}\n${(block.trace.duration_ms / 1000).toFixed(1)}s · ${isError ? "error" : "success"}`;
-
-                    return (
-                      <rect
-                        key={block.trace._id}
-                        x={LABEL_WIDTH + block.x}
-                        y={blockY}
-                        width={block.width}
-                        height={BLOCK_HEIGHT}
-                        rx={2}
-                        fill={color}
-                        opacity={isSelected ? 1 : 0.85}
-                        stroke={isSelected ? "#111827" : "none"}
-                        strokeWidth={isSelected ? 1.5 : 0}
-                        className="cursor-pointer hover:opacity-100"
-                        onClick={() => onSelectTrace?.(block.trace._id)}
-                      >
-                        <title>{tooltip}</title>
-                      </rect>
-                    );
-                  })}
                 </g>
               );
             })}
 
-            {/* Time axis */}
-            {timeLabels.map((label, i) => (
-              <text
-                key={i}
-                x={LABEL_WIDTH + label.x}
-                y={totalHeight - 4}
-                textAnchor="middle"
-                className="fill-gray-400"
-                style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "9px" }}
-              >
-                {label.label}
-              </text>
-            ))}
+            {/* Bars */}
+            {buckets.map((bucket, i) => {
+              const x = i * (barWidth + barGap);
+              let yOffset = 0;
+
+              const segments: React.ReactNode[] = [];
+
+              for (const assocName of associates) {
+                const count = bucket.counts.get(assocName) || 0;
+                if (count === 0) continue;
+                const segHeight = maxCount > 0 ? (count / maxCount) * chartHeight : 0;
+                const y = chartBottom - yOffset - segHeight;
+                const color = colorForAssociate(assocName);
+
+                segments.push(
+                  <rect
+                    key={assocName}
+                    x={x}
+                    y={y}
+                    width={barWidth}
+                    height={segHeight}
+                    fill={color}
+                    rx={1}
+                    opacity={0.85}
+                  >
+                    <title>{`${assocName}: ${count} runs`}</title>
+                  </rect>
+                );
+                yOffset += segHeight;
+              }
+
+              if (bucket.errors > 0) {
+                const errHeight = maxCount > 0 ? (bucket.errors / maxCount) * chartHeight : 0;
+                segments.push(
+                  <rect
+                    key="error-overlay"
+                    x={x}
+                    y={chartBottom - errHeight}
+                    width={barWidth}
+                    height={errHeight}
+                    fill={ERROR_COLOR}
+                    rx={1}
+                    opacity={0.4}
+                  >
+                    <title>{`${bucket.errors} errors`}</title>
+                  </rect>
+                );
+              }
+
+              return <g key={bucket.timestamp}>{segments}</g>;
+            })}
+
+            {/* X-axis labels */}
+            {buckets.map((bucket, i) => {
+              const x = i * (barWidth + barGap) + barWidth / 2;
+              const showLabel = buckets.length <= 30 || i % Math.ceil(buckets.length / 15) === 0;
+              if (!showLabel) return null;
+              return (
+                <text
+                  key={`label-${i}`}
+                  x={x}
+                  y={svgHeight - 4}
+                  textAnchor="middle"
+                  fill="#9ca3af"
+                  style={{ fontSize: "8px", fontFamily: "JetBrains Mono, monospace" }}
+                >
+                  {formatBucketLabel(bucket.timestamp, timeRange)}
+                </text>
+              );
+            })}
           </svg>
         </div>
 
         {/* Legend */}
         <div className="flex flex-wrap gap-3 mt-2">
-          {lanes.map((name) => (
+          {associates.map((name) => (
             <div key={name} className="flex items-center gap-1">
               <div
                 className="w-2 h-2 rounded-sm"
@@ -233,10 +215,10 @@ export function ActivityTimeline({ traces, onSelectTrace, selectedTraceId }: Act
               <span className="text-[10px] text-gray-500">{name}</span>
             </div>
           ))}
-          {items.some((t) => t.execution_status === "error") && (
+          {buckets.some((b) => b.errors > 0) && (
             <div className="flex items-center gap-1">
-              <div className="w-2 h-2 rounded-sm" style={{ backgroundColor: ERROR_COLOR }} />
-              <span className="text-[10px] text-gray-500">Error</span>
+              <div className="w-2 h-2 rounded-sm" style={{ backgroundColor: ERROR_COLOR, opacity: 0.4 }} />
+              <span className="text-[10px] text-gray-500">Errors</span>
             </div>
           )}
         </div>
