@@ -89,6 +89,7 @@ const columns: ColumnDef<Record<string, unknown>>[] = [
         </span>
       );
     },
+    enableColumnFilter: false,
   },
   {
     id: "entity",
