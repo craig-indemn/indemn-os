@@ -1,38 +1,11 @@
-import { useMemo } from "react";
+import { useRef, useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-
-export const ASSOCIATE_COLORS: Record<string, string> = {
-  email_classifier: "#6C63FF",
-  evaluator: "#B4AEFC",
-  touchpoint_synthesizer: "#1B8F5A",
-  intelligence_extractor: "#C4880A",
-  meeting_classifier: "#D64545",
-  slack_classifier: "#0891b2",
-  company_enricher: "#7c3aed",
-  proposal_hydrator: "#db2777",
-  email_fetcher: "#64748b",
-  meeting_fetcher: "#64748b",
-  drive_fetcher: "#64748b",
-  slack_fetcher: "#64748b",
-  _default: "#9ca3af",
-};
+import { associateColor } from "@/lib/colors";
+import type { ActivitySummaryResponse } from "@/api/types";
 
 const ERROR_COLOR = "#dc2626";
 
-const BUCKET_MS: Record<string, number> = {
-  "1h": 5 * 60 * 1000,
-  "6h": 15 * 60 * 1000,
-  "24h": 60 * 60 * 1000,
-  "7d": 4 * 60 * 60 * 1000,
-  "30d": 24 * 60 * 60 * 1000,
-};
-
-function colorForAssociate(name: string): string {
-  const key = name.toLowerCase().replace(/\s+/g, "_");
-  return ASSOCIATE_COLORS[key] || ASSOCIATE_COLORS._default;
-}
-
-function formatBucketLabel(timestamp: number, timeRange: string): string {
+function formatBucketLabel(timestamp: string, timeRange: string): string {
   const d = new Date(timestamp);
   if (timeRange === "30d" || timeRange === "7d") {
     return d.toLocaleDateString([], { month: "short", day: "numeric" });
@@ -40,55 +13,30 @@ function formatBucketLabel(timestamp: number, timeRange: string): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-interface BucketData {
-  timestamp: number;
-  counts: Map<string, number>;
-  errors: number;
-  total: number;
-}
-
 interface ActivityTimelineProps {
-  traces: Record<string, unknown>[];
+  data: ActivitySummaryResponse | undefined;
   timeRange: string;
 }
 
-export function ActivityTimeline({ traces, timeRange }: ActivityTimelineProps) {
-  const bucketMs = BUCKET_MS[timeRange] || BUCKET_MS["24h"];
+export function ActivityTimeline({ data, timeRange }: ActivityTimelineProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(600);
 
-  const { buckets, associates, maxCount } = useMemo(() => {
-    const bucketMap = new Map<number, BucketData>();
-    const assocSet = new Set<string>();
-
-    for (const trace of traces) {
-      const startTime = trace.start_time as string;
-      if (!startTime) continue;
-      const t = new Date(startTime).getTime();
-      const bucketKey = Math.floor(t / bucketMs) * bucketMs;
-      const assocName = String(trace.associate_name || "Unknown");
-      const isError = trace.execution_status === "error";
-
-      assocSet.add(assocName);
-
-      let bucket = bucketMap.get(bucketKey);
-      if (!bucket) {
-        bucket = { timestamp: bucketKey, counts: new Map(), errors: 0, total: 0 };
-        bucketMap.set(bucketKey, bucket);
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerWidth(entry.contentRect.width);
       }
-      bucket.counts.set(assocName, (bucket.counts.get(assocName) || 0) + 1);
-      bucket.total += 1;
-      if (isError) bucket.errors += 1;
-    }
+    });
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, []);
 
-    const sorted = Array.from(bucketMap.values()).sort((a, b) => a.timestamp - b.timestamp);
-    const max = sorted.reduce((m, b) => Math.max(m, b.total), 0);
-    return {
-      buckets: sorted,
-      associates: Array.from(assocSet).sort(),
-      maxCount: max,
-    };
-  }, [traces, bucketMs]);
+  const buckets = data?.buckets ?? [];
+  const associates = data?.associates ?? [];
 
-  if (traces.length === 0) {
+  if (buckets.length === 0) {
     return (
       <Card>
         <CardContent className="py-8 text-center text-sm text-gray-400">
@@ -98,17 +46,16 @@ export function ActivityTimeline({ traces, timeRange }: ActivityTimelineProps) {
     );
   }
 
-  const svgWidth = 800;
   const svgHeight = 140;
   const chartTop = 10;
   const chartBottom = svgHeight - 24;
   const chartHeight = chartBottom - chartTop;
   const barGap = 2;
-  const barWidth = buckets.length > 0
-    ? Math.max(Math.min((svgWidth - barGap * buckets.length) / buckets.length, 40), 4)
-    : 20;
-  const totalWidth = buckets.length * (barWidth + barGap);
-  const displayWidth = Math.max(totalWidth, svgWidth);
+  const barWidth = Math.max(
+    Math.min((containerWidth - barGap * buckets.length) / buckets.length, 40),
+    4
+  );
+  const maxCount = buckets.reduce((m, b) => Math.max(m, b.total), 0);
 
   return (
     <Card>
@@ -116,14 +63,14 @@ export function ActivityTimeline({ traces, timeRange }: ActivityTimelineProps) {
         <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">
           Activity — {timeRange}
         </div>
-        <div className="overflow-x-auto">
-          <svg width={displayWidth} height={svgHeight} className="block">
+        <div ref={containerRef}>
+          <svg width={containerWidth} height={svgHeight} className="block">
             {/* Y-axis guide lines */}
             {maxCount > 0 && [0.25, 0.5, 0.75, 1].map((frac) => {
               const y = chartBottom - frac * chartHeight;
               return (
                 <g key={frac}>
-                  <line x1={0} y1={y} x2={displayWidth} y2={y} stroke="#f3f4f6" strokeWidth={1} />
+                  <line x1={0} y1={y} x2={containerWidth} y2={y} stroke="#f3f4f6" strokeWidth={1} />
                   <text x={2} y={y - 2} fill="#d1d5db" style={{ fontSize: "8px", fontFamily: "JetBrains Mono, monospace" }}>
                     {Math.round(maxCount * frac)}
                   </text>
@@ -135,15 +82,13 @@ export function ActivityTimeline({ traces, timeRange }: ActivityTimelineProps) {
             {buckets.map((bucket, i) => {
               const x = i * (barWidth + barGap);
               let yOffset = 0;
-
               const segments: React.ReactNode[] = [];
 
               for (const assocName of associates) {
-                const count = bucket.counts.get(assocName) || 0;
+                const count = bucket.counts[assocName] || 0;
                 if (count === 0) continue;
                 const segHeight = maxCount > 0 ? (count / maxCount) * chartHeight : 0;
                 const y = chartBottom - yOffset - segHeight;
-                const color = colorForAssociate(assocName);
 
                 segments.push(
                   <rect
@@ -152,7 +97,7 @@ export function ActivityTimeline({ traces, timeRange }: ActivityTimelineProps) {
                     y={y}
                     width={barWidth}
                     height={segHeight}
-                    fill={color}
+                    fill={associateColor(assocName)}
                     rx={1}
                     opacity={0.85}
                   >
@@ -186,7 +131,10 @@ export function ActivityTimeline({ traces, timeRange }: ActivityTimelineProps) {
             {/* X-axis labels */}
             {buckets.map((bucket, i) => {
               const x = i * (barWidth + barGap) + barWidth / 2;
-              const showLabel = buckets.length <= 30 || i % Math.ceil(buckets.length / 15) === 0;
+              const labelWidth = 50;
+              const maxLabels = Math.max(Math.floor(containerWidth / labelWidth), 2);
+              const labelStep = Math.ceil(buckets.length / maxLabels);
+              const showLabel = i % labelStep === 0;
               if (!showLabel) return null;
               return (
                 <text
@@ -210,7 +158,7 @@ export function ActivityTimeline({ traces, timeRange }: ActivityTimelineProps) {
             <div key={name} className="flex items-center gap-1">
               <div
                 className="w-2 h-2 rounded-sm"
-                style={{ backgroundColor: colorForAssociate(name) }}
+                style={{ backgroundColor: associateColor(name) }}
               />
               <span className="text-[10px] text-gray-500">{name}</span>
             </div>

@@ -7,29 +7,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTraceDetail, useEvalForTrace, useEvaluatorTrace, useEntity } from "@/api/hooks";
 import { TraceSteps } from "./TraceSteps";
 import { EvalScores } from "./EvalScores";
-import { ASSOCIATE_COLORS } from "./ActivityTimeline";
+import { ASSOCIATE_COLORS, associateColor, associateAbbrev } from "@/lib/colors";
+import { formatDuration, formatTokens, shortId } from "@/lib/format";
+import type { Trace, TraceMessage, EvaluationResult } from "@/api/types";
 
 interface RunDetailPanelProps {
   traceId: string;
   onClose: () => void;
-}
-
-function formatDuration(ms: number | undefined): string {
-  if (ms == null) return "—";
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function formatTokens(n: number | undefined): string {
-  if (n == null) return "0";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1000) return `${Math.round(n / 1000)}K`;
-  return String(n);
-}
-
-function shortId(id: unknown): string {
-  const s = String(id || "");
-  return s.length > 12 ? s.slice(0, 6) + "…" + s.slice(-4) : s;
 }
 
 export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
@@ -37,9 +21,9 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
   const { data: evalResults } = useEvalForTrace(traceId);
   const { data: evaluatorTrace } = useEvaluatorTrace(traceId);
 
-  const evalResult = evalResults?.[0];
-  const entityType = String(trace?.entity_type || "");
-  const entityId = String(trace?.entity_id || "");
+  const evalResult = evalResults?.[0] as EvaluationResult | undefined;
+  const entityType = trace?.entity_type ?? "";
+  const entityId = trace?.entity_id ? String(trace.entity_id) : "";
   const { data: entity } = useEntity(entityType, entityId);
 
   if (traceLoading || !trace) {
@@ -52,14 +36,13 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
     );
   }
 
-  const associateName = String(trace.associate_name || "Unknown");
-  const colorKey = associateName.toLowerCase().replace(/\s+/g, "_");
-  const color = ASSOCIATE_COLORS[colorKey] || ASSOCIATE_COLORS._default;
+  const associateName = trace.associate_name || "Unknown";
+  const color = associateColor(associateName);
   const isError = trace.execution_status === "error";
   const isEvaluator = associateName === "Evaluator";
-  const messages = (trace.messages || []) as Record<string, unknown>[];
+  const messages = (trace.messages || []) as TraceMessage[];
   const evalMessages = evaluatorTrace
-    ? ((evaluatorTrace.messages || []) as Record<string, unknown>[])
+    ? ((evaluatorTrace.messages || []) as TraceMessage[])
     : [];
 
   const entityState = String(entity?.status || entity?.execution_status || "");
@@ -73,7 +56,7 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
             className="px-1.5 py-0.5 rounded text-[10px] font-semibold text-white"
             style={{ backgroundColor: color }}
           >
-            {associateName.split(" ").map((w) => w[0]).join("")}
+            {associateAbbrev(associateName)}
           </span>
           <h3 className="text-sm font-semibold flex-1 truncate">{associateName}</h3>
           <button
@@ -84,8 +67,8 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
           </button>
         </div>
         <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 font-mono">
-          <span>{formatDuration(trace.duration_ms as number)}</span>
-          <span>{formatTokens(trace.total_tokens as number)} tok</span>
+          <span>{formatDuration(trace.duration_ms)}</span>
+          <span>{formatTokens(trace.total_tokens)} tok</span>
           <span>{messages.length} msgs</span>
           <Badge
             variant={isError ? "destructive" : "outline"}
@@ -97,7 +80,7 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="trace" className="flex-1 flex flex-col overflow-hidden">
+      <Tabs defaultValue="trace" className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <TabsList className="w-full justify-start rounded-none border-b bg-gray-50 px-2 h-9 flex-shrink-0">
           <TabsTrigger value="trace" className="text-xs">Trace</TabsTrigger>
           <TabsTrigger value="eval" className="text-xs">
@@ -117,7 +100,7 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
         </TabsList>
 
         {/* TAB: Trace */}
-        <TabsContent value="trace" className="flex-1 overflow-hidden m-0">
+        <TabsContent value="trace" className="flex-1 min-h-0 overflow-hidden m-0">
           <ScrollArea className="h-full">
             <div className="p-4 space-y-4">
               {/* Entity card */}
@@ -138,7 +121,7 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
                     {entityState && (
                       <div className="flex gap-2">
                         <span className="text-gray-400 w-12">Status</span>
-                        <span className="font-medium">{String(entityState)}</span>
+                        <span className="font-medium">{entityState}</span>
                       </div>
                     )}
                   </CardContent>
@@ -178,7 +161,7 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
         </TabsContent>
 
         {/* TAB: Evaluation */}
-        <TabsContent value="eval" className="flex-1 overflow-hidden m-0">
+        <TabsContent value="eval" className="flex-1 min-h-0 overflow-hidden m-0">
           <ScrollArea className="h-full">
             <div className="p-4">
               {evalResult ? (
@@ -193,7 +176,7 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
         </TabsContent>
 
         {/* TAB: Evaluator Trace */}
-        <TabsContent value="eval-trace" className="flex-1 overflow-hidden m-0">
+        <TabsContent value="eval-trace" className="flex-1 min-h-0 overflow-hidden m-0">
           <ScrollArea className="h-full">
             <div className="p-4 space-y-4">
               {evaluatorTrace ? (
@@ -206,8 +189,8 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
                       Eval
                     </span>
                     <span className="text-xs text-gray-500 font-mono">
-                      {formatTokens(evaluatorTrace.total_tokens as number)} tok ·{" "}
-                      {formatDuration(evaluatorTrace.duration_ms as number)} ·{" "}
+                      {formatTokens(evaluatorTrace.total_tokens)} tok ·{" "}
+                      {formatDuration(evaluatorTrace.duration_ms)} ·{" "}
                       {evalMessages.length} msgs
                     </span>
                   </div>

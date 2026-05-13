@@ -2,7 +2,15 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "./client";
-import type { AuthEvent, ChangeRecord, EntityMeta, QueueMessage } from "./types";
+import type {
+  ActivitySummaryResponse,
+  AuthEvent,
+  ChangeRecord,
+  EntityMeta,
+  QueueMessage,
+  Trace,
+  EvaluationResult,
+} from "./types";
 
 export function useEntities(entityName: string, params?: Record<string, string>) {
   return useQuery({
@@ -120,12 +128,12 @@ export function useQueueDepth() {
 
 const TRACE_EXCLUDE = "messages,inputs,outputs,child_runs,events";
 
-function stripRedundantTraceFields(trace: Record<string, unknown>): Record<string, unknown> {
-  const clean: Record<string, unknown> = {};
+function stripRedundantTraceFields<T extends object>(trace: T): T {
+  const clean = {} as Record<string, unknown>;
   for (const [k, v] of Object.entries(trace)) {
     if (k !== "inputs" && k !== "outputs" && k !== "child_runs") clean[k] = v;
   }
-  return clean;
+  return clean as T;
 }
 
 export function useTraces(params?: {
@@ -150,9 +158,9 @@ export function useTraces(params?: {
       qs.set("sort", "-start_time");
       qs.set("limit", String(params?.limit ?? 25));
       if (params?.offset) qs.set("offset", String(params.offset));
-      return apiClient<Record<string, unknown>[]>(`/api/traces/?${qs}`);
+      return apiClient<Trace[]>(`/api/traces/?${qs}`);
     },
-    refetchInterval: 5000,
+    refetchInterval: 15000,
   });
 }
 
@@ -160,7 +168,7 @@ export function useTraceDetail(traceId: string) {
   return useQuery({
     queryKey: ["trace-detail", traceId],
     queryFn: async () => {
-      const raw = await apiClient<Record<string, unknown>>(`/api/traces/${traceId}`);
+      const raw = await apiClient<Trace>(`/api/traces/${traceId}`);
       return stripRedundantTraceFields(raw);
     },
     enabled: !!traceId,
@@ -172,7 +180,7 @@ export function useEvalForTrace(traceId: string) {
     queryKey: ["eval-for-trace", traceId],
     queryFn: () => {
       const filter = JSON.stringify({ trace_id: traceId });
-      return apiClient<Record<string, unknown>[]>(`/api/evaluation_results/?filter=${encodeURIComponent(filter)}&limit=1`);
+      return apiClient<EvaluationResult[]>(`/api/evaluation_results/?filter=${encodeURIComponent(filter)}&limit=1`);
     },
     enabled: !!traceId,
   });
@@ -184,10 +192,40 @@ export function useEvaluatorTrace(ecTraceId: string) {
     queryFn: async () => {
       const filter = JSON.stringify({ entity_id: ecTraceId, associate_name: "Evaluator" });
       const qs = new URLSearchParams({ filter, sort: "-start_time", limit: "1" });
-      const raw = await apiClient<Record<string, unknown>[]>(`/api/traces/?${qs}`);
+      const raw = await apiClient<Trace[]>(`/api/traces/?${qs}`);
       if (raw.length === 0) return null;
       return stripRedundantTraceFields(raw[0]);
     },
     enabled: !!ecTraceId,
+  });
+}
+
+// --- Activity Summary (server-side aggregation for chart) ---
+
+const BUCKET_MINUTES: Record<string, number> = {
+  "1h": 5,
+  "6h": 15,
+  "24h": 60,
+  "7d": 240,
+  "30d": 1440,
+};
+
+export function useActivitySummary(params: {
+  since: string;
+  timeRange: string;
+  associate_name?: string;
+}) {
+  const bucketMinutes = BUCKET_MINUTES[params.timeRange] || 60;
+  return useQuery({
+    queryKey: ["activity-summary", params.since, bucketMinutes, params.associate_name],
+    queryFn: () => {
+      const qs = new URLSearchParams({
+        since: params.since,
+        bucket_minutes: String(bucketMinutes),
+      });
+      if (params.associate_name) qs.set("associate_name", params.associate_name);
+      return apiClient<ActivitySummaryResponse>(`/api/trace/activity-summary?${qs}`);
+    },
+    refetchInterval: 30000,
   });
 }

@@ -2,16 +2,11 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import type { TraceMessage, ToolCall } from "@/api/types";
 
 interface TraceStepsProps {
-  messages: Record<string, unknown>[];
+  messages: TraceMessage[];
   maxVisible?: number;
-}
-
-interface ToolCall {
-  name: string;
-  args: Record<string, unknown>;
-  id?: string;
 }
 
 function extractCommand(args: Record<string, unknown>): string {
@@ -180,24 +175,20 @@ export function TraceSteps({ messages, maxVisible = 50 }: TraceStepsProps) {
   let stepIndex = 0;
 
   for (const msg of visible) {
-    const type = msg.type as string;
     const i = stepIndex++;
 
-    if (type === "human") {
+    if (msg.type === "human") {
       steps.push(<HumanStep key={i} content={String(msg.content || "")} index={i} />);
       continue;
     }
 
-    if (type === "ai") {
-      const toolCalls = (msg.tool_calls || []) as ToolCall[];
-      const contentText =
-        (msg.content_text as string) ||
-        (typeof msg.content === "string" ? (msg.content as string) : "");
+    if (msg.type === "ai") {
+      const toolCalls = msg.tool_calls || [];
+      const contentText = msg.content_text || (typeof msg.content === "string" ? msg.content : "");
 
       if (toolCalls.length > 0) {
         for (let j = 0; j < toolCalls.length; j++) {
-          const tc = toolCalls[j];
-          steps.push(<ToolCallStep key={`${i}-tc-${j}`} call={tc} index={i} />);
+          steps.push(<ToolCallStep key={`${i}-tc-${j}`} call={toolCalls[j]} index={i} />);
         }
         if (contentText && toolCalls.every((tc) => tc.name !== "write_todos")) {
           steps.push(<AiTextStep key={`${i}-text`} content={contentText} index={i} />);
@@ -208,13 +199,13 @@ export function TraceSteps({ messages, maxVisible = 50 }: TraceStepsProps) {
       continue;
     }
 
-    if (type === "tool") {
+    if (msg.type === "tool") {
       steps.push(
         <ToolResultStep
           key={i}
           content={String(msg.content || "")}
           name={String(msg.name || "?")}
-          status={msg.status as string | undefined}
+          status={msg.status}
           index={i}
         />
       );
@@ -224,7 +215,7 @@ export function TraceSteps({ messages, maxVisible = 50 }: TraceStepsProps) {
     steps.push(
       <div key={i} className="border rounded px-3 py-2 bg-gray-100 text-sm opacity-50">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-          MSG {i} [{type}]
+          MSG {i} [{msg.type}]
         </span>
       </div>
     );

@@ -1,34 +1,14 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-
-interface RubricScore {
-  rule_id: string;
-  rule_name?: string;
-  severity?: string;
-  passed: boolean;
-  score: number;
-  reasoning?: string;
-  failure_attribution?: string;
-  recommendation?: string;
-}
-
-interface OutcomeCheck {
-  rule_id?: string;
-  entity_type?: string;
-  passed: boolean;
-  reasoning?: string;
-}
+import type { EvaluationResult } from "@/api/types";
 
 interface EvalScoresProps {
-  result: Record<string, unknown>;
+  result: EvaluationResult;
 }
 
 export function EvalScores({ result }: EvalScoresProps) {
-  const rubricScores = (result.rubric_scores || []) as RubricScore[];
-  const outcomeChecks = (result.outcome_checks || []) as OutcomeCheck[];
-  const passed = result.passed as boolean;
-  const rubricPassed = result.rubric_passed as boolean;
+  const { rubric_scores, outcome_checks, passed, rubric_passed } = result;
 
   return (
     <div className="space-y-4">
@@ -36,13 +16,13 @@ export function EvalScores({ result }: EvalScoresProps) {
         <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">
           Rubric Scores
         </span>
-        <Badge variant={rubricPassed ? "outline" : "destructive"} className={rubricPassed ? "text-green-700 border-green-300 bg-green-50" : ""}>
-          {rubricScores.filter((s) => s.passed).length}/{rubricScores.length} passed
+        <Badge variant={rubric_passed ? "outline" : "destructive"} className={rubric_passed ? "text-green-700 border-green-300 bg-green-50" : ""}>
+          {rubric_scores.filter((s) => s.passed).length}/{rubric_scores.length} passed
         </Badge>
       </div>
 
       <div className="space-y-2">
-        {rubricScores.map((score, i) => (
+        {rubric_scores.map((score, i) => (
           <Card
             key={score.rule_id || i}
             className={`${score.passed ? "border-l-4 border-l-green-600" : "border-l-4 border-l-red-500"}`}
@@ -80,7 +60,7 @@ export function EvalScores({ result }: EvalScoresProps) {
         ))}
       </div>
 
-      {outcomeChecks.length > 0 && (
+      {outcome_checks.length > 0 && (
         <>
           <Separator />
           <div>
@@ -88,7 +68,7 @@ export function EvalScores({ result }: EvalScoresProps) {
               Outcome Checks
             </span>
             <div className="space-y-2 mt-2">
-              {outcomeChecks.map((check, i) => (
+              {outcome_checks.map((check, i) => (
                 <Card
                   key={check.rule_id || i}
                   className={`${check.passed ? "border-l-4 border-l-green-600" : "border-l-4 border-l-red-500"}`}
@@ -127,9 +107,9 @@ export function EvalScores({ result }: EvalScoresProps) {
             {passed ? "Passed" : "Failed"}
           </span>
           <span className="text-gray-400">Result ID</span>
-          <span className="font-mono text-indigo-600">{String(result._id || "").slice(0, 8)}</span>
+          <span className="font-mono text-indigo-600">{result._id.slice(0, 8)}</span>
           <span className="text-gray-400">Status</span>
-          <span className="text-gray-600">{String(result.status || "")}</span>
+          <span className="text-gray-600">{result.status}</span>
         </div>
       </div>
     </div>

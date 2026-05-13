@@ -81,3 +81,93 @@ export interface ChangeRecord {
   changes: { field: string; old_value: unknown; new_value: unknown }[];
   method?: string;
 }
+
+// --- Trace / Observability ---
+
+export interface ToolCall {
+  name: string;
+  args: Record<string, unknown>;
+  id?: string;
+}
+
+export interface TraceMessage {
+  type: "human" | "ai" | "tool";
+  content?: string;
+  content_text?: string;
+  tool_calls?: ToolCall[];
+  name?: string;
+  status?: string;
+}
+
+export interface Trace {
+  _id: string;
+  trace_id?: string;
+  langsmith_run_id?: string;
+  associate_id: string;
+  associate_name: string;
+  message_id: string;
+  correlation_id?: string;
+  entity_type: string;
+  entity_id: string;
+  run_type: string;
+  messages: TraceMessage[];
+  tags: string[];
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_cost?: number;
+  start_time?: string;
+  end_time?: string;
+  duration_ms?: number;
+  execution_status: "success" | "error" | "cancelled";
+  error?: string;
+  status: "created" | "evaluated";
+  feedback_stats: Record<string, { passed?: boolean }>;
+  created_at: string;
+}
+
+export interface RubricScore {
+  rule_id: string;
+  rule_name?: string;
+  severity?: string;
+  passed: boolean;
+  score: number;
+  reasoning?: string;
+  failure_attribution?: string;
+  recommendation?: string;
+}
+
+export interface OutcomeCheck {
+  rule_id?: string;
+  entity_type?: string;
+  passed: boolean;
+  reasoning?: string;
+}
+
+export interface EvaluationResult {
+  _id: string;
+  trace_id: string;
+  associate_name: string;
+  entity_type: string;
+  entity_id: string;
+  passed: boolean;
+  rubric_passed: boolean;
+  rubric_scores: RubricScore[];
+  outcome_checks: OutcomeCheck[];
+  status: string;
+  created_at: string;
+}
+
+export interface ActivityBucket {
+  timestamp: string;
+  counts: Record<string, number>;
+  errors: number;
+  total: number;
+}
+
+export interface ActivitySummaryResponse {
+  buckets: ActivityBucket[];
+  total_count: number;
+  error_count: number;
+  associates: string[];
+}

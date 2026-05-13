@@ -1,55 +1,19 @@
 import { useState, useMemo } from "react";
 import { type ColumnDef } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { useTraces, useEntities } from "@/api/hooks";
-import { ActivityTimeline, ASSOCIATE_COLORS } from "@/components/ActivityTimeline";
+import { useTraces, useEntities, useActivitySummary } from "@/api/hooks";
+import { ActivityTimeline } from "@/components/ActivityTimeline";
 import { RunDetailPanel } from "@/components/RunDetailPanel";
 import { EntityTable } from "@/components/EntityTable";
+import { formatTime, formatDuration, formatTokens, shortId } from "@/lib/format";
+import { associateColor, associateAbbrev } from "@/lib/colors";
+import type { Trace } from "@/api/types";
 
 const PAGE_SIZE = 25;
 
-function formatTime(iso: unknown): string {
-  if (!iso) return "—";
-  const d = new Date(String(iso));
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
-function formatDuration(ms: unknown): string {
-  if (ms == null) return "—";
-  const n = Number(ms);
-  if (isNaN(n)) return "—";
-  if (n < 1000) return `${n}ms`;
-  return `${(n / 1000).toFixed(1)}s`;
-}
-
-function formatTokens(n: unknown): string {
-  if (n == null) return "0";
-  const v = Number(n);
-  if (isNaN(v)) return "0";
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-  if (v >= 1000) return `${Math.round(v / 1000)}K`;
-  return String(v);
-}
-
-function shortId(id: unknown): string {
-  const s = String(id || "");
-  return s.length > 12 ? s.slice(0, 6) + "…" + s.slice(-4) : s;
-}
-
-function associateAbbrev(name: string): string {
-  return name.split(" ").map((w) => w[0]).join("").toUpperCase();
-}
-
-function associateColor(name: string): string {
-  const key = name.toLowerCase().replace(/\s+/g, "_");
-  return ASSOCIATE_COLORS[key] || ASSOCIATE_COLORS._default;
-}
-
-function evalBadge(feedbackStats: unknown): React.ReactNode {
+function evalBadge(feedbackStats: Trace["feedback_stats"] | undefined): React.ReactNode {
   if (!feedbackStats || typeof feedbackStats !== "object") return <span className="text-gray-300 text-xs">—</span>;
-  const stats = feedbackStats as Record<string, { passed?: boolean }>;
-  const entries = Object.entries(stats).filter(([k]) => k !== "evaluation_passed");
+  const entries = Object.entries(feedbackStats).filter(([k]) => k !== "evaluation_passed");
   if (entries.length === 0) return <span className="text-gray-300 text-xs">—</span>;
   const passed = entries.filter(([, v]) => v?.passed).length;
   const total = entries.length;
@@ -70,7 +34,7 @@ const columns: ColumnDef<Record<string, unknown>>[] = [
     header: "Time",
     accessorFn: (row) => row.start_time,
     cell: ({ getValue }) => (
-      <span className="font-mono text-xs text-gray-500">{formatTime(getValue())}</span>
+      <span className="font-mono text-xs text-gray-500">{formatTime(getValue() as string)}</span>
     ),
     enableColumnFilter: false,
   },
@@ -94,11 +58,11 @@ const columns: ColumnDef<Record<string, unknown>>[] = [
   {
     id: "entity",
     header: "Entity",
-    accessorFn: (row) => `${row.entity_type || ""} · ${shortId(row.entity_id)}`,
+    accessorFn: (row) => `${row.entity_type || ""} · ${shortId(row.entity_id as string)}`,
     cell: ({ row: r }) => (
       <div>
         <span className="font-mono text-xs">
-          {String(r.original.entity_type || "")} · {shortId(r.original.entity_id)}
+          {String(r.original.entity_type || "")} · {shortId(r.original.entity_id as string)}
         </span>
         {r.original.execution_status === "error" && r.original.error ? (
           <div className="text-xs text-red-600 truncate max-w-[300px]">
@@ -131,7 +95,7 @@ const columns: ColumnDef<Record<string, unknown>>[] = [
     header: "Duration",
     accessorFn: (row) => row.duration_ms,
     cell: ({ getValue }) => (
-      <span className="font-mono text-xs text-gray-600">{formatDuration(getValue())}</span>
+      <span className="font-mono text-xs text-gray-600">{formatDuration(getValue() as number)}</span>
     ),
     enableColumnFilter: false,
   },
@@ -140,7 +104,7 @@ const columns: ColumnDef<Record<string, unknown>>[] = [
     header: "Tokens",
     accessorFn: (row) => row.total_tokens,
     cell: ({ getValue }) => (
-      <span className="font-mono text-xs text-gray-600">{formatTokens(getValue())}</span>
+      <span className="font-mono text-xs text-gray-600">{formatTokens(getValue() as number)}</span>
     ),
     enableColumnFilter: false,
   },
@@ -148,7 +112,7 @@ const columns: ColumnDef<Record<string, unknown>>[] = [
     id: "eval",
     header: "Eval",
     accessorFn: (row) => row.feedback_stats,
-    cell: ({ getValue }) => evalBadge(getValue()),
+    cell: ({ getValue }) => evalBadge(getValue() as Trace["feedback_stats"]),
     enableColumnFilter: false,
     enableSorting: false,
   },
@@ -185,13 +149,11 @@ export default function AssociateRunsView() {
       .sort();
   }, [actors]);
 
-  // Chart data — all runs in window, independent of table filters/pagination
-  const { data: chartTraces } = useTraces({
+  const { data: summaryData } = useActivitySummary({
     since,
-    limit: 100,
+    timeRange,
   });
 
-  // Table data — paginated, filtered within same window
   const { data: tableTraces, isLoading } = useTraces({
     since,
     associate_name: associateFilter !== "all" ? associateFilter : undefined,
@@ -200,10 +162,10 @@ export default function AssociateRunsView() {
     offset: page * PAGE_SIZE,
   });
 
-  const chartItems = chartTraces || [];
-  const tableItems = tableTraces || [];
+  const tableItems = (tableTraces || []) as unknown as Record<string, unknown>[];
   const hasMore = tableItems.length === PAGE_SIZE;
-  const errorCount = tableItems.filter((t) => t.execution_status === "error").length;
+  const totalCount = summaryData?.total_count ?? 0;
+  const errorCount = summaryData?.error_count ?? 0;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -211,7 +173,6 @@ export default function AssociateRunsView() {
       <div className="h-14 bg-white border-b border-gray-200 flex items-center px-6 gap-4 flex-shrink-0">
         <h2 className="text-base font-semibold text-gray-900">Associate Runs</h2>
 
-        {/* Time range selector */}
         <div className="flex gap-0.5 bg-gray-100 rounded-md p-0.5">
           {TIME_RANGES.map((r) => (
             <button
@@ -229,60 +190,64 @@ export default function AssociateRunsView() {
         </div>
 
         <span className="text-sm text-gray-400">
-          {chartItems.length} total{errorCount > 0 && ` · ${errorCount} errors on page`}
+          {totalCount.toLocaleString()} total{errorCount > 0 && ` · ${errorCount.toLocaleString()} errors`}
         </span>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Main content */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {/* Activity timeline — shows ALL runs in window */}
-          <ActivityTimeline traces={chartItems} timeRange={timeRange} />
-
-          {/* Filters */}
-          <div className="flex items-center gap-3">
-            <select
-              value={associateFilter}
-              onChange={(e) => { setAssociateFilter(e.target.value); setPage(0); }}
-              className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
-            >
-              <option value="all">All Associates</option>
-              {associateNames.map((a) => (
-                <option key={a} value={a}>{a}</option>
-              ))}
-            </select>
-
-            <select
-              value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
-              className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
-            >
-              <option value="all">All Status</option>
-              <option value="success">Success</option>
-              <option value="error">Error</option>
-            </select>
+      <div className="flex flex-1 min-h-0">
+        {/* Left column: chart (pinned) + filters (pinned) + table (scrolls) */}
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          {/* Chart — pinned */}
+          <div className="flex-shrink-0 p-5 pb-0">
+            <ActivityTimeline data={summaryData} timeRange={timeRange} />
           </div>
 
-          <Separator />
+          {/* Filters — pinned */}
+          <div className="flex-shrink-0 px-5 py-3">
+            <div className="flex items-center gap-3">
+              <select
+                value={associateFilter}
+                onChange={(e) => { setAssociateFilter(e.target.value); setPage(0); }}
+                className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
+              >
+                <option value="all">All Associates</option>
+                {associateNames.map((a) => (
+                  <option key={a} value={a}>{a}</option>
+                ))}
+              </select>
 
-          {/* Table — paginated within time window */}
-          <EntityTable
-            columns={columns}
-            data={tableItems}
-            onRowClick={(row) => setSelectedTraceId(String(row._id || ""))}
-            activeRowId={selectedTraceId}
-            storageKey="associate-runs"
-            pageIndex={page}
-            hasNextPage={hasMore}
-            hasPrevPage={page > 0}
-            onNextPage={() => setPage((p) => p + 1)}
-            onPrevPage={() => setPage((p) => Math.max(0, p - 1))}
-            isLoading={isLoading}
-            rowClassName={(row) => row.execution_status === "error" ? "bg-red-50" : ""}
-          />
+              <select
+                value={statusFilter}
+                onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
+                className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
+              >
+                <option value="all">All Status</option>
+                <option value="success">Success</option>
+                <option value="error">Error</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Table — scrolls independently */}
+          <div className="flex-1 min-h-0 px-5 pb-5">
+            <EntityTable
+              columns={columns}
+              data={tableItems}
+              onRowClick={(row) => setSelectedTraceId(String(row._id || ""))}
+              activeRowId={selectedTraceId}
+              storageKey="associate-runs"
+              pageIndex={page}
+              hasNextPage={hasMore}
+              hasPrevPage={page > 0}
+              onNextPage={() => setPage((p) => p + 1)}
+              onPrevPage={() => setPage((p) => Math.max(0, p - 1))}
+              isLoading={isLoading}
+              rowClassName={(row) => row.execution_status === "error" ? "bg-red-50" : ""}
+            />
+          </div>
         </div>
 
-        {/* Detail panel */}
+        {/* Detail panel — scrolls independently */}
         {selectedTraceId && (
           <RunDetailPanel traceId={selectedTraceId} onClose={() => setSelectedTraceId(null)} />
         )}
