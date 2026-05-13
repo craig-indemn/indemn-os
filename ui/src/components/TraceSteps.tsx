@@ -1,7 +1,5 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import type { TraceMessage, ToolCall } from "@/api/types";
 
 interface TraceStepsProps {
@@ -34,23 +32,22 @@ function truncate(text: string, max: number): { truncated: string; wasTruncated:
 }
 
 function HumanStep({ content, index }: { content: string; index: number }) {
+  const [open, setOpen] = useState(false);
   return (
-    <Collapsible>
-      <div className="border rounded px-3 py-2 bg-gray-50 text-sm">
-        <CollapsibleTrigger className="w-full text-left">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-            MSG {index} [human] — {content.length.toLocaleString()} chars
-          </span>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <ScrollArea className="max-h-48 mt-2">
-            <pre className="text-xs text-gray-500 font-mono whitespace-pre-wrap break-all">
-              {content}
-            </pre>
-          </ScrollArea>
-        </CollapsibleContent>
-      </div>
-    </Collapsible>
+    <div className="border rounded px-3 py-2 bg-gray-50 text-sm">
+      <button className="w-full text-left" onClick={() => setOpen((v) => !v)}>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+          MSG {index} [human] — {content.length.toLocaleString()} chars {open ? "▾" : "▸"}
+        </span>
+      </button>
+      {open && (
+        <div className="max-h-48 overflow-auto mt-2 scrollbar-visible">
+          <pre className="text-xs text-gray-500 font-mono whitespace-pre-wrap break-all">
+            {content}
+          </pre>
+        </div>
+      )}
+    </div>
   );
 }
 
