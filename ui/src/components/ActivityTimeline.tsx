@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { associateColor } from "@/lib/colors";
 import type { ActivitySummaryResponse } from "@/api/types";
 
@@ -16,9 +17,10 @@ function formatBucketLabel(timestamp: string, timeRange: string): string {
 interface ActivityTimelineProps {
   data: ActivitySummaryResponse | undefined;
   timeRange: string;
+  isLoading?: boolean;
 }
 
-export function ActivityTimeline({ data, timeRange }: ActivityTimelineProps) {
+export function ActivityTimeline({ data, timeRange, isLoading }: ActivityTimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(600);
 
@@ -36,19 +38,30 @@ export function ActivityTimeline({ data, timeRange }: ActivityTimelineProps) {
   const buckets = data?.buckets ?? [];
   const associates = data?.associates ?? [];
 
+  if (!data && isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-4">
+          <Skeleton className="h-3 w-24 mb-3" />
+          <Skeleton className="h-[80px] w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (buckets.length === 0) {
     return (
       <Card>
-        <CardContent className="py-8 text-center text-sm text-gray-400">
+        <CardContent className="py-6 text-center text-sm text-gray-400">
           No activity in this time range
         </CardContent>
       </Card>
     );
   }
 
-  const svgHeight = 140;
+  const svgHeight = 100;
   const chartTop = 10;
-  const chartBottom = svgHeight - 24;
+  const chartBottom = svgHeight - 20;
   const chartHeight = chartBottom - chartTop;
   const barGap = 2;
   const barWidth = Math.max(
@@ -63,8 +76,8 @@ export function ActivityTimeline({ data, timeRange }: ActivityTimelineProps) {
         <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">
           Activity — {timeRange}
         </div>
-        <div ref={containerRef}>
-          <svg width={containerWidth} height={svgHeight} className="block">
+        <div ref={containerRef} className={isLoading ? "opacity-40 transition-opacity" : "transition-opacity"}>
+          <svg width={containerWidth} height={svgHeight} overflow="visible" className="block">
             {/* Y-axis guide lines */}
             {maxCount > 0 && [0.25, 0.5, 0.75, 1].map((frac) => {
               const y = chartBottom - frac * chartHeight;
@@ -108,17 +121,15 @@ export function ActivityTimeline({ data, timeRange }: ActivityTimelineProps) {
               }
 
               if (bucket.errors > 0) {
-                const errHeight = maxCount > 0 ? (bucket.errors / maxCount) * chartHeight : 0;
                 segments.push(
                   <rect
-                    key="error-overlay"
+                    key="error-mark"
                     x={x}
-                    y={chartBottom - errHeight}
+                    y={chartBottom - yOffset - 3}
                     width={barWidth}
-                    height={errHeight}
+                    height={3}
                     fill={ERROR_COLOR}
-                    rx={1}
-                    opacity={0.4}
+                    rx={0.5}
                   >
                     <title>{`${bucket.errors} errors`}</title>
                   </rect>
@@ -165,7 +176,7 @@ export function ActivityTimeline({ data, timeRange }: ActivityTimelineProps) {
           ))}
           {buckets.some((b) => b.errors > 0) && (
             <div className="flex items-center gap-1">
-              <div className="w-2 h-2 rounded-sm" style={{ backgroundColor: ERROR_COLOR, opacity: 0.4 }} />
+              <div className="w-2 h-2 rounded-sm" style={{ backgroundColor: ERROR_COLOR }} />
               <span className="text-[10px] text-gray-500">Errors</span>
             </div>
           )}

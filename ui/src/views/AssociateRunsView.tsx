@@ -149,7 +149,7 @@ export default function AssociateRunsView() {
       .sort();
   }, [actors]);
 
-  const { data: summaryData } = useActivitySummary({
+  const { data: summaryData, isLoading: summaryLoading } = useActivitySummary({
     since,
     timeRange,
   });
@@ -177,7 +177,7 @@ export default function AssociateRunsView() {
           {TIME_RANGES.map((r) => (
             <button
               key={r}
-              onClick={() => { setTimeRange(r); setPage(0); }}
+              onClick={() => { setTimeRange(r); setPage(0); setSelectedTraceId(null); }}
               className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
                 r === timeRange
                   ? "bg-white text-gray-900 shadow-sm"
@@ -199,7 +199,7 @@ export default function AssociateRunsView() {
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
           {/* Chart — pinned */}
           <div className="flex-shrink-0 p-5 pb-0">
-            <ActivityTimeline data={summaryData} timeRange={timeRange} />
+            <ActivityTimeline data={summaryData} timeRange={timeRange} isLoading={summaryLoading} />
           </div>
 
           {/* Filters — pinned */}
@@ -207,7 +207,7 @@ export default function AssociateRunsView() {
             <div className="flex items-center gap-3">
               <select
                 value={associateFilter}
-                onChange={(e) => { setAssociateFilter(e.target.value); setPage(0); }}
+                onChange={(e) => { setAssociateFilter(e.target.value); setPage(0); setSelectedTraceId(null); }}
                 className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
               >
                 <option value="all">All Associates</option>
@@ -218,7 +218,7 @@ export default function AssociateRunsView() {
 
               <select
                 value={statusFilter}
-                onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
+                onChange={(e) => { setStatusFilter(e.target.value); setPage(0); setSelectedTraceId(null); }}
                 className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
               >
                 <option value="all">All Status</option>
@@ -235,7 +235,6 @@ export default function AssociateRunsView() {
               data={tableItems}
               onRowClick={(row) => setSelectedTraceId(String(row._id || ""))}
               activeRowId={selectedTraceId}
-              storageKey="associate-runs"
               pageIndex={page}
               hasNextPage={hasMore}
               hasPrevPage={page > 0}
