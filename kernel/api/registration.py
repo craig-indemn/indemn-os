@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from kernel.api.serialize import to_dict
 from kernel.auth.middleware import check_permission, get_current_actor
-from kernel.context import current_org_id
+from kernel.context import current_causation_message_id, current_org_id
 from kernel.db import ENTITY_REGISTRY
 from kernel.entity.base import DomainBaseEntity
 
@@ -450,6 +450,13 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
 
         if entity_name == "EvaluationResult":
             from kernel.api.eval_routes import evaluate_outcome_checks
+            if not data.get("trace_id"):
+                msg_id = current_causation_message_id.get()
+                if msg_id:
+                    from kernel.message.schema import Message
+                    msg = await Message.find_one({"_id": ObjectId(msg_id)})
+                    if msg and msg.entity_type == "Trace":
+                        data["trace_id"] = str(msg.entity_id)
             data = await evaluate_outcome_checks(data)
 
         entity = entity_cls(org_id=current_org_id.get(), **data)
