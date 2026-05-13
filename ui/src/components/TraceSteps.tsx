@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import type { TraceMessage, ToolCall } from "@/api/types";
 
@@ -31,15 +31,67 @@ function truncate(text: string, max: number): { truncated: string; wasTruncated:
   return { truncated: text.slice(0, max), wasTruncated: true };
 }
 
+// --- Full-screen modal for viewing step content ---
+
+function FullScreenModal({ title, content, onClose }: { title: string; content: string; onClose: () => void }) {
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "Escape") onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [handleKeyDown]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50" />
+      <div
+        className="relative bg-white rounded-lg shadow-2xl w-[90vw] h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-3 border-b flex-shrink-0">
+          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">{title}</span>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none px-2">×</button>
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto p-5 scrollbar-visible">
+          <pre className="text-xs font-mono text-gray-700 whitespace-pre-wrap break-all">{content}</pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExpandButton({ title, content }: { title: string; content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="text-gray-300 hover:text-gray-500 text-[10px] ml-auto"
+        title="View full screen"
+      >
+        ⛶
+      </button>
+      {open && <FullScreenModal title={title} content={content} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+// --- Step components ---
+
 function HumanStep({ content, index }: { content: string; index: number }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="border rounded px-3 py-2 bg-gray-50 text-sm">
-      <button className="w-full text-left" onClick={() => setOpen((v) => !v)}>
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-          MSG {index} [human] — {content.length.toLocaleString()} chars {open ? "▾" : "▸"}
-        </span>
-      </button>
+      <div className="flex items-center">
+        <button className="flex-1 text-left" onClick={() => setOpen((v) => !v)}>
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+            MSG {index} [human] — {content.length.toLocaleString()} chars {open ? "▾" : "▸"}
+          </span>
+        </button>
+        <ExpandButton title={`MSG ${index} [human]`} content={content} />
+      </div>
       {open && (
         <div className="max-h-48 overflow-auto mt-2 scrollbar-visible">
           <pre className="text-xs text-gray-500 font-mono whitespace-pre-wrap break-all">
@@ -70,9 +122,12 @@ function ToolCallStep({ call, index }: { call: ToolCall; index: number }) {
 
   return (
     <div className="border border-blue-200 rounded px-3 py-2 bg-blue-50 text-sm">
-      <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-600">
-        MSG {index} [ai → {call.name}]
-      </span>
+      <div className="flex items-center">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-600">
+          MSG {index} [ai → {call.name}]
+        </span>
+        <ExpandButton title={`MSG ${index} [ai → ${call.name}]`} content={cmd} />
+      </div>
       <code className="block text-xs font-mono text-gray-900 mt-0.5 break-all">{cmd}</code>
     </div>
   );
@@ -129,6 +184,7 @@ function ToolResultStep({
             stderr
           </Badge>
         )}
+        <ExpandButton title={`MSG ${index} [tool: ${name}]`} content={parsed.text} />
       </div>
       <pre className="text-xs font-mono text-gray-600 mt-1 whitespace-pre-wrap break-all">
         {expanded ? parsed.text : truncated}
@@ -156,9 +212,12 @@ function ToolResultStep({
 function AiTextStep({ content, index }: { content: string; index: number }) {
   return (
     <div className="border rounded px-3 py-2 bg-gray-50 text-sm">
-      <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-        MSG {index} [ai]
-      </span>
+      <div className="flex items-center">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+          MSG {index} [ai]
+        </span>
+        <ExpandButton title={`MSG ${index} [ai]`} content={content} />
+      </div>
       <p className="text-sm text-gray-700 mt-0.5">{content}</p>
     </div>
   );
