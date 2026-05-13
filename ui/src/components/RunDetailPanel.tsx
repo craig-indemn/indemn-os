@@ -55,6 +55,7 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
   const colorKey = associateName.toLowerCase().replace(/\s+/g, "_");
   const color = ASSOCIATE_COLORS[colorKey] || ASSOCIATE_COLORS._default;
   const isError = trace.execution_status === "error";
+  const isEvaluator = associateName === "Evaluator";
   const messages = (trace.messages || []) as Record<string, unknown>[];
   const evalMessages = evaluatorTrace
     ? ((evaluatorTrace.messages || []) as Record<string, unknown>[])
@@ -109,7 +110,9 @@ export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="eval-trace" className="text-xs">Evaluator Trace</TabsTrigger>
+          {!isEvaluator && (
+            <TabsTrigger value="eval-trace" className="text-xs">Evaluator Trace</TabsTrigger>
+          )}
         </TabsList>
 
         {/* TAB: Trace */}
