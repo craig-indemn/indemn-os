@@ -1,12 +1,5 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import {
   Table,
@@ -115,30 +108,26 @@ export default function AssociateRunsView() {
 
           {/* Filters */}
           <div className="flex items-center gap-3">
-            <Select value={associateFilter} onValueChange={(v) => setAssociateFilter(v || "all")}>
-              <SelectTrigger className="w-44 h-8 text-xs">
-                <SelectValue placeholder="All Associates" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Associates</SelectItem>
-                {associates.map((a) => (
-                  <SelectItem key={a} value={a}>
-                    {a}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <select
+              value={associateFilter}
+              onChange={(e) => setAssociateFilter(e.target.value)}
+              className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
+            >
+              <option value="all">All Associates</option>
+              {associates.map((a) => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
 
-            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v || "all")}>
-              <SelectTrigger className="w-32 h-8 text-xs">
-                <SelectValue placeholder="All Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="success">Success</SelectItem>
-                <SelectItem value="error">Error</SelectItem>
-              </SelectContent>
-            </Select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="h-8 text-xs border border-gray-200 rounded-md px-2 bg-white text-gray-700"
+            >
+              <option value="all">All Status</option>
+              <option value="success">Success</option>
+              <option value="error">Error</option>
+            </select>
 
             <span className="ml-auto text-xs text-gray-400">{items.length} runs</span>
           </div>
