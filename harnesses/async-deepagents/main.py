@@ -155,6 +155,9 @@ def _build_context_with_skills(entity_data: dict, entity_type: str, associate: d
         except CLIError as e:
             log.warning("Failed to load skill %s: %s", ref, e)
 
+    entity_id = entity_data.get("_id", "")
+    if entity_type == "Trace" and entity_id:
+        parts.append(f"<trace-ref _id=\"{entity_id}\" />")
     parts.append(_format_entity_xml(entity_data, entity_type))
     parts.append("</context>")
     return "\n".join(parts)
