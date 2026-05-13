@@ -19,11 +19,11 @@ export const ASSOCIATE_COLORS: Record<string, string> = {
 
 const ERROR_COLOR = "#dc2626";
 
-const LANE_HEIGHT = 28;
-const BLOCK_HEIGHT = 7;
+const LANE_HEIGHT = 32;
+const BLOCK_HEIGHT = 8;
 const BLOCK_GAP = 2;
-const MIN_BLOCK_WIDTH = 3;
-const LABEL_WIDTH = 52;
+const MIN_BLOCK_WIDTH = 4;
+const LABEL_WIDTH = 80;
 
 interface TraceItem {
   _id: string;
@@ -164,7 +164,7 @@ export function ActivityTimeline({ traces, onSelectTrace, selectedTraceId }: Act
                     className="fill-gray-400 text-[9px] font-semibold"
                     style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "9px" }}
                   >
-                    {laneName.split(/[\s_]+/).map((w) => w.slice(0, 3)).join("").slice(0, 6)}
+                    {laneName.length > 10 ? laneName.split(/[\s_]+/).map((w) => w[0]?.toUpperCase()).join("") : laneName}
                   </text>
                   {/* Lane background */}
                   <rect

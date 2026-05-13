@@ -37,7 +37,8 @@ function formatTokens(n: unknown): string {
 }
 
 function shortId(id: unknown): string {
-  return String(id || "").slice(0, 8);
+  const s = String(id || "");
+  return s.length > 12 ? s.slice(0, 6) + "…" + s.slice(-4) : s;
 }
 
 function associateAbbrev(name: string): string {

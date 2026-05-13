@@ -28,7 +28,8 @@ function formatTokens(n: number | undefined): string {
 }
 
 function shortId(id: unknown): string {
-  return String(id || "").slice(0, 8);
+  const s = String(id || "");
+  return s.length > 12 ? s.slice(0, 6) + "…" + s.slice(-4) : s;
 }
 
 export function RunDetailPanel({ traceId, onClose }: RunDetailPanelProps) {
