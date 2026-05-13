@@ -410,16 +410,31 @@ async def activity_summary(
     ]
     assoc_docs = await coll.aggregate(assoc_pipeline).to_list(length=100)
 
-    buckets = []
+    data_by_bucket = {}
     for r in results:
         counts = {entry["k"]: entry["v"] for entry in r.get("entries", [])}
-        ts_ms = r["_id"]
-        buckets.append({
-            "timestamp": datetime.utcfromtimestamp(ts_ms / 1000).isoformat() + "Z",
+        data_by_bucket[r["_id"]] = {
             "counts": counts,
             "errors": r["errors"],
             "total": r["total"],
+        }
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    since_ms = int(since_dt.timestamp() * 1000)
+    since_bucket = since_ms - (since_ms % bucket_ms)
+    now_bucket = now_ms - (now_ms % bucket_ms)
+
+    buckets = []
+    ts = since_bucket
+    while ts <= now_bucket:
+        d = data_by_bucket.get(ts)
+        buckets.append({
+            "timestamp": datetime.utcfromtimestamp(ts / 1000).isoformat() + "Z",
+            "counts": d["counts"] if d else {},
+            "errors": d["errors"] if d else 0,
+            "total": d["total"] if d else 0,
         })
+        ts += bucket_ms
 
     return {
         "buckets": buckets,
