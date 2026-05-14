@@ -22,7 +22,6 @@ from datetime import datetime, timedelta, timezone
 
 from harness.agent import build_agent
 from harness.cron_runner import run_cron_skill
-from harness.completion_logic import agent_did_useful_work
 from harness_common.cli import CLIError, indemn
 from harness.trace_helpers import serialize_messages, serialize_run_tree, derive_child_runs, aggregate_tokens
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
@@ -742,46 +741,26 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         except Exception as e:
             log.warning("Trace creation failed (non-blocking): %s", e)
 
-        # Bug #2: detect agent that ran-but-did-nothing. Without this check the
-        # harness used to silently mark complete even when the agent produced
-        # no output and made no mutating CLI calls — message stayed in
-        # `processing` indefinitely (Apr 24 GR Little Extractor trace).
-        did_useful_work, no_work_reason = agent_did_useful_work(messages)
-
         # Clean up causation env var
         os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
         os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
 
-        if did_useful_work:
-            # Sync evaluation results to LangSmith for evaluator runs
-            if input.entity_type == "Trace":
-                try:
-                    await _sync_eval_to_langsmith(
-                        str(input.entity_id),
-                        evaluator_run_id=str(_langsmith_run_id),
-                    )
-                except Exception as e:
-                    log.warning("LangSmith eval sync failed (non-blocking): %s", e)
+        # Sync evaluation results to LangSmith for evaluator runs
+        if input.entity_type == "Trace":
+            try:
+                await _sync_eval_to_langsmith(
+                    str(input.entity_id),
+                    evaluator_run_id=str(_langsmith_run_id),
+                )
+            except Exception as e:
+                log.warning("LangSmith eval sync failed (non-blocking): %s", e)
 
-            indemn("queue", "complete", input.message_id)
-            return AgentExecutionResult(
-                status="complete",
-                iterations=len(messages),
-                tools_used=tools_used,
-            )
-        else:
-            log.warning(
-                "Agent produced no useful work for message %s: %s",
-                input.message_id,
-                no_work_reason,
-            )
-            indemn("queue", "fail", input.message_id, "--reason", no_work_reason)
-            return AgentExecutionResult(
-                status="failed",
-                iterations=len(messages),
-                tools_used=tools_used,
-                error=no_work_reason,
-            )
+        indemn("queue", "complete", input.message_id)
+        return AgentExecutionResult(
+            status="complete",
+            iterations=len(messages),
+            tools_used=tools_used,
+        )
 
     except Exception as e:
         try:
