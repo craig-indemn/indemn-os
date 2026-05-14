@@ -18,6 +18,7 @@ from typing import Callable
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
+from langgraph.checkpoint.memory import MemorySaver
 from harness_common.backend import build_backend
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import ToolMessage
@@ -117,4 +118,5 @@ def build_agent(
         system_prompt=build_system_prompt(associate),
         backend=build_backend(activity_id=activity_id),
         middleware=[ExecuteErrorStatusMiddleware()],
+        checkpointer=MemorySaver(),
     )

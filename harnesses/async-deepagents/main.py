@@ -481,6 +481,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
     _start_time = datetime.now(timezone.utc)
     _start_ts = time.monotonic()
     associate: dict = {"name": "unknown"}
+    agent = None
     _captured_messages: list = []
     _captured_tools: list[str] = []
 
@@ -630,6 +631,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                     "run_id": _langsmith_run_id,
                     "recursion_limit": 50,
                     "callbacks": [_run_collector],
+                    "configurable": {"thread_id": str(input.message_id)},
                     "metadata": {
                         "associate_id": str(input.associate_id),
                         "associate_name": associate.get("name"),
@@ -763,6 +765,16 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         )
 
     except Exception as e:
+        if agent:
+            try:
+                state = await agent.aget_state(
+                    {"configurable": {"thread_id": str(input.message_id)}}
+                )
+                if state and state.values:
+                    _captured_messages = state.values.get("messages", [])
+                    log.info("Recovered %d messages from checkpoint after error", len(_captured_messages))
+            except Exception as recovery_err:
+                log.warning("Checkpoint message recovery failed: %s", recovery_err)
         try:
             await _create_trace(
                 input, associate, _captured_messages, _captured_tools,
