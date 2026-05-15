@@ -63,6 +63,13 @@ class CLIClient:
         effective_actor = os.environ.get("INDEMN_EFFECTIVE_ACTOR_ID")
         if effective_actor:
             h["X-Effective-Actor-Id"] = effective_actor
+        # Cascade correlation id (OS-level): the harness sets this from the
+        # inbound message's correlation_id so every CLI call within an agent
+        # run, and every cascade hop downstream, shares one id queryable via
+        # `indemn trace cascade <id>`. Distinct from OTEL trace context.
+        correlation_id = os.environ.get("INDEMN_CORRELATION_ID")
+        if correlation_id:
+            h["X-Correlation-ID"] = correlation_id
         return h
 
     def _handle_error(self, response: httpx.Response):

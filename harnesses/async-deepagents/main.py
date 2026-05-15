@@ -516,6 +516,12 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # changes collection, while the auth token stays the runtime's
         # Platform Admin equivalent. Cleaned up in finally below.
         os.environ["INDEMN_EFFECTIVE_ACTOR_ID"] = str(input.associate_id)
+        # Cascade correlation_id: every CLI call in this activity propagates
+        # the inbound message's correlation_id via X-Correlation-ID header,
+        # so all entity changes + watch-fired messages downstream share one
+        # id queryable via `indemn trace cascade <id>`.
+        if input.correlation_id:
+            os.environ["INDEMN_CORRELATION_ID"] = str(input.correlation_id)
 
         # Load associate config + context (harness orchestration, not agent tools)
         associate = indemn("actor", "get", input.associate_id)
@@ -585,6 +591,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             finally:
                 os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
                 os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
+                os.environ.pop("INDEMN_CORRELATION_ID", None)
 
         # Bug #41: route between watch-driven entity load and synthetic
         # `_<sentinel>` trigger descriptor — see _load_message_context docstring.
@@ -760,9 +767,10 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         except Exception as e:
             log.warning("Trace creation failed (non-blocking): %s", e)
 
-        # Clean up causation env var
+        # Clean up causation + effective-actor + correlation env vars
         os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
         os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
+        os.environ.pop("INDEMN_CORRELATION_ID", None)
 
         # Sync evaluation results to LangSmith for evaluator runs
         if input.entity_type == "Trace":
@@ -801,9 +809,10 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             )
         except Exception:
             pass
-        # Clean up causation env var
+        # Clean up causation + effective-actor + correlation env vars
         os.environ.pop("INDEMN_CAUSATION_MESSAGE_ID", None)
         os.environ.pop("INDEMN_EFFECTIVE_ACTOR_ID", None)
+        os.environ.pop("INDEMN_CORRELATION_ID", None)
         # Mark the message failed — harness owns failure reporting [Q1]
         try:
             indemn("queue", "fail", input.message_id, "--reason", str(e)[:500])

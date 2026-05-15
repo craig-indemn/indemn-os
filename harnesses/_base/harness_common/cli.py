@@ -80,6 +80,11 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
     # records which associate acted (vs just "the runtime token's actor").
     if "INDEMN_EFFECTIVE_ACTOR_ID" in os.environ:
         env["INDEMN_EFFECTIVE_ACTOR_ID"] = os.environ["INDEMN_EFFECTIVE_ACTOR_ID"]
+    # Cascade correlation_id propagation: the harness sets this from the
+    # inbound message's correlation_id so every CLI subprocess in this
+    # agent run sets the same X-Correlation-ID header.
+    if "INDEMN_CORRELATION_ID" in os.environ:
+        env["INDEMN_CORRELATION_ID"] = os.environ["INDEMN_CORRELATION_ID"]
 
     cmd = [_INDEMN_BIN, *args]
 
