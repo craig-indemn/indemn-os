@@ -422,6 +422,14 @@ async def trigger_eval_run(
             )
             await msg.insert()
     else:
+        # Reset traces to 'created' so the evaluator doesn't skip them.
+        # Batch eval is an explicit re-evaluation request — previously
+        # evaluated traces should be re-scored against the current rubric.
+        await traces_coll.update_many(
+            {"_id": {"$in": trace_ids}, "status": "evaluated"},
+            {"$set": {"status": "created", "feedback_stats": {}}},
+        )
+
         for trace_id in trace_ids:
             msg = Message(
                 org_id=org_id,
