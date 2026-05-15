@@ -343,6 +343,22 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
         source_uuid = UUID(source_run_id) if source_run_id else None
         feedback_stats = {}
 
+        # Delete old feedback from previous evaluations of this trace.
+        # Without this, re-evaluation accumulates stale entries in LangSmith
+        # (e.g. removed rubric rules still show as "Fail").
+        if ls_run_uuid:
+            try:
+                existing_feedback = list(client.list_feedback(run_ids=[ls_run_uuid]))
+                for old_fb in existing_feedback:
+                    try:
+                        client.delete_feedback(old_fb.id)
+                    except Exception as e:
+                        log.warning("Failed to delete old feedback %s: %s", old_fb.id, e)
+                if existing_feedback:
+                    log.info("LangSmith sync: deleted %d old feedback entries", len(existing_feedback))
+            except Exception as e:
+                log.warning("Failed to list old feedback: %s", e)
+
         for result in eval_results:
             eval_result_id = result.get("_id", "")
             eval_run_id = result.get("run_id", "")
