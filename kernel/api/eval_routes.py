@@ -22,6 +22,40 @@ from kernel.watch.evaluator import describe_condition, evaluate_condition
 logger = logging.getLogger(__name__)
 
 
+async def _resolve_outcome_entity(
+    source_data: dict, source_type: str, target_type: str
+) -> dict | None:
+    """Follow a relationship from source entity to load a target entity.
+
+    When an outcome check specifies entity_type different from the
+    EvaluationResult's entity, we look for a field on the source that
+    references the target type and load it.
+
+    E.g. source=Email has field 'touchpoint' → Touchpoint entity.
+    """
+    target_field = target_type.lower()
+    target_id = source_data.get(target_field)
+    if not target_id:
+        return None
+
+    TargetCls = ENTITY_REGISTRY.get(target_type)
+    if not TargetCls:
+        return None
+
+    try:
+        entity = await TargetCls.get_motor_collection().find_one(
+            {"_id": ObjectId(str(target_id))}
+        )
+        if entity:
+            return {k: v for k, v in entity.items() if not k.startswith("_") or k == "_id"}
+    except Exception as e:
+        logger.warning(
+            "outcome_check: failed to resolve %s from %s: %s",
+            target_type, source_type, e,
+        )
+    return None
+
+
 async def evaluate_outcome_checks(data: dict) -> dict:
     """Run outcome checks server-side when an EvaluationResult is created.
 
@@ -84,13 +118,29 @@ async def evaluate_outcome_checks(data: dict) -> dict:
     for rule in rules_with_checks:
         oc = rule["outcome_check"]
         check = oc["check"]
+        target_entity_type = oc.get("entity_type")
+        check_data = entity_data
+
+        if target_entity_type and target_entity_type != entity_type:
+            check_data = await _resolve_outcome_entity(
+                entity_data, entity_type, target_entity_type
+            )
+            if not check_data:
+                outcome_checks.append({
+                    "rule_id": rule.get("id"),
+                    "entity_type": target_entity_type,
+                    "check": check,
+                    "passed": False,
+                    "reasoning": f"Could not resolve {target_entity_type} from {entity_type}",
+                })
+                continue
 
         try:
-            passed = evaluate_condition(check, entity_data)
+            passed = evaluate_condition(check, check_data)
         except Exception as e:
             outcome_checks.append({
                 "rule_id": rule.get("id"),
-                "entity_type": oc.get("entity_type", entity_type),
+                "entity_type": target_entity_type or entity_type,
                 "check": check,
                 "passed": False,
                 "actual_value": None,
@@ -100,10 +150,10 @@ async def evaluate_outcome_checks(data: dict) -> dict:
 
         outcome_checks.append({
             "rule_id": rule.get("id"),
-            "entity_type": oc.get("entity_type", entity_type),
+            "entity_type": target_entity_type or entity_type,
             "check": check,
             "passed": passed,
-            "reasoning": describe_condition(check, entity_data),
+            "reasoning": describe_condition(check, check_data),
         })
 
     data["outcome_checks"] = outcome_checks
