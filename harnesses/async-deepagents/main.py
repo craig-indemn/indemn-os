@@ -427,13 +427,14 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
 
             for check in (result.get("outcome_checks") or []):
                 try:
+                    check_key = check.get("rule_id") or check.get("check_name") or "unknown"
                     fb = client.create_feedback(
                         run_id=ls_run_uuid,
                         trace_id=ls_run_uuid,
-                        key=f"outcome:{check.get('check_name', 'unknown')}",
+                        key=f"outcome:{check_key}",
                         score=1.0 if check.get("passed") else 0.0,
                         value="Pass" if check.get("passed") else "Fail",
-                        comment=json.dumps({"actual": check.get("actual_value"), "expected": check.get("expected")}),
+                        comment=check.get("reasoning", ""),
                         feedback_source_type="model",
                         source_run_id=source_uuid,
                         source_info=source_info if source_info else None,
@@ -441,7 +442,7 @@ async def _sync_eval_to_langsmith(trace_entity_id: str, evaluator_run_id: str | 
                     if fb and hasattr(fb, "id"):
                         feedback_ids.append(str(fb.id))
                     synced += 1
-                    okey = f"outcome:{check.get('check_name', 'unknown')}"
+                    okey = f"outcome:{check_key}"
                     feedback_stats[okey] = {"score": 1.0 if check.get("passed") else 0.0, "passed": check.get("passed", False)}
                 except Exception as e:
                     log.warning("LangSmith feedback failed for outcome %s: %s",
