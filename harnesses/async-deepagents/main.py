@@ -310,23 +310,28 @@ async def _create_trace(
         "status": "created",
     }
 
+    # Always write the payload to a tempfile and pass via --data-file. Linux's
+    # MAX_ARG_STRLEN caps a single argv entry at 128KB regardless of ARG_MAX
+    # total; Trace payloads frequently exceed that (full conversation messages
+    # + child_runs + entity inputs). The prior 200K threshold was wrong — any
+    # payload between 128K and 200K hit [Errno 7] Argument list too long with
+    # the Trace creation silently lost (non-blocking warning, no retry). One
+    # code path eliminates the bug class. Trace creation is non-hot; tempfile
+    # overhead (low microseconds) is irrelevant. See os-learnings.md.
+    import tempfile
     payload = json.dumps(trace_data, default=str)
-    if len(payload) > 200_000:
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write(payload)
-            tmp_path = f.name
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(payload)
+        tmp_path = f.name
+    try:
+        await asyncio.to_thread(
+            indemn, "trace", "create", "--data-file", tmp_path, timeout=60.0
+        )
+    finally:
         try:
-            await asyncio.to_thread(
-                indemn, "trace", "create", "--data-file", tmp_path, timeout=60.0
-            )
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-    else:
-        await asyncio.to_thread(indemn, "trace", "create", "--data", payload, timeout=60.0)
+            os.unlink(tmp_path)
+        except OSError:
+            pass
     log.info("Trace created for %s -> %s %s", associate.get("name"), input.entity_type, str(input.entity_id)[:8])
 
 
