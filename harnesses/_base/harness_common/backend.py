@@ -80,13 +80,29 @@ def _build_localshell_backend(activity_id: str | None = None):
     root_dir = _root_dir_for_activity(activity_id)
     os.makedirs(root_dir, exist_ok=True)
 
+    # Whitelist matches harness_common.cli.indemn() — the agent's `execute`
+    # tool subprocesses must propagate the same trace/forensics/cascade
+    # context as the harness's own CLI calls. Without these here, the
+    # backend's env= replaces parent env entirely, so X-Correlation-ID +
+    # X-Effective-Actor-Id + X-Causation-Message-ID never reach the API
+    # from agent-driven calls. Snapshot taken at agent construction —
+    # per-activity, since main.py sets these vars before calling
+    # build_backend().
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "INDEMN_API_URL": os.environ["INDEMN_API_URL"],
+        "INDEMN_SERVICE_TOKEN": os.environ["INDEMN_SERVICE_TOKEN"],
+    }
+    for k in ("TRACEPARENT", "TRACESTATE", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+        if k in os.environ:
+            env[k] = os.environ[k]
+    for k in ("INDEMN_CAUSATION_MESSAGE_ID", "INDEMN_EFFECTIVE_ACTOR_ID", "INDEMN_CORRELATION_ID"):
+        if k in os.environ:
+            env[k] = os.environ[k]
+
     return LocalShellBackend(
         root_dir=root_dir,
-        env={
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
-            "INDEMN_API_URL": os.environ["INDEMN_API_URL"],
-            "INDEMN_SERVICE_TOKEN": os.environ["INDEMN_SERVICE_TOKEN"],
-        },
+        env=env,
     )
 
 
