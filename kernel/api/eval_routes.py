@@ -7,13 +7,14 @@ TestSet, EvaluationRun, EvaluationResult).
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, Query
 
 from kernel.auth.middleware import get_current_actor
-from kernel.context import current_org_id
+from kernel.context import current_correlation_id, current_org_id
 from kernel.db import ENTITY_REGISTRY, get_database
 from kernel.message.schema import Message
 
@@ -404,23 +405,33 @@ async def trigger_eval_run(
                 logger.warning("Prospective: entity type %s not registered, skipping", entity_type)
                 continue
 
-            test_entity = entity_cls(org_id=org_id, **entity_data)
-            entity_msgs = await test_entity.save_tracked(method="create")
-            _fire_dispatch(entity_msgs)
+            # Set the cascade correlation_id BEFORE save_tracked so the test
+            # entity's creation, the watch-fired pipeline-associate message,
+            # AND the eval message below all share one cascade root — the
+            # standard methodology used everywhere else. Batch-grouping is
+            # tracked separately via context.run_id, not correlation_id.
+            cascade_cid = str(uuid.uuid4())
+            cid_token = current_correlation_id.set(cascade_cid)
+            try:
+                test_entity = entity_cls(org_id=org_id, **entity_data)
+                entity_msgs = await test_entity.save_tracked(method="create")
+                _fire_dispatch(entity_msgs)
 
-            msg = Message(
-                org_id=org_id,
-                entity_type=entity_type,
-                entity_id=test_entity.id,
-                event_type="prospective_eval",
-                target_role=target_role,
-                correlation_id=run_id_str,
-                causation_id=run_id_str,
-                depth=0,
-                context={"test_item": item, "run_id": run_id_str,
-                         "rubric_ids": [str(r) for r in rubric_oids]},
-            )
-            await msg.insert()
+                msg = Message(
+                    org_id=org_id,
+                    entity_type=entity_type,
+                    entity_id=test_entity.id,
+                    event_type="prospective_eval",
+                    target_role=target_role,
+                    correlation_id=cascade_cid,
+                    causation_id=run_id_str,
+                    depth=0,
+                    context={"test_item": item, "run_id": run_id_str,
+                             "rubric_ids": [str(r) for r in rubric_oids]},
+                )
+                await msg.insert()
+            finally:
+                current_correlation_id.reset(cid_token)
     else:
         # Reset traces to 'created' so the evaluator doesn't skip them.
         # Batch eval is an explicit re-evaluation request — previously
@@ -430,14 +441,27 @@ async def trigger_eval_run(
             {"$set": {"status": "created", "feedback_stats": {}}},
         )
 
+        # Look up each Trace's own correlation_id so each evaluator message
+        # inherits its target Trace's cascade root — same methodology used
+        # everywhere else. Batch grouping moves to causation_id (run_id_str).
+        # Without this, the Evaluator's Trace would have correlation_id =
+        # EvaluationRun._id, breaking `indemn trace cascade <id>` for the
+        # original cascade the Trace belongs to (Bug C2).
+        trace_cids_docs = await traces_coll.find(
+            {"_id": {"$in": trace_ids}},
+            {"_id": 1, "correlation_id": 1},
+        ).to_list(length=len(trace_ids))
+        trace_cid_map = {d["_id"]: d.get("correlation_id") for d in trace_cids_docs}
+
         for trace_id in trace_ids:
+            cascade_cid = trace_cid_map.get(trace_id) or str(uuid.uuid4())
             msg = Message(
                 org_id=org_id,
                 entity_type="Trace",
                 entity_id=trace_id,
                 event_type="batch_eval",
                 target_role="evaluator",
-                correlation_id=run_id_str,
+                correlation_id=cascade_cid,
                 causation_id=run_id_str,
                 depth=0,
                 context={"run_id": run_id_str,

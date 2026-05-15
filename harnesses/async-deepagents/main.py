@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -204,6 +205,38 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
     return context
 
 
+# Bug C1 — valid correlation_id forms across the system: UUID4 ("xxxxxxxx-xxxx-..."),
+# hex32 (32 hex chars, no dashes), ObjectId hex (24 chars). All composed of
+# [0-9a-fA-F-] only. The pre-fix Trace collection had ~0.5% binary correlation_ids
+# (raw 16-byte OTEL TraceId stored as UTF-8 with replacement chars) from a
+# since-removed code path. Now that A+B propagate correlation_id through every
+# CLI subprocess in the cascade, a corrupt value on input.correlation_id would
+# spread to every change record. This pattern catches the corruption.
+_VALID_CORRELATION_ID_RE = re.compile(r"^[0-9a-fA-F-]+$")
+
+
+def _normalize_correlation_id(cid) -> str | None:
+    """Defensive guard against non-hex correlation_ids reaching the cascade.
+
+    Returns the input unchanged if it's a valid hex/UUID-shaped string. Otherwise
+    logs a warning and returns a fresh UUID so the cascade still gets traceability
+    without propagating corruption. None input passes through (callers may pass
+    None when correlation_id is unknown; downstream code handles missing values).
+    """
+    if cid is None:
+        return None
+    if not isinstance(cid, str):
+        log.warning("Non-string correlation_id (type=%s); generating fresh UUID", type(cid).__name__)
+        return str(uuid.uuid4())
+    if not _VALID_CORRELATION_ID_RE.fullmatch(cid):
+        log.warning(
+            "Non-hex correlation_id (len=%d, repr=%r); generating fresh UUID — Bug C1 defense",
+            len(cid), cid[:40],
+        )
+        return str(uuid.uuid4())
+    return cid
+
+
 async def _create_trace(
     input: AgentExecutionInput,
     associate: dict,
@@ -222,6 +255,7 @@ async def _create_trace(
     Non-blocking (runs CLI via asyncio.to_thread). Failure is logged
     but does not block message completion.
     """
+    correlation_id = _normalize_correlation_id(correlation_id)
     end_time = datetime.now(timezone.utc)
     duration_ms = int((time.monotonic() - start_ts) * 1000)
 
@@ -519,9 +553,12 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # Cascade correlation_id: every CLI call in this activity propagates
         # the inbound message's correlation_id via X-Correlation-ID header,
         # so all entity changes + watch-fired messages downstream share one
-        # id queryable via `indemn trace cascade <id>`.
-        if input.correlation_id:
-            os.environ["INDEMN_CORRELATION_ID"] = str(input.correlation_id)
+        # id queryable via `indemn trace cascade <id>`. Normalized via
+        # _normalize_correlation_id so binary/corrupt input doesn't spread
+        # (Bug C1 defense).
+        _norm_cid = _normalize_correlation_id(input.correlation_id)
+        if _norm_cid:
+            os.environ["INDEMN_CORRELATION_ID"] = _norm_cid
 
         # Load associate config + context (harness orchestration, not agent tools)
         associate = indemn("actor", "get", input.associate_id)
@@ -756,13 +793,16 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                          len(flat), root_dict["name"],
                          len(root_dict["child_runs"]))
 
-        # Create durable Trace entity (non-blocking)
+        # Create durable Trace entity (non-blocking).
+        # Pass _norm_cid (already normalized at activity entry) so the Trace's
+        # correlation_id matches the value propagated to subprocesses via
+        # INDEMN_CORRELATION_ID — one cascade root, used everywhere.
         try:
             await _create_trace(
                 input, associate, messages, tools_used,
                 _langsmith_run_id, _start_time, _start_ts,
                 collected_run=_collected_run,
-                correlation_id=input.correlation_id,
+                correlation_id=_norm_cid,
             )
         except Exception as e:
             log.warning("Trace creation failed (non-blocking): %s", e)
@@ -801,10 +841,13 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             except Exception as recovery_err:
                 log.warning("Checkpoint message recovery failed: %s", recovery_err)
         try:
+            # _norm_cid may be undefined if we errored before activity-entry env
+            # setup. Fall back to input.correlation_id (normalized in _create_trace).
+            _err_cid = locals().get("_norm_cid") or input.correlation_id
             await _create_trace(
                 input, associate, _captured_messages, _captured_tools,
                 _langsmith_run_id, _start_time, _start_ts,
-                correlation_id=input.correlation_id,
+                correlation_id=_err_cid,
                 execution_status="error", error_msg=str(e)[:500],
             )
         except Exception:
