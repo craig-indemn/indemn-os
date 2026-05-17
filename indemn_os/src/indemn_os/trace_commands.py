@@ -19,14 +19,35 @@ def list_traces(
     execution_status: str = typer.Option(None, "--execution-status", help="success, error, or cancelled"),
     correlation_id: str = typer.Option(None, "--correlation-id"),
     limit: int = typer.Option(20, "--limit"),
+    summary: bool = typer.Option(
+        False,
+        "--summary",
+        help=(
+            "Scan mode: omit the bulky fields (messages, child_runs, inputs, "
+            "outputs) so the output stays readable. Use this for scanning "
+            "recent traces; use `indemn trace get <id>` to drill into one."
+        ),
+    ),
 ):
-    """List Trace entities with optional filters."""
+    """List Trace entities with optional filters.
+
+    Default output includes the full conversation messages + child run tree
+    on each trace (often 100KB+ per row). Pass `--summary` to strip those
+    for scan-friendly output that still shows the metadata an operator
+    needs: associate, entity, status, correlation_id, duration, token counts.
+    """
     import json as json_mod
 
     client = CLIClient()
     params: dict = {"limit": limit}
     if status:
         params["status"] = status
+    if summary:
+        # Server-side strip: the auto-gen list route's `exclude` param
+        # filters these fields out of each row before serializing. Wire-cost
+        # is still paid by the kernel-entity projection guard (line 400 of
+        # kernel/api/registration.py), but the CLI output is readable.
+        params["exclude"] = "messages,child_runs,inputs,outputs"
     filter_fields: dict = {}
     if associate:
         filter_fields["associate_name"] = associate
