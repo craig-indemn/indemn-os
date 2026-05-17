@@ -266,16 +266,29 @@ async def drain_parked(
     if not role_name:
         raise HTTPException(400, "role is required")
     limit = min(data.get("limit", 20), 500)
+    entity_id_raw = data.get("entity_id")
 
     org_id = current_org_id.get()
+    filter_query: dict = {
+        "status": "parked",
+        "target_role": role_name,
+        "org_id": org_id,
+    }
+    # Surgical drain: re-emit only parked messages for ONE specific entity
+    # (e.g., "drain just the TS message for this email, not the whole role
+    # backlog"). Required for drain discipline when the parked queue contains
+    # work for many different entities.
+    if entity_id_raw:
+        try:
+            filter_query["entity_id"] = ObjectId(entity_id_raw)
+        except Exception:
+            raise HTTPException(
+                400,
+                f"entity_id must be a valid ObjectId hex (got {entity_id_raw!r})",
+            )
+
     parked = (
-        await Message.find(
-            {
-                "status": "parked",
-                "target_role": role_name,
-                "org_id": org_id,
-            }
-        )
+        await Message.find(filter_query)
         .sort([("created_at", 1)])
         .to_list(length=limit)
     )

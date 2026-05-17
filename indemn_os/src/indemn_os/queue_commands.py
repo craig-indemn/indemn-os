@@ -65,6 +65,11 @@ def fail_message(
 def drain_parked(
     role: str = typer.Option(..., "--role", help="Role whose parked messages to drain"),
     limit: int = typer.Option(20, "--limit", help="Max messages to re-emit (max 500)"),
+    entity_id: str = typer.Option(
+        None,
+        "--entity-id",
+        help="Drain only parked messages targeting this specific entity (surgical drain).",
+    ),
 ):
     """Re-emit parked messages as fresh pending messages for a role.
 
@@ -72,10 +77,19 @@ def drain_parked(
     backlog at a controlled pace. Each parked message gets a fresh ID;
     the original retires to dead_letter.
 
-    Example: indemn queue drain --role email_classifier --limit 20
+    Without --entity-id, drains oldest-first up to --limit. With
+    --entity-id, drains only the messages targeting that specific entity
+    — surgical re-emission for "process THIS work, not the whole backlog".
+
+    Examples:
+      indemn queue drain --role email_classifier --limit 20
+      indemn queue drain --role touchpoint_synthesizer --entity-id 6a04f110152462cd04502f17
     """
     client = CLIClient()
-    result = client.post("/api/queue/drain", json={"role": role, "limit": limit})
+    body = {"role": role, "limit": limit}
+    if entity_id:
+        body["entity_id"] = entity_id
+    result = client.post("/api/queue/drain", json=body)
     reemitted = result.get("reemitted", 0)
     remaining = result.get("remaining_parked", 0)
     typer.echo(f"Drained {reemitted} parked messages for {role} ({remaining} remaining)")
