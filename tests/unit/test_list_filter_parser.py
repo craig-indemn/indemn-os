@@ -95,12 +95,14 @@ def test_operator_dicts_now_pass_through_safelist():
 
 def test_unknown_operator_still_rejected_via_safelist():
     """Operators outside the safelist still 400 — just with the new error
-    message ('not in the safelist') instead of the old blanket rejection."""
+    message ('not in the safelist') instead of the old blanket rejection.
+    Uses $where (server-side JS — security risk, intentionally excluded).
+    $regex IS now in the safelist (CLI gap #1)."""
     cls = _entity_cls({"name": _field_info(str)})
     with pytest.raises(HTTPException) as exc:
-        _parse_list_filter(cls, "Company", '{"name": {"$regex": "^Acme"}}')
+        _parse_list_filter(cls, "Company", '{"name": {"$where": "expr"}}')
     assert exc.value.status_code == 400
-    assert "$regex" in str(exc.value.detail)
+    assert "$where" in str(exc.value.detail)
 
 
 # --- Valid input — equality matches ---

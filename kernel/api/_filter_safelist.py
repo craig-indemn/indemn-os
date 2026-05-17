@@ -36,11 +36,25 @@ from bson import ObjectId
 from fastapi import HTTPException
 
 # Operators callers can pass through. Logical composition deferred.
+# $regex / $options enable content search (Bug C / CLI gap #1): without it,
+# every "find emails where subject contains X" needed a mongosh fallback.
+# Per MongoDB shape, {field: {"$regex": "pat", "$options": "i"}} is a single
+# operator dict; both keys go through the standard operator allowlist below.
 _ALLOWED_OPERATORS = frozenset(
-    {"$in", "$nin", "$ne", "$gt", "$gte", "$lt", "$lte", "$exists"}
+    {
+        "$in", "$nin", "$ne",
+        "$gt", "$gte", "$lt", "$lte",
+        "$exists",
+        "$regex", "$options",
+    }
 )
 _LIST_OPERATORS = frozenset({"$in", "$nin"})
 _BOOL_OPERATORS = frozenset({"$exists"})
+# Operators whose operand must be a plain string (no per-field type coercion).
+# $regex pattern + $options flags both expect strings; coercing them as if
+# they were field-typed values would corrupt patterns (e.g. ObjectId-coerce
+# a regex string starting with a hex prefix).
+_STRING_OPERATORS = frozenset({"$regex", "$options"})
 
 
 def _unwrap_optional(annotation):
@@ -173,6 +187,17 @@ def _parse_operator_value(field_name: str, annotation, op_dict: dict) -> dict:
                 raise HTTPException(
                     400,
                     f"Operator {op!r} on field {field_name!r} requires a boolean "
+                    f"operand, got: {operand!r}",
+                )
+            parsed[op] = operand
+            continue
+        if op in _STRING_OPERATORS:
+            # $regex pattern + $options flags. Pass through as strings; do NOT
+            # coerce as field-typed values. MongoDB applies the pattern itself.
+            if not isinstance(operand, str):
+                raise HTTPException(
+                    400,
+                    f"Operator {op!r} on field {field_name!r} requires a string "
                     f"operand, got: {operand!r}",
                 )
             parsed[op] = operand

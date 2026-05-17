@@ -308,12 +308,13 @@ def test_exists_operator_rejects_non_bool():
 
 
 def test_unknown_operator_rejected():
-    """$where / $regex / etc. are not in the safelist — reject explicitly."""
+    """$where (server-side JS — security risk) is not in the safelist —
+    reject explicitly. $regex IS in the safelist now (CLI gap #1)."""
     cls = _cls({"name": _field(str)})
     with pytest.raises(HTTPException) as exc:
-        parse_filter(cls, "Company", {"name": {"$regex": "^Acme"}})
+        parse_filter(cls, "Company", {"name": {"$where": "this.name == 'Acme'"}})
     assert exc.value.status_code == 400
-    assert "$regex" in str(exc.value.detail)
+    assert "$where" in str(exc.value.detail)
     assert "safelist" in str(exc.value.detail) or "Allowed" in str(exc.value.detail)
 
 
