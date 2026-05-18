@@ -73,11 +73,42 @@ class CLIClient:
         return h
 
     def _handle_error(self, response: httpx.Response):
-        """Handle non-2xx responses with readable error output."""
+        """Handle non-2xx responses with readable error output.
+
+        Critical: surface per-field validation detail when the API returns it.
+        Without this, "1 validation error(s)" tells the caller nothing about
+        which field failed — agents can't react to fix their own input,
+        operators can't diagnose without re-running with curl, evaluators
+        see opaque failures with no signal of root cause. Two error shapes:
+
+          OS API:    {"error": "...", "message": "...", "errors": [{"loc": [...], "msg": "...", "type": "..."}, ...]}
+          FastAPI:   {"detail": [{"loc": [...], "msg": "...", "type": "..."}, ...]}
+
+        Both unwrap to a list of {loc, msg, type} dicts; print each as
+        "  <field>: <msg> (<type>)" on its own line under the summary.
+        """
         if response.status_code >= 400:
             try:
                 body = response.json()
                 msg = body.get("message", body.get("error", response.text))
+                errors = body.get("errors") or []
+                if not errors and isinstance(body.get("detail"), list):
+                    errors = body["detail"]
+                details = []
+                for e in errors:
+                    if not isinstance(e, dict):
+                        continue
+                    loc = e.get("loc") or []
+                    field = ".".join(str(p) for p in loc) if loc else ""
+                    err_msg = e.get("msg") or e.get("message") or ""
+                    err_type = e.get("type") or ""
+                    if field:
+                        suffix = f" ({err_type})" if err_type else ""
+                        details.append(f"  {field}: {err_msg}{suffix}")
+                    elif err_msg:
+                        details.append(f"  {err_msg}")
+                if details:
+                    msg = msg + "\n" + "\n".join(details)
             except Exception:
                 msg = response.text
             print(f"Error {response.status_code}: {msg}", file=sys.stderr)
