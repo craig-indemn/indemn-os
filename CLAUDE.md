@@ -53,7 +53,9 @@ indemn entity create --data '{
 This creates: API routes (`/api/submissions/`), CLI commands (`indemn submission list/get/create/update/transition`), skill documentation (markdown with fields, lifecycle, commands).
 
 **Field types**: str, int, float, decimal, bool, datetime, date, objectid, list, dict
-**Field options**: required, default, unique, indexed, enum_values, is_state_field, is_relationship, relationship_target
+**Field options**: required, default, unique, indexed, enum_values, is_state_field, is_relationship, relationship_target, content_size_hint
+
+**`content_size_hint`** declares a field's content nature for the response-serialization profile. Values: `short` / `medium` / `long` / `rich`. Set on rich-content fields (email body, meeting transcript, document content) so the kernel can truncate per consumer (e.g. LLM context) without harness involvement. See `docs/architecture/entity-framework.md` § Serialization Profiles.
 
 ## How to Set Up Watches (the wiring mechanism)
 
@@ -289,3 +291,4 @@ All queries use `find_scoped()` / `get_scoped()`. Never raw Motor. org_id from c
 - Rules: two actions only — `set_fields` and `force_reasoning`
 - `--auto` pattern: try rules first, return needs_reasoning if no match
 - Harnesses use CLI subprocess for ALL OS operations — no direct kernel imports
+- Serialization profiles: entity GET routes accept `?context_profile=llm|raw` (default `raw` = no caps). LLM-context consumers pass `llm`; kernel truncates per `FieldDefinition.content_size_hint`. Per-field policy lives on the entity definition, NOT in harness code. Truncation marker references `?context_profile=raw` as the escape hatch for full content. See `docs/architecture/entity-framework.md` § Serialization Profiles. Kernel entities (no FieldDefinition) are not capped — Trace.outputs etc. flow through untouched.

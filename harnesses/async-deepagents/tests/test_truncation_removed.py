@@ -25,6 +25,7 @@ for mod in [
     "harness.agent",
     "harness.completion_logic",
     "harness.cron_runner",
+    "harness.trace_helpers",
     "harness_common",
     "harness_common.backend",
     "harness_common.cli",
