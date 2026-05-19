@@ -6,7 +6,7 @@ Kernel entities are NOT defined this way — they are Python classes.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from beanie import Document
 from bson import ObjectId
@@ -29,6 +29,14 @@ class FieldDefinition(BaseModel):
     relationship_target: Optional[str] = None  # Entity name this relationship points to
     is_polymorphic_relationship: bool = False  # Target type varies per-entity instance
     target_type_field: Optional[str] = None  # Field on this entity that names the target type
+    content_size_hint: Optional[Literal["short", "medium", "long", "rich"]] = None
+    # Declares the field's content NATURE (not byte counts). Consumed by the
+    # response-serialization profile to apply per-field truncation caps. The
+    # mapping hint → bytes lives in `kernel/api/context_profile.py` and varies
+    # per profile (e.g. `llm` caps short=5K rich=1M; `raw` is uncapped).
+    # Unset = "medium" default under the `llm` profile. Leave unset for short
+    # string fields (names, titles, descriptions); set explicitly on rich
+    # content fields (email bodies, transcripts, document content).
     auto_resolve: bool = False  # Bug #9: when an LLM passes {"name": "Acme"} for this
     # relationship field instead of an _id hex string, attempt to resolve via the target
     # entity's entity_resolve capability (if activated). Auto-link only on a single 1.0

@@ -142,7 +142,7 @@ def _serialize_for_context(entity) -> dict:
     return data
 
 
-async def _build_related_entities(entity, depth: int) -> list[dict]:
+async def _build_related_entities(entity, depth: int, profile: str = "raw") -> list[dict]:
     """Build the list of entities related to `entity` for the API
     `?include_related=true` response.
 
@@ -187,7 +187,7 @@ async def _build_related_entities(entity, depth: int) -> list[dict]:
     if depth <= 1:
         return []
 
-    from kernel.api.serialize import to_dict
+    from kernel.api.serialize import serialize_for_profile
     from kernel.db import ENTITY_REGISTRY
     from kernel.entity.definition import EntityDefinition
 
@@ -218,7 +218,7 @@ async def _build_related_entities(entity, depth: int) -> list[dict]:
                         continue
                     if target_entity is None:
                         continue
-                    d = to_dict(target_entity)
+                    d = serialize_for_profile(target_cls, target_entity, profile)
                     d["_entity_type"] = target_name
                     d["_relationship_direction"] = "forward"
                     d["_via_field"] = field_name
@@ -240,7 +240,7 @@ async def _build_related_entities(entity, depth: int) -> list[dict]:
                 target_entity = await target_cls.get(related_id)
                 if target_entity is None:
                     continue
-                d = to_dict(target_entity)
+                d = serialize_for_profile(target_cls, target_entity, profile)
                 d["_entity_type"] = target_name
                 d["_relationship_direction"] = "forward"
                 d["_via_field"] = field_name
@@ -267,7 +267,7 @@ async def _build_related_entities(entity, depth: int) -> list[dict]:
                 query["_id"] = {"$ne": entity.id}
             inbound = await source_cls.find_scoped(query).to_list()
             for inbound_entity in inbound:
-                d = to_dict(inbound_entity)
+                d = serialize_for_profile(source_cls, inbound_entity, profile)
                 d["_entity_type"] = source_defn.name
                 d["_relationship_direction"] = "reverse"
                 d["_via_field"] = field_name

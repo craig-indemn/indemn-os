@@ -99,6 +99,10 @@ def _get_field_metadata(cls, entity_name: str) -> list[dict]:
                 "relationship_target": relationship_target,
                 "indexed": False,
                 "unique": False,
+                # Kernel entities don't carry content_size_hint metadata —
+                # they're not capped under any context_profile by design
+                # (see kernel/api/context_profile.py).
+                "content_size_hint": None,
             }
         )
     return fields
@@ -176,6 +180,7 @@ async def get_entity_detail_metadata(entity_name: str, actor=Depends(get_current
                         "relationship_target": fdef.relationship_target,
                         "indexed": fdef.indexed,
                         "unique": fdef.unique,
+                        "content_size_hint": fdef.content_size_hint,
                     }
                 )
         else:

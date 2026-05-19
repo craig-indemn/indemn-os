@@ -84,6 +84,12 @@ def create_entity_class(definition: EntityDefinition) -> type[DomainBaseEntity]:
         for fname, fdef in definition.fields.items()
         if fdef.is_relationship and fdef.relationship_target
     }
+    # Store FieldDefinition map for per-field response-serialization policy
+    # (see kernel/api/serialize.py::serialize_for_profile + context_profile.py).
+    # Domain entities use this for per-field truncation under
+    # `?context_profile=llm`; kernel entities have no row here (handled by
+    # the `not field_definitions` short-circuit in serialize_for_profile).
+    DynamicEntity._field_definitions = dict(definition.fields)
     # Bug #9: which relationship fields opt into entity_resolve fallback when
     # the API receives a dict-shaped value (e.g. LLM passing {"name": "Acme"}
     # instead of an _id hex). The boundary handler in registration.py reads

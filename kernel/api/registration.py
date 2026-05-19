@@ -415,13 +415,27 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         entity_id: str,
         depth: int = Query(1, ge=1, le=5),
         include_related: bool = Query(False),
+        context_profile: str = Query("raw"),
         actor=Depends(get_current_actor),
     ):
+        # `context_profile` selects per-field truncation policy applied at
+        # serialization time. `raw` (default) applies no caps and matches
+        # historical behavior. `llm` applies caps per FieldDefinition's
+        # `content_size_hint` (see kernel/api/context_profile.py). Truncated
+        # field values include a marker pointing back to `?context_profile=raw`
+        # as the escape hatch for full content.
+        from kernel.api.context_profile import is_valid_profile
+        from kernel.api.serialize import serialize_for_profile
+
+        if not is_valid_profile(context_profile):
+            raise HTTPException(
+                400, f"Unknown context_profile '{context_profile}'. Valid: raw, llm."
+            )
         check_permission(actor, entity_name, "read")
         entity = await entity_cls.get_scoped(entity_id)
         if not entity:
             raise HTTPException(404)
-        result = to_dict(entity)
+        result = serialize_for_profile(entity_cls, entity, context_profile)
 
         # Resolve related entities per depth parameter.
         # `_build_related_entities` walks both forward refs (this entity's own
@@ -437,7 +451,9 @@ def register_entity_routes(app, entity_name: str, entity_cls: type):
         if include_related and depth >= 2:
             from kernel.message.emit import _build_related_entities
 
-            result["_related"] = await _build_related_entities(entity, depth=depth)
+            result["_related"] = await _build_related_entities(
+                entity, depth=depth, profile=context_profile
+            )
 
         return result
 
