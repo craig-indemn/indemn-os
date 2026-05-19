@@ -192,7 +192,7 @@ indemn org create --data '{"name": "Acme Staging", "slug": "acme-staging", "temp
 
 ---
 
-## The Seven Kernel Entities
+## The Kernel Entities
 
 These are Python classes in `kernel_entities/`. They exist on every deployment, cannot be redefined per-org, and use Beanie as the ODM layer.
 
@@ -205,8 +205,14 @@ These are Python classes in `kernel_entities/`. They exist on every deployment, 
 | **Attention** | Active working context (who is attending to what, now) | `actor_id`, `target_entity`, `purpose` (real_time_session/observing/review/editing/claim_in_progress), `runtime_id`, `expires_at` | active -> expired/closed | `attentions` |
 | **Runtime** | Execution environment for associates | `name`, `kind` (realtime_chat/realtime_voice/realtime_sms/async_worker), `framework`, `transport`, `deployment_image`, `deployment_platform`, `capacity`, `instances` | configured -> deploying -> active -> draining -> stopped (+ error) | `runtimes` |
 | **Session** | Authentication state | `actor_id`, `type` (user_interactive/associate_service/tier3_api/cli_automation), `auth_method_used`, `access_token_jti`, `refresh_token_ref`, `mfa_verified` | active -> expired/revoked | `sessions` |
+| **Deployment** | Placement of an associate on a specific surface (a venue) | `name`, `associate_id`, `runtime_id`, `surface_config_id`, `parameter_schema`, `static_parameters`, `llm_override`, `greeting`, `acts_as` (session_actor/associate_self), `allowed_origins`, `resumption_config`, `status` | configured -> active -> paused -> active, +error (recovery to configured), terminal archived | `deployments` |
+| **SurfaceConfig** | Visual + vendor configuration for a Deployment's UI | `name`, `channel_kind` (chat/voice/slack/email/teams/sms), `vendor` (prompt-kit/livekit/...), `config` (validated against per-vendor JSON Schema), `brand_assets_id` | configured -> active -> archived | `surface_configs` |
+| **BrandAssets** | Reusable visual primitives shared across SurfaceConfigs | `name`, `logo_url`, `primary_color`, `secondary_color`, `accent_color`, `font_family_heading`, `font_family_body` | active -> archived | `brand_assets` |
+| **Trace** | Durable record of an agent invocation (LLM + tools) | `associate_id`, `correlation_id`, `interaction_id`, `message_id`, `batch_id`, run metadata, output | (no state machine) | `traces` |
 
 All kernel entities inherit from `KernelBaseEntity` (which extends Beanie's `Document` + `_EntityMixin`). They share the same `save_tracked()` path as domain entities.
+
+**Note:** `Deployment`, `SurfaceConfig`, and `BrandAssets` were introduced in the v7 architectural design (AI-404 epic). See [`deployments.md`](deployments.md) for full design.
 
 ---
 

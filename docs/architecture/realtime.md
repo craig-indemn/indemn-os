@@ -97,6 +97,70 @@ Implementation: `kernel_entities/runtime.py`.
 
 ---
 
+## Deployment Entity
+
+Deployment represents a specific placement of an associate on a specific surface, with surface-specific configuration. Where Runtime is "this harness is running and has capacity," Deployment is "this associate is exposed at this venue, with this config."
+
+A Deployment is the bridge between an abstract associate (the Actor + skill that defines what the agent does) and a concrete venue where end-users encounter it (a customer's website, an internal team UI, a phone number). Same associate underneath, many Deployments — Branch's renewal page, GIC's portal, the internal sales team UI — each with different visual configuration, different initialization parameters, different greeting, optionally different LLM overrides.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Human-readable identifier (e.g., "Sales Assistant — Web") |
+| `associate_id` | ObjectId | The Actor (associate) being deployed |
+| `runtime_id` | ObjectId | The Runtime serving this Deployment. The Runtime's `kind` determines the channel (chat/voice/etc.). Distinct from `Actor.runtime_id` (the associate's default async runtime). |
+| `surface_config_id` | ObjectId (optional) | Reference to a SurfaceConfig — the vendor + visual configuration for this placement. Required for UI-having Deployments; omitted for non-surface placements (e.g., async fetcher Deployments). |
+| `parameter_schema` | object | JSON Schema (draft 2020-12) describing what dynamic parameters the surface must/may pass at session start. Validated server-side at session start. |
+| `static_parameters` | dict | Values baked into the Deployment, constant across sessions (e.g., `{"role": "sales", "tenant": "indemn-internal"}`) |
+| `parameter_schema_validation_mode` | enum | `strict` (reject session on validation failure) or `forgiving` (open session with warnings). Default derived from `acts_as`. |
+| `llm_override` | dict | Per-deployment overrides on the three-layer LLM config merge (Runtime → Associate → Deployment) |
+| `greeting` | string | Opening text the harness speaks/sends at session start (e.g., "Hi, I'm your proposal assistant.") |
+| `acts_as` | enum | `session_actor` (agent CLI calls run with the user's permissions via `INDEMN_EFFECTIVE_ACTOR_ID = dynamic_params.actor_id`) or `associate_self` (agent CLI calls run with the associate's own permissions). Default derived from whether `parameter_schema` requires `actor_id`. See `deployments.md` for the full security model. |
+| `allowed_origins` | list[string] | CORS allowlist for the runtime's HTTP endpoint + WebSocket Origin header check. Empty list = reject all origins (must explicitly enumerate). |
+| `resumption_config` | dict | `{ttl_seconds, kill_on_resume}` controlling reconnection behavior — how long a session is resumable + whether to force-close a prior worker on reconnect |
+| `status` | enum | See state machine below |
+
+**State machine:**
+
+```
+configured --> active --> paused --> active
+                  |          |         |
+                  +----------+---------+--> archived
+                  |          |
+                  +-> error -+
+                     (recovery: error -> configured)
+```
+
+| State | Meaning |
+|-------|---------|
+| `configured` | Created but not yet accepting sessions. Use for staging / dry-run. |
+| `active` | Accepting sessions. Runtime opens connections normally. |
+| `paused` | Not accepting new sessions. Existing sessions continue to completion. Use during incident response or A/B test off-periods. |
+| `error` | Health failure (Runtime in error, SurfaceConfig JSON Schema invalid, LiveKit instance unreachable, etc.). Sessions rejected. Recovery: investigate, transition back to `configured`. |
+| `archived` | Permanently retired. The record stays for historical analytics (`Interaction.deployment_id` still resolves). |
+
+**Required indexes:**
+- `(org_id, name)` unique
+- `(org_id, associate_id, status)` — "find all active Deployments of an associate"
+- `(org_id, runtime_id, status)` — "find all active Deployments served by a runtime"
+- `(org_id, status)`
+
+**Relationship to other entities:**
+
+```
+Actor (associate) 1───* Deployment 1───1 Runtime
+                                 │
+                                 └──► SurfaceConfig 1───* BrandAssets
+                                      (optional)
+```
+
+One associate → many Deployments (the "same agent, many venues" pattern). One Deployment → one Runtime (the channel boundary — Deployment binds to a specific channel via Runtime.kind). One Deployment → one SurfaceConfig optionally (only for UI-having placements). SurfaceConfigs may reference shared BrandAssets for reuse across many SurfaceConfigs.
+
+**Granularity rule:** one Deployment is per `(associate, channel/transport)`. The same associate on web chat AND voice on the same page = two Deployment records (different runtimes; different SurfaceConfigs). Different associates on the same page = different Deployment records.
+
+Implementation: `kernel_entities/deployment.py`. Full design + worked examples + security model: [`deployments.md`](deployments.md).
+
+---
+
 ## Scoped Watches and Real-Time Event Delivery
 
 The standard watch system (described in `overview.md`) routes entity changes to roles. Scoped watches extend this for real-time delivery by querying Attention records to determine which specific actors should receive an event, and using the `runtime_id` and `session_id` on those records for in-process delivery.
@@ -176,38 +240,69 @@ Implementation: `kernel/api/events.py` for the WebSocket endpoint. `kernel/cli/e
 The voice harness lifecycle demonstrates how Attention, Runtime, event streaming, and the kernel entity system work together during a real-time conversation.
 
 ```
-1. Receive call (voice provider webhook)
+1. Frontend calls runtime's HTTP frontdoor (POST /sessions) with
+   {deployment_id, dynamic_params} + Authorization: Bearer <jwt>
    |
-2. Load config (Associate actor + skills + Integration)
+2. Runtime validates: Origin, JWT, Deployment.status=active,
+   dynamic_params against parameter_schema (JSON Schema), acts_as
+   matches authenticated actor (if session_actor)
    |
-3. Create Interaction entity (status: active, channel: voice)
+3. Create Interaction entity (status: active, channel: voice,
+   deployment_id, correlation_id, created_by=<jwt-actor>)
    |
-4. Open Attention (purpose: real_time_session, runtime_id, session_id)
+4. Mint LiveKit participant token; create LiveKit room with
+   metadata={deployment_id, dynamic_params, interaction_id, correlation_id}
    |
-5. Build agent (framework-specific, from skills + llm_config)
+5. AgentDispatch to worker fleet (LiveKit dispatches to a heartbeated worker)
    |
-6. Start events stream (indemn events stream --entity-type ... subprocess)
+6. Worker entrypoint runs: reads room.metadata, sets INDEMN_SERVICE_TOKEN,
+   INDEMN_EFFECTIVE_ACTOR_ID (per acts_as), INDEMN_CORRELATION_ID
    |
-7. Main loop:
+7. Worker loads Deployment + Associate + Runtime + SurfaceConfig + skill
+   content (parallelized CLI calls)
+   |
+8. Worker composes <skill> + <deployment_context> SystemMessages;
+   builds deepagents agent with MongoDBSaver checkpointer keyed by
+   interaction_id (see observability.md § thread_id semantics)
+   |
+9. Open Attention (purpose: real_time_session, runtime_id, session_id)
+   |
+10. Start events stream (indemn events stream subprocess)
+   |
+11. Main loop:
    |   - Process voice frames (framework)
-   |   - Pump events from stream subprocess (entity changes)
+   |   - Drain events from stream subprocess on each user turn
    |   - Send heartbeats every 30s (Attention TTL refresh)
-   |   - Handle tool calls (indemn CLI subprocess)
+   |   - Handle tool calls (indemn CLI subprocess with INDEMN_EFFECTIVE_ACTOR_ID)
    |
-8. Call ends:
+12. Call ends:
    |   - Close Attention
-   |   - Transition Interaction to closed
+   |   - Transition Interaction to closed (or keep open for resume per
+   |     Deployment.resumption_config)
    |   - Kill events stream subprocess
    |   - Clean up agent resources
 ```
 
-**Step 3 -- Interaction creation:** The Interaction entity (a domain entity defined per customer) represents a conversation session. Creating it triggers watches that may notify supervisors, log the interaction, or update dashboards.
+**Step 1 -- HTTP front door:** Each real-time runtime exposes its channel-native protocol on its own URL. Chat runtimes serve WebSocket directly (the WebSocket connect message IS the session-start). Voice runtimes serve an HTTP `POST /sessions` endpoint that mints LiveKit participant tokens + dispatches workers (because the browser can't safely talk to LiveKit directly). The frontend (or embed.js SDK) doesn't need to know which mechanism the runtime uses — it just calls `Indemn.deploy({deployment_id, params})` and the SDK routes to the right place based on the Deployment's `runtime.kind`.
 
-**Step 4 -- Attention opening:** The harness opens an Attention record with `purpose=real_time_session`. This registers the harness as actively working on the Interaction. Any entity changes related to this Interaction (or its related entities) will be routed to this harness via the scoped watch mechanism.
+**Step 3 -- Interaction creation:** Created **server-side** in the runtime's `/sessions` endpoint (before the worker is dispatched). The Interaction carries `deployment_id` (back-reference to the venue) + `correlation_id` (the lineage tracker — set once here, propagated downstream). This gives the surface a stable `interaction_id` it can correlate with logs/analytics from before the worker spins up.
 
-**Step 6 -- Events stream:** The harness starts `indemn events stream` as a subprocess. This gives the harness a feed of entity changes relevant to its working context. For example, if a supervisor updates the Interaction's metadata while the call is active, the harness receives the change in real time.
+**Step 4 -- LiveKit room metadata carries NO credentials.** Room metadata is visible to all room participants (per LiveKit protocol). Auth tokens stay in the Authorization header on the original `/sessions` request — they don't propagate via room.metadata. The worker authenticates back to the OS using its own `INDEMN_SERVICE_TOKEN` from container env.
 
-**Step 7 -- Tool calls:** When the AI associate needs to create or update entities (e.g., create a Submission, update an Interaction field), it does so via CLI subprocess (`indemn submission create --data '{...}'`). These CLI calls go through the API server, through auth, through `save_tracked()`, and may trigger further watches.
+**Step 6 -- Per-session env vars set on subprocess:**
+- `INDEMN_SERVICE_TOKEN`: runtime's identity (from AWS Secrets)
+- `INDEMN_EFFECTIVE_ACTOR_ID`: enforced per `Deployment.acts_as` (the user's actor_id if `session_actor`; the associate's actor_id if `associate_self`). Critical security gate — see `deployments.md` § Auth identity.
+- `INDEMN_CORRELATION_ID`: set to the session's correlation_id so all downstream CLI subprocess calls + entity writes inherit lineage (this is what makes cascade visibility work cross-channel)
+
+**Step 8 -- SystemMessage composition + checkpointer keying:** The harness pre-fetches the associate's skill content + composes a `<skill>` SystemMessage and a `<deployment_context>` SystemMessage (carrying the merged static_parameters + dynamic_params). Both prepended ONCE at session start, persisted via MongoDB checkpointer. The checkpointer's `thread_id` for real-time sessions is the `interaction_id` — state accumulates across turns within the session, and resumes correctly on reconnect. For async work, the checkpointer's `thread_id` is the `message_id` — per-invocation isolation (cascade agents don't see each other's history). See `observability.md` § thread_id semantics for the full rule.
+
+**Step 9 -- Attention opening:** The harness opens an Attention record with `purpose=real_time_session`. This registers the harness as actively working on the Interaction. Any entity changes related to this Interaction (or its related entities) will be routed to this harness via the scoped watch mechanism.
+
+**Step 10 -- Events stream:** The harness starts `indemn events stream` as a subprocess. This gives the harness a feed of entity changes relevant to its working context. For example, if a supervisor updates the Interaction's metadata while the call is active, the harness receives the change in real time and drains it into a SystemMessage on the next user turn.
+
+**Step 11 -- Tool calls:** When the AI associate needs to create or update entities, it does so via CLI subprocess (`indemn submission create --data '{...}'`). These CLI calls inherit `INDEMN_EFFECTIVE_ACTOR_ID` (whose permissions are enforced) and `INDEMN_CORRELATION_ID` (which gets stamped on every entity write + propagated to downstream watches). The chain of work — the original session → entity writes → triggered cascade — appears as one LangSmith thread via shared correlation_id.
+
+**Step 12 -- Resume vs close:** If the Deployment has a non-zero `resumption_config.ttl_seconds`, the Interaction stays open after disconnect. A reconnecting client's `/sessions` request with `resume_interaction_id` finds the Interaction, loads the MongoDB checkpointer state by interaction_id, and continues the conversation with full prior context. See `deployments.md` § Resumability for the full mechanism.
 
 ---
 
@@ -282,19 +377,21 @@ Real-time associate behavior is configured across three layers that merge at inv
 
 | Layer | Where It Lives | What It Configures | Who Sets It |
 |-------|---------------|-------------------|-------------|
-| **Transport (Deployment)** | Runtime entity | WebSocket URLs, timeouts, reconnection policy, TLS settings | Platform/DevOps |
-| **Conversation (Associate skill)** | Skill documents on Actor entity | System prompt, tools, persona, conversation flow, guardrails | Domain builder |
-| **Execution (Runtime)** | Runtime entity | LLM provider, model, temperature, max tokens, retry policy | Platform/DevOps |
+| **Execution (Runtime)** | Runtime entity | Default LLM provider, model, temperature, framework version, capacity | Platform/DevOps |
+| **Conversation (Associate)** | Actor entity + skill documents | System prompt, tools, persona, conversation flow, guardrails, per-agent model override | Domain builder |
+| **Transport (Deployment)** | Deployment entity | Surface-specific config — SurfaceConfig reference (vendor + visual), greeting, per-deployment LLM override, parameter contract, acts_as auth identity | Platform/DevOps |
 
-**Merge order:** Runtime defaults (base) --> Associate config (overrides) --> Deployment config (overrides).
+**Merge order:** Runtime defaults (base) → Associate config (overrides) → Deployment config (overrides).
 
-This means an associate's skill can specify `llm_config.model = "claude-sonnet-4-20250514"` which overrides the Runtime's default of `claude-sonnet-4-20250514`. But the Deployment can override both with a specific model if needed (e.g., during an incident where a provider is down).
+This means an associate's skill can specify `llm_config.model = "claude-sonnet-4-20250514"` which overrides the Runtime's default. The Deployment can override both with a specific model if needed (e.g., during an incident, or per-venue tuning).
 
 ```bash
 # View effective config for an associate on a runtime
 indemn actor effective-config <actor_id> --runtime <runtime_id>
 ```
 
-The effective config is computed at invocation time, not stored. This means changes to any layer take effect immediately for new invocations without redeploying harnesses.
+The effective config is computed at invocation time, not stored. Changes to any layer take effect immediately for new invocations without redeploying harnesses.
 
-Implementation: `kernel/temporal/activities.py::load_actor()` performs the three-layer merge when preparing an associate for execution.
+Implementation: `kernel/temporal/activities.py::load_actor()` performs the three-layer merge when preparing an associate for execution. The harness's `session.py::_merge_llm_config(runtime, associate, deployment)` performs the same merge for real-time sessions.
+
+> **See also:** [`deployments.md`](deployments.md) for the full Deployment entity design — fields, state machine, parameter contract, acts_as auth identity model, SurfaceConfig + BrandAssets relationships, and how the embed.js SDK loads it.

@@ -18,8 +18,10 @@ Modular monolith. Trust boundary splits kernel (direct MongoDB) from everything 
 
 ## Entity Types
 
-**Kernel entities** (7): Python classes in `kernel_entities/`. Always available.
-Organization, Actor, Role, Integration, Attention, Runtime, Session.
+**Kernel entities** (11): Python classes in `kernel_entities/`. Always available.
+Organization, Actor, Role, Integration, Attention, Runtime, Session, Trace, Deployment, SurfaceConfig, BrandAssets.
+
+The latest three (Deployment, SurfaceConfig, BrandAssets) describe how associates are PLACED on surfaces — venues where end-users encounter the agent. See `docs/architecture/deployments.md` for full design.
 
 **Domain entities**: Defined as data in MongoDB `entity_definitions` collection. Per-org. Dynamic classes created at startup via `kernel/entity/factory.py`.
 
@@ -273,7 +275,8 @@ All queries use `find_scoped()` / `get_scoped()`. Never raw Motor. org_id from c
 | `kernel/temporal/activities.py` | Kernel activities (claim, load_actor, complete, fail, bulk) |
 | `kernel/skill/generator.py` | Auto-generate entity skill markdown |
 | `kernel/integration/dispatch.py` | Adapter resolution + retry |
-| `kernel_entities/` | 7 kernel entity classes |
+| `kernel_entities/` | 11 kernel entity classes (Organization, Actor, Role, Integration, Attention, Runtime, Session, Trace, Deployment, SurfaceConfig, BrandAssets) |
+| `schemas/surface_configs/` | Per-vendor JSON Schema files for SurfaceConfig.config validation (prompt-kit, livekit, etc.) |
 | `indemn_os/` | CLI package (`indemn` binary) |
 | `harnesses/` | Async, chat, voice harness images |
 

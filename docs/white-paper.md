@@ -249,7 +249,9 @@ The **harness pattern** bridges a specific agent framework and transport to the 
 
 When a human takes over a voice interaction, their voice client is an Integration — the same primitive used for email and payment connections, just with a voice client provider type. No new concept needed for human participation in real-time channels.
 
-**Three-layer customer-facing flexibility.** The behavior of a customer-facing surface is configured across three layers: the **Deployment** entity controls transport behavior — branding, widget appearance, greeting. The **Associate** skill controls conversation style — what the agent says, how it handles turns. The **Runtime** controls the execution environment — model, framework, capacity. Per-session overrides merge across layers. This flexibility exists in the entities already — it's a pattern, not a mechanism.
+**Three-layer customer-facing flexibility.** The behavior of a customer-facing surface is configured across three layers: the **Runtime** controls the execution environment — model, framework, capacity. The **Associate** controls conversation style — what the agent says, how it handles turns, its skills, its role's permissions. The **Deployment** controls the per-venue placement — branding (via a SurfaceConfig that references shared BrandAssets), greeting, parameter contract, per-deployment LLM override, and auth identity (whose permissions are enforced when the agent acts). The merge is Runtime defaults → Associate override → Deployment override, evaluated at invocation time.
+
+This is the "one associate, many venues" pattern: the same Sales Assistant Actor can be deployed on a customer's portal AND on the internal sales-team UI AND as a voice agent on a phone number — four Deployment records, one Actor, different SurfaceConfigs, different parameter contracts, different greetings, different acts_as auth modes. The flexibility lives in the entities; the kernel doesn't add new mechanism. See [`architecture/deployments.md`](architecture/deployments.md) for the full design.
 
 ### Everything Is Data
 
@@ -554,6 +556,17 @@ Views subscribe to entity changes in real time, filtered by the current query an
 It is not a bespoke dashboard application with per-organization custom views. No custom UI code per entity. No custom UI code per organization. The auto-generation covers the operational surface. Configurable widgets and custom dashboards may be added in the future when forcing functions demand it, but for the initial system, auto-generation from primitives is the approach.
 
 It is not the customer-facing UI. The base UI is for internal operators — Indemn staff, forward-deployed engineers, customer operations teams. Customer-facing interfaces — policyholder portals, agent workbenches, embedded widgets — are separate products built on the same primitives and API. The base UI is the operations surface.
+
+Customer-facing surfaces consume the OS via the **`Deployment` entity** (a placement of an associate on a specific venue) and a thin JS SDK (`embed.js`) that hides the channel-specific dance. A customer site embeds an Indemn agent with a few lines of script:
+
+```html
+<script src="https://cdn.indemn.ai/embed.js"></script>
+<script>
+  Indemn.deploy({ deployment_id: "dep_xxx", params: { customer_id: "..." } });
+</script>
+```
+
+The SDK fetches the Deployment's public configuration via `GET /api/deployments/{id}/public`, validates the surface-supplied params against the Deployment's `parameter_schema` (JSON Schema), and opens the appropriate channel (WebSocket to the chat runtime, or `POST /sessions` + LiveKit to the voice runtime). The customer's website is a separate product; it depends only on the SDK contract + the Deployment record's public metadata. See [`architecture/deployments.md`](architecture/deployments.md) for the full design.
 
 Active alerting is deferred. The base UI provides visibility — operators watch the system through the live views. Active alerts — notifications when thresholds are breached, integrations fail, or queues grow — will be added when specific thresholds and notification patterns are established through real usage. The mechanism will likely be watches on kernel entities with actions that invoke notification integrations.
 

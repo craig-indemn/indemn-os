@@ -443,9 +443,42 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
 |-------|--------|----------|---------|
 | **Runtime** | Runtime entity | Execution environment — default model, framework version, capacity | `{"model": "anthropic:claude-sonnet-4-6", "temperature": 0.7}` |
 | **Associate** | Actor entity | Conversation style — what the agent says, tools it uses, per-agent model override | `{"model": "google_vertexai:gemini-3-flash-preview"}` |
-| **Deployment** | Deployment entity | Transport behavior — widget branding, greeting, per-deployment model override | `{"temperature": 0.3}` |
+| **Deployment** | Deployment entity | Per-venue config — SurfaceConfig (vendor + visual), greeting, per-deployment LLM override, parameter contract, auth identity (acts_as) | `{"temperature": 0.3}` |
 
-Shallow merge, last-writer-wins. The Deployment layer is optional — absent for async associates, present for customer-facing chat/voice.
+Shallow merge, last-writer-wins. The Deployment layer is optional — absent for async associates that don't have a Deployment record, present for any Deployment-bound execution (real-time chat/voice always; async by future direction).
+
+> **See [`deployments.md`](deployments.md) for the full Deployment design**: fields, state machine, parameter contract (parameter_schema + static_parameters), the `acts_as` security model, SurfaceConfig + BrandAssets, the embed.js SDK pattern, and resumability.
+
+---
+
+## Skill Loading and the `<skill>` SystemMessage
+
+The harness pre-fetches the associate's skill content at session/invocation start and prepends it as a SystemMessage to the agent's message context. This is the canonical pattern across all three harnesses (async, chat, voice). The agent's `system_prompt` (set at agent build time) contains the framework-level behavioral instructions and tells the agent to "Read your `<skill>` SystemMessage — it defines your procedure."
+
+Why this pattern:
+- **Latency.** Loading the skill via CLI on turn 1 of a real-time session adds ~300-500ms (one subprocess + one LLM round-trip). Pre-fetching at session start eliminates that.
+- **Semantic correctness.** A skill is a behavioral instruction TO the agent. SystemMessage is its rightful home (vs HumanMessage, which is the user's content).
+- **Caching.** The pre-formed SystemMessage is cacheable across turns (Anthropic prompt caching, OpenAI similar). Re-prepending on every turn would defeat the cache.
+- **Persistence via checkpointer.** The SystemMessage is part of the initial conversation state at session start; the MongoDB checkpointer preserves it across turns. Subsequent invocations within the same session see it without re-prepending.
+
+The `<skill>` SystemMessage is composed once at session start:
+
+```python
+# In harness session.py (or main.py for async)
+skill_content = indemn("skill", "get", associate.skills[0])  # CLI pre-fetch
+system_msg = SystemMessage(content=f"<skill>\n{skill_content}\n</skill>")
+agent_input_messages = [system_msg, *conversation_history]
+```
+
+For real-time channels (chat, voice), a second SystemMessage is also composed: `<deployment_context>` carrying the merged static_parameters + dynamic_params (see [`deployments.md`](deployments.md) § Parameter Contract).
+
+### Checkpointer Per Channel
+
+Real-time channels use LangGraph's MongoDB checkpointer keyed by `interaction_id` — state accumulates across turns within one session, persists across reconnects.
+
+Async also uses MongoDB checkpointer post-convergence, keyed by `message_id` — per-invocation isolation in cascades (the synthesizer doesn't see the classifier's history), but durable per-invocation so human-in-the-loop pause/resume works.
+
+See [`observability.md`](observability.md) § Identifier Semantics for the full `thread_id` rule (LangSmith uses correlation_id as thread_id; LangGraph checkpointer uses interaction_id or message_id depending on the work shape).
 
 ---
 

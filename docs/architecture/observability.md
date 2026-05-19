@@ -262,6 +262,111 @@ Implementation: `kernel/observability/tracing.py::init_tracing()` configures the
 
 ---
 
+## Identifier Semantics (correlation_id, interaction_id, message_id, thread_id)
+
+The OS uses several identifiers across observability — and one of them (`thread_id`) has two meanings in LangChain APIs that need to be disambiguated. This section is the canonical reference.
+
+### The Five Identifiers
+
+| ID | What it identifies | Where it's set | How it propagates |
+|----|--------------------|-----------------|-------------------|
+| `correlation_id` | The lineage tracker — "this work belongs to this thread of activity." Inherited downstream across CLI calls, watches, and follow-up messages. One value spans an entire cascade or session. | At the START of a unit of work: root message creation (email ingestion, scheduled trigger), or real-time session start (the runtime's `POST /sessions` endpoint creating the Interaction). | Propagated via `INDEMN_CORRELATION_ID` env var on every CLI subprocess + inherited by every message a watch emits during the work. |
+| `interaction_id` | The MongoDB ObjectId of the Interaction entity. Identifies WHICH conversation. | When an Interaction record is created (real-time session start, or async if an agent creates one). | Set on every entity/record that belongs to this Interaction. |
+| `message_id` | The Temporal queue message's identity. Each message in the queue is one unit of agent work. | When the watch evaluator emits a message into the queue. | Carried in `INDEMN_CAUSATION_MESSAGE_ID` env on agent subprocesses; logged in message_log for post-hoc audit. |
+| `session_id` | The OS `Session` kernel entity's ObjectId — the AUTH session of an actor. Distinct from the conversation session. | When an actor authenticates. | Carried in JWT claims; logged on auth-sensitive events. |
+| `batch_id` | Explicit batch grouping (eval runs, drain operations, bulk ops). | When a batch is initiated. | Set on every run within the batch; LangSmith metadata. |
+
+### `thread_id` — Two Meanings, Two Fields
+
+The LangChain ecosystem uses the same name `thread_id` for two distinct concepts that live in different fields of the agent's config dict. **They don't have to share a value.**
+
+**LangSmith `thread_id`** — read from `metadata.thread_id` on the LangSmith run. Used for the UI's thread-grouping view: "show me all runs that belong to this thread." Purpose: **observability**.
+
+**LangGraph checkpointer `thread_id`** — read from `configurable.thread_id` when invoking the agent. Used as the persistence key in the MongoDB checkpointer. Same key across invocations → state continuity (agent picks up its prior conversation history). Purpose: **durability**.
+
+### The Rule
+
+For **LangSmith `metadata.thread_id`** (every harness, every channel): always `correlation_id`. This means LangSmith always shows the lineage view — async cascades appear as one thread; real-time sessions appear as one thread; cross-channel chains (voice triggers async work) appear as one thread.
+
+For **LangGraph `configurable.thread_id`** (the checkpointer key): depends on what the agent's work is about.
+
+```python
+def derive_checkpointer_thread_id(work_context) -> str:
+    """
+    Returns the thread_id the LangGraph checkpointer should use.
+    The rule: track the SUBJECT of the work.
+    """
+    if work_context.is_real_time_session:
+        # Voice/chat — the whole session IS the unit of work. State across turns.
+        return work_context.interaction_id
+
+    # Async — look at what entity the message targets
+    if work_context.target_entity_type == "Interaction":
+        # Agent's work is on a conversation entity — accumulate history per Interaction
+        return work_context.target_entity_id  # the Interaction's id
+
+    # Task-shaped async work — one message, one invocation, independent state
+    return work_context.message_id
+```
+
+Lives in `harnesses/_base/harness_common/thread_id.py`; called by all three harnesses (`async-deepagents`, `chat-deepagents`, `voice-deepagents`).
+
+### Why This Rule
+
+**Cascade independence (the async case).** The email cascade — EmailClassifier → TouchpointSynthesizer → IntelligenceExtractor — runs as three independent messages. Each agent has its OWN `message_id` → fresh checkpointer thread → no cross-pollination of conversation histories. The Synthesizer doesn't see the Classifier's internal reasoning. Each agent's state is clean and focused.
+
+Yet they all share the same `correlation_id`, so LangSmith shows them as one thread — you click into the email and follow the entire chain of associates that worked on it.
+
+**Real-time conversation continuity.** Voice and chat sessions invoke the agent once per turn, but all turns must share state. The harness sets `is_real_time_session = True` at session start; every turn uses the same `interaction_id` as the checkpointer thread; the agent has the full conversation history available on every turn.
+
+**Multi-agent handoff on shared Interactions.** When `Interaction.handling_actor_id` changes (transfer between actors during a live conversation), the new actor's harness uses the same `interaction_id` as the checkpointer thread. The new actor's agent loads the prior conversation state — sees what the user already said. The user doesn't repeat themselves. Critical for real handoff UX.
+
+**Human-in-the-loop pause (async).** A reviewer opens Attention (purpose=review) on an entity an agent is processing. The agent's invocation state is durably stored under its `message_id`. Reviewer takes time, makes corrections, releases attention. The agent's next invocation under the same `message_id` loads its prior state and continues.
+
+**Cross-channel chain visibility.** Voice session (correlation_id X) creates a Proposal entity → save fires watches → triggers async Proposal-Hydrator. The Proposal-Hydrator inherits correlation_id X (kernel inheritance pattern). LangSmith shows them in the same thread. Operators see the whole story.
+
+### LangSmith Metadata Standard
+
+Every agent invocation across every harness should populate:
+
+```python
+config = {
+    "configurable": {
+        "thread_id": derive_checkpointer_thread_id(work_context),  # checkpointer key
+    },
+    "metadata": {
+        "thread_id": correlation_id,             # LangSmith UI grouping (always correlation_id)
+        "correlation_id": correlation_id,        # explicit, even though = thread_id
+        "interaction_id": interaction_id,        # if applicable
+        "message_id": message_id,                 # if applicable (async only)
+        "batch_id": batch_id,                    # if applicable
+        "associate_id": associate_id,
+        "associate_name": associate_name,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "runtime_id": runtime_id,
+        "deployment_id": deployment_id,          # if real-time
+    },
+    "tags": [
+        f"associate:{associate_name}",
+        f"channel:{channel_kind}",
+        f"runtime:{runtime_id}",
+        f"deployment:{deployment_id}",  # if real-time
+    ],
+    "run_name": f"{associate_name} → {entity_type} {entity_id[:8]}",
+}
+```
+
+This makes LangSmith searchable by EVERY dimension (associate, channel, runtime, deployment, entity, batch) regardless of which is the primary grouping. The `metadata.thread_id` is what LangSmith UI groups by; the rest enables filtering and cross-pivot.
+
+### Implementation Notes
+
+- **`correlation_id` propagation** happens via the `INDEMN_CORRELATION_ID` env var on every CLI subprocess the harness spawns for the agent. Without this, downstream entity writes won't inherit the lineage and the cross-channel chain visibility breaks. Verify in every harness's session-start code.
+- **The checkpointer is MongoDBSaver** (`langgraph.checkpoint.mongodb.MongoDBSaver`) for all three harnesses post-convergence. async-deepagents used MemorySaver historically (in-memory) — switched to MongoDB to enable human-in-the-loop pause/resume.
+- **The Trace entity** in `kernel_entities/trace.py` is the OS's durable record per agent invocation. Its `correlation_id`, `interaction_id`, `message_id`, `batch_id` fields match the semantics above. Querying for "all traces in this cascade" or "all traces in this conversation" is mechanical via these fields.
+
+---
+
 ## CLI Debugging Commands
 
 ### Unified Entity Timeline
