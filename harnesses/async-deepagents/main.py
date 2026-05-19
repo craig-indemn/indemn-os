@@ -182,7 +182,7 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
 
     entity_slug = entity_type.lower()
     context = indemn(
-        entity_slug, "get", entity_id, "--depth", "2", "--include-related"
+        entity_slug, "get", entity_id, "--depth", "3", "--include-related"
     )
     context = _truncate_large_fields(context)
 
@@ -695,7 +695,7 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                 },
                 config={
                     "run_id": _langsmith_run_id,
-                    "recursion_limit": 50,
+                    "recursion_limit": 200,
                     "callbacks": [_run_collector],
                     "configurable": {"thread_id": str(input.message_id)},
                     "metadata": {
