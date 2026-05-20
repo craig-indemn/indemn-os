@@ -206,3 +206,43 @@ def test_derive_associate_self_without_actor_id_ok():
     d = _make_deployment(acts_as="associate_self")
     d._derive_acts_as_and_validate()
     assert d.acts_as == "associate_self"
+
+
+# --- Task 1.4 — state machine transition shape per §5.7
+#     (no instance construction needed; the _state_machine dict is class-level)
+
+
+def test_state_machine_configured_to_active_allowed():
+    """configured → active is the standard activation transition."""
+    assert "active" in Deployment._state_machine["configured"]
+
+
+def test_state_machine_active_to_paused_allowed():
+    """active → paused for incident response / A/B off-period (§5.7)."""
+    assert "paused" in Deployment._state_machine["active"]
+
+
+def test_state_machine_paused_to_active_allowed():
+    """paused → active to resume after incident resolution."""
+    assert "active" in Deployment._state_machine["paused"]
+
+
+def test_state_machine_active_to_archived_allowed():
+    """active → archived to permanently retire a Deployment."""
+    assert "archived" in Deployment._state_machine["active"]
+
+
+def test_state_machine_any_to_error_allowed():
+    """configured + active can transition to error per §5.7."""
+    assert "error" in Deployment._state_machine["configured"]
+    assert "error" in Deployment._state_machine["active"]
+
+
+def test_state_machine_error_to_configured_allowed():
+    """Recovery path from error — mirrors other kernel entities."""
+    assert "configured" in Deployment._state_machine["error"]
+
+
+def test_state_machine_archived_is_terminal():
+    """archived state has no outgoing transitions (§5.7)."""
+    assert Deployment._state_machine["archived"] == []
