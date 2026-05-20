@@ -12,10 +12,10 @@ auth identity model.
 See docs/architecture/deployments.md for the full design.
 """
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Self
 
 from bson import ObjectId
-from pydantic import Field
+from pydantic import Field, model_validator
 from pymongo import ASCENDING, IndexModel
 
 from kernel.entity.base import BaseEntity
@@ -61,6 +61,39 @@ class Deployment(BaseEntity):
         "archived": [],
     }
     _is_kernel_entity = True
+
+    @model_validator(mode="after")
+    def _derive_acts_as(self) -> Self:
+        """Derive acts_as from parameter_schema if not supplied (design doc §5.1 + §5.6).
+
+        Rule: if parameter_schema lists actor_id in required, default to
+        session_actor. Otherwise default to associate_self. Derivation runs
+        once at construction time; the value is stored explicitly on the
+        record (not lazily recomputed).
+        """
+        if self.acts_as is None:
+            required_fields = self.parameter_schema.get("required", [])
+            if "actor_id" in required_fields:
+                self.acts_as = "session_actor"
+            else:
+                self.acts_as = "associate_self"
+        return self
+
+    @model_validator(mode="after")
+    def _derive_validation_mode(self) -> Self:
+        """Derive parameter_schema_validation_mode from acts_as if not supplied (§5.4).
+
+        Rule (validation failure policy):
+        - session_actor (internal Deployments) → "strict" — reject the
+          connection on dynamic_params validation error
+        - associate_self (public Deployments) → "forgiving" — open the
+          session with validation_warnings; agent decides whether to continue
+        """
+        if self.parameter_schema_validation_mode is None:
+            self.parameter_schema_validation_mode = (
+                "strict" if self.acts_as == "session_actor" else "forgiving"
+            )
+        return self
 
     class Settings:
         name = "deployments"
