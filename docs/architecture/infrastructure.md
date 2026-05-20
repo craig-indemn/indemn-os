@@ -33,7 +33,9 @@ Harness images are separate Dockerfiles in `harnesses/`:
 graph TB
     subgraph internet["Internet"]
         BROWSER["Browser"]
-        WIDGET["Chat Widget"]
+        WIDGET["Chat Widget<br/>(via embed.js)"]
+        VOICE_UI["Voice Widget<br/>(via embed.js)"]
+        CDN["cdn.indemn.ai/embed.js<br/>(JS SDK)"]
         CLI_USER["CLI User"]
         WEBHOOK["External Webhooks<br/>(Outlook, Stripe, etc.)"]
     end
@@ -43,13 +45,19 @@ graph TB
             API["indemn-api<br/>api.os.indemn.ai<br/>Port 8000<br/>2 replicas"]
             UI["indemn-ui<br/>os.indemn.ai<br/>Static serve<br/>1 replica"]
             CHAT["indemn-runtime-chat<br/>wss://...railway.app/ws/chat<br/>Port 8080<br/>1 replica"]
+            VOICE_FD["indemn-runtime-voice-frontdoor<br/>POST /sessions<br/>Port 8080<br/>1 replica"]
         end
 
         subgraph internal["Internal Services (WireGuard)"]
             QP["indemn-queue-processor<br/>qp.railway.internal:8000<br/>1 replica"]
             TW["indemn-temporal-worker<br/>tw.railway.internal:8000<br/>1 replica"]
             ASYNC["indemn-runtime-async<br/>Temporal task queue<br/>1 replica"]
+            VOICE_WK["indemn-runtime-voice-worker<br/>LiveKit Agents worker<br/>1+ replicas"]
         end
+    end
+
+    subgraph aws_gpu["AWS (GPU instance)"]
+        LIVEKIT["LiveKit Server<br/>(self-hosted)<br/>livekit.indemn.internal"]
     end
 
     subgraph external["External Dependencies"]
@@ -63,7 +71,12 @@ graph TB
 
     BROWSER -->|HTTPS| UI
     BROWSER -->|HTTPS| API
+    BROWSER -->|GET embed.js| CDN
     WIDGET -->|WSS| CHAT
+    VOICE_UI -->|POST /sessions| VOICE_FD
+    VOICE_UI -.->|WebRTC| LIVEKIT
+    VOICE_FD -->|API + AgentDispatch| LIVEKIT
+    VOICE_WK -->|Worker registration| LIVEKIT
     CLI_USER -->|HTTPS| API
     WEBHOOK -->|HTTPS| API
 

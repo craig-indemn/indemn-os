@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://indemn.ai/schemas/surface_configs/livekit.schema.json",
+  "title": "LiveKit voice SurfaceConfig",
+  "description": "Validates SurfaceConfig.config when SurfaceConfig.vendor='livekit' (the voice channel served by indemn-runtime-voice-frontdoor + indemn-runtime-voice-worker against Indemn's self-hosted LiveKit instance on AWS). See docs/architecture/deployments.md.",
+  "type": "object",
+  "required": ["stt_provider", "tts_provider"],
+  "properties": {
+    "widget_style": {
+      "type": "string",
+      "enum": ["floating-orb", "panel", "fullscreen", "headless"],
+      "default": "floating-orb"
+    },
+    "show_transcription": {
+      "type": "boolean",
+      "default": true,
+      "description": "Render the running transcript of the conversation on the page"
+    },
+    "show_waveform": {
+      "type": "boolean",
+      "default": true
+    },
+    "primary_color_ref": {
+      "type": "string",
+      "description": "Token resolving from BrandAssets (e.g., 'brand.primary') OR a literal hex color"
+    },
+    "stt_provider": {
+      "type": "string",
+      "enum": ["deepgram", "assemblyai", "openai"]
+    },
+    "stt_model": {
+      "type": "string"
+    },
+    "stt_language": {
+      "type": "string",
+      "default": "en"
+    },
+    "tts_provider": {
+      "type": "string",
+      "enum": ["cartesia", "elevenlabs", "openai", "google"]
+    },
+    "tts_model": {
+      "type": "string"
+    },
+    "tts_voice_id": {
+      "type": "string",
+      "description": "Vendor-specific voice identifier"
+    },
+    "tts_language": {
+      "type": "string",
+      "default": "en"
+    },
+    "vad": {
+      "type": "string",
+      "enum": ["silero", "none"],
+      "default": "silero"
+    },
+    "interrupt_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "min_endpointing_delay_ms": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 5000,
+      "default": 400
+    },
+    "max_endpointing_delay_ms": {
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 10000,
+      "default": 2000
+    }
+  },
+  "additionalProperties": false
+}

@@ -156,6 +156,14 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
         entity_id: str,
         depth: int = typer.Option(1, "--depth", help="Resolve related entities (1-5)"),
         include_related: bool = typer.Option(False, "--include-related"),
+        context_profile: str = typer.Option(
+            None,
+            "--context-profile",
+            help=(
+                "Apply per-field truncation policy. `llm` caps fields per "
+                "FieldDefinition.content_size_hint. `raw` (default) is uncapped."
+            ),
+        ),
         version: int = typer.Option(None, "--version", help="Get at specific version (for versioned entities)"),
         raw: bool = typer.Option(False, "--raw", help="Show full entity with all internal fields"),
         fmt: str = typer.Option("json", "--format"),
@@ -170,6 +178,8 @@ def _register_entity_commands(parent: typer.Typer, meta: dict, client: CLIClient
             params["depth"] = depth
         if include_related:
             params["include_related"] = "true"
+        if context_profile:
+            params["context_profile"] = context_profile
         result = client.get(f"/api/{slug}/{entity_id}", params=params)
         render(result, fmt, raw=raw)
 

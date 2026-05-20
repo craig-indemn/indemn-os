@@ -18,8 +18,10 @@ Modular monolith. Trust boundary splits kernel (direct MongoDB) from everything 
 
 ## Entity Types
 
-**Kernel entities** (7): Python classes in `kernel_entities/`. Always available.
-Organization, Actor, Role, Integration, Attention, Runtime, Session.
+**Kernel entities** (11): Python classes in `kernel_entities/`. Always available.
+Organization, Actor, Role, Integration, Attention, Runtime, Session, Trace, Deployment, SurfaceConfig, BrandAssets.
+
+The latest three (Deployment, SurfaceConfig, BrandAssets) describe how associates are PLACED on surfaces — venues where end-users encounter the agent. See `docs/architecture/deployments.md` for full design.
 
 **Domain entities**: Defined as data in MongoDB `entity_definitions` collection. Per-org. Dynamic classes created at startup via `kernel/entity/factory.py`.
 
@@ -51,7 +53,9 @@ indemn entity create --data '{
 This creates: API routes (`/api/submissions/`), CLI commands (`indemn submission list/get/create/update/transition`), skill documentation (markdown with fields, lifecycle, commands).
 
 **Field types**: str, int, float, decimal, bool, datetime, date, objectid, list, dict
-**Field options**: required, default, unique, indexed, enum_values, is_state_field, is_relationship, relationship_target
+**Field options**: required, default, unique, indexed, enum_values, is_state_field, is_relationship, relationship_target, content_size_hint
+
+**`content_size_hint`** declares a field's content nature for the response-serialization profile. Values: `short` / `medium` / `long` / `rich`. Set on rich-content fields (email body, meeting transcript, document content) so the kernel can truncate per consumer (e.g. LLM context) without harness involvement. See `docs/architecture/entity-framework.md` § Serialization Profiles.
 
 ## How to Set Up Watches (the wiring mechanism)
 
@@ -273,7 +277,8 @@ All queries use `find_scoped()` / `get_scoped()`. Never raw Motor. org_id from c
 | `kernel/temporal/activities.py` | Kernel activities (claim, load_actor, complete, fail, bulk) |
 | `kernel/skill/generator.py` | Auto-generate entity skill markdown |
 | `kernel/integration/dispatch.py` | Adapter resolution + retry |
-| `kernel_entities/` | 7 kernel entity classes |
+| `kernel_entities/` | 11 kernel entity classes (Organization, Actor, Role, Integration, Attention, Runtime, Session, Trace, Deployment, SurfaceConfig, BrandAssets) |
+| `schemas/surface_configs/` | Per-vendor JSON Schema files for SurfaceConfig.config validation (prompt-kit, livekit, etc.) |
 | `indemn_os/` | CLI package (`indemn` binary) |
 | `harnesses/` | Async, chat, voice harness images |
 
@@ -286,3 +291,4 @@ All queries use `find_scoped()` / `get_scoped()`. Never raw Motor. org_id from c
 - Rules: two actions only — `set_fields` and `force_reasoning`
 - `--auto` pattern: try rules first, return needs_reasoning if no match
 - Harnesses use CLI subprocess for ALL OS operations — no direct kernel imports
+- Serialization profiles: entity GET routes accept `?context_profile=llm|raw` (default `raw` = no caps). LLM-context consumers pass `llm`; kernel truncates per `FieldDefinition.content_size_hint`. Per-field policy lives on the entity definition, NOT in harness code. Truncation marker references `?context_profile=raw` as the escape hatch for full content. See `docs/architecture/entity-framework.md` § Serialization Profiles. Kernel entities (no FieldDefinition) are not capped — Trace.outputs etc. flow through untouched.

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://indemn.ai/schemas/surface_configs/prompt-kit.schema.json",
+  "title": "prompt-kit chat SurfaceConfig",
+  "description": "Validates SurfaceConfig.config when SurfaceConfig.vendor='prompt-kit' (the chat-widget vendor used by indemn-runtime-chat). See docs/architecture/deployments.md.",
+  "type": "object",
+  "required": ["widget_position"],
+  "properties": {
+    "widget_position": {
+      "type": "string",
+      "enum": ["bottom-right", "bottom-left", "inline", "fullscreen"]
+    },
+    "primary_color_ref": {
+      "type": "string",
+      "description": "Token resolving from BrandAssets (e.g., 'brand.primary') OR a literal hex color"
+    },
+    "show_header": {
+      "type": "boolean",
+      "default": true
+    },
+    "header_text": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "input_placeholder": {
+      "type": "string",
+      "maxLength": 120
+    },
+    "show_voice_toggle": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, render a button to switch to a paired voice Deployment"
+    },
+    "voice_deployment_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{24}$",
+      "description": "If show_voice_toggle=true, the voice Deployment to switch to"
+    },
+    "open_on_load": {
+      "type": "boolean",
+      "default": false
+    },
+    "minimized_text": {
+      "type": "string",
+      "maxLength": 40,
+      "description": "Text shown on the collapsed widget bubble"
+    },
+    "z_index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647,
+      "default": 9999
+    }
+  },
+  "additionalProperties": false
+}

@@ -52,36 +52,6 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
     }
 
 
-_FIELD_TRUNCATE_LIMIT = 20_000
-
-
-def _truncate_large_fields(data: dict, threshold: int = _FIELD_TRUNCATE_LIMIT) -> dict:
-    """Safety truncation on individual string fields to prevent
-    dangerously large context injection (spam emails, huge HTML bodies).
-
-    20K per field preserves virtually all real content. Anything beyond
-    is almost certainly noise. The agent can read full content via CLI.
-    """
-    if not isinstance(data, dict):
-        return data
-    for key, value in data.items():
-        if isinstance(value, str) and len(value) > threshold:
-            total = len(value)
-            data[key] = (
-                value[:threshold]
-                + f"\n\n[… truncated — {total} chars total. "
-                + f"Run `indemn {data.get('_entity_type', 'entity').lower()} get {data.get('_id', '<id>')}` "
-                + "to read full content.]"
-            )
-        elif isinstance(value, dict):
-            _truncate_large_fields(value, threshold)
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, dict):
-                    _truncate_large_fields(item, threshold)
-    return data
-
-
 def _format_xml_value(value, indent=1) -> list[str]:
     """Recursively format a value as XML lines."""
     prefix = "  " * indent
@@ -182,11 +152,26 @@ def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> 
 
     entity_slug = entity_type.lower()
     context = indemn(
-        entity_slug, "get", entity_id, "--depth", "3", "--include-related"
+        entity_slug,
+        "get",
+        entity_id,
+        "--depth",
+        "3",
+        "--include-related",
+        # Per-field truncation policy is the kernel's job now (driven by
+        # FieldDefinition.content_size_hint + ?context_profile=llm). The
+        # harness no longer applies field-length caps client-side.
+        "--context-profile",
+        "llm",
     )
-    context = _truncate_large_fields(context)
 
     if entity_type == "Trace":
+        # NOTE: this Trace-field pop is SEPARATE from the per-field
+        # content_size_hint policy. These are JSON-structured fields
+        # (lists of dicts), not plain strings — the kernel's hint-driven
+        # truncation can't reach them. The harness still drops them here
+        # to avoid injecting raw LLM execution data into a downstream
+        # LLM's system prompt. Do not delete this pop.
         for field in ("inputs", "outputs", "child_runs"):
             context.pop(field, None)
 

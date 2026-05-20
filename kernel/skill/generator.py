@@ -135,6 +135,13 @@ def generate_entity_skill(entity_name: str, definition: EntityDefinition) -> str
         if fdef.is_relationship and fdef.relationship_target:
             details.append(f"→ {fdef.relationship_target}")
             has_relationship = True
+        hint = getattr(fdef, "content_size_hint", None)
+        if hint:
+            # Surface size hint so associates understand a rich-content field
+            # exists and the response under ?context_profile=llm may be capped.
+            # Defensive getattr — tests sometimes use SimpleNamespace mocks
+            # that don't carry every FieldDefinition attribute.
+            details.append(f"Content size: {hint}")
         detail_str = "; ".join(details) if details else ""
         req = "Yes" if fdef.required else "No"
         lines.append(f"| {name} | {fdef.type} | {req} | {detail_str} |")

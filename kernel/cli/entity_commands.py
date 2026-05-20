@@ -74,26 +74,45 @@ def list_entity_defs(fmt: str = typer.Option("json", "--format")):
 def modify_entity_def(
     name: str,
     add_field: str = typer.Option(None, "--add-field", help='JSON: {"field_name": {...}}'),
+    modify_field: str = typer.Option(
+        None,
+        "--modify-field",
+        help='JSON: {"field_name": {...}} — full FieldDefinition spec replaces existing',
+    ),
     remove_field: str = typer.Option(None, "--remove-field"),
 ):
-    """Modify an entity definition (add/remove fields)."""
+    """Modify an entity definition (add/modify/remove fields).
+
+    `--modify-field` posts a FULL FieldDefinition spec which REPLACES the
+    existing field entirely (per admin_routes:modify_entity_definition).
+    For partial updates (e.g. setting only `content_size_hint`), read the
+    current field spec first, merge your change, then post the merged
+    spec back. The migration script for content_size_hint follows this
+    read-merge-modify pattern.
+    """
     import orjson
 
     data = {}
     if add_field:
         data["add_fields"] = orjson.loads(add_field)
+    if modify_field:
+        data["modify_fields"] = orjson.loads(modify_field)
     if remove_field:
         data["remove_fields"] = [remove_field]
 
     if not data:
-        typer.echo("Nothing to modify. Use --add-field or --remove-field.", err=True)
+        typer.echo(
+            "Nothing to modify. Use --add-field, --modify-field, or --remove-field.",
+            err=True,
+        )
         raise typer.Exit(1)
 
     client = CLIClient()
     result = client.put(f"/api/entitydefinitions/{name}/modify", json=data)
     added = result.get("added", [])
+    modified = result.get("modified", [])
     removed = result.get("removed", [])
-    typer.echo(f"Modified {name}: added={added}, removed={removed}")
+    typer.echo(f"Modified {name}: added={added}, modified={modified}, removed={removed}")
     typer.echo("  (requires API restart to pick up changes)")
 
 

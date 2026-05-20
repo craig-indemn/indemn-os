@@ -227,10 +227,20 @@ The `TYPE_MAP` in `kernel/entity/factory.py` maps definition type strings to Pyt
 | `is_state_field` | `bool` | `false` | Marks this field as controlled by the state machine |
 | `is_relationship` | `bool` | `false` | Marks this field as a reference to another entity |
 | `relationship_target` | `str` | `None` | Entity name this relationship points to (e.g., "Carrier") |
+| `content_size_hint` | `"short"\|"medium"\|"long"\|"rich"` | `None` | Declares the field's content nature for response-serialization profile truncation. See § Serialization Profiles. |
 
 **Enum validation**: fields with `enum_values` get runtime validation injected by `factory.py`. The factory wraps `__init__` to check that provided values are in the allowed list. This validation runs before Pydantic's own validation.
 
 **Relationship metadata**: fields with `is_relationship: true` have their target stored in `_relationship_targets` on the dynamic class. This metadata is used by scope resolution in watches (the `field_path` mechanism for ownership routing).
+
+**Content size hints** describe the field's content NATURE, not byte counts. They drive the response-serialization profile mapping (see § Serialization Profiles below):
+
+- `short` — names, titles, slugs, status fields. Typically ≤ a few KB.
+- `medium` — longer descriptions, structured notes. Typically ≤ tens of KB.
+- `long` — email bodies, smart_notes, summaries. Typically ≤ hundreds of KB.
+- `rich` — full transcripts, document content, large extracts. MB-scale.
+
+Set on rich-content fields where you want the kernel to deliver intact content to LLM-context consumers. Leave unset for short string fields; they pick up the profile's `None` default (`medium` under `llm`).
 
 ---
 
@@ -689,6 +699,88 @@ When a capability is invoked (e.g., `auto_classify`), the save at the end uses `
 # This invokes auto_classify, which may set multiple fields via rules
 # Only ONE message is created at the end
 indemn submission auto-classify <id> --auto
+```
+
+---
+
+## 8.5 Serialization Profiles
+
+Entity GET routes apply per-field truncation policy at response time, driven by per-field metadata declared on `FieldDefinition` (see `content_size_hint` in § Field Options).
+
+### Why
+
+Different consumers want different content size budgets. An LLM-context consumer (harness fetching an entity into a system prompt) needs caps that fit the model's context window. A UI list view needs short previews. A raw debugging dump wants everything. Putting this policy in the harness (or in any single consumer) couples the consumer to per-entity knowledge it shouldn't have. Per-field hints + a profile lookup centralize the policy where data is defined and let any consumer ask for the size budget they need.
+
+### The contract
+
+GET `/api/{collection}/{id}` accepts `?context_profile=<name>`:
+
+| Profile | Behavior | When to use |
+|---|---|---|
+| `raw` (default) | No caps. Returns the entity exactly as stored. | Default for CLI, UI, evaluator, anything that needs the full record. |
+| `llm` | Caps each field per its `content_size_hint`. Truncated fields include a marker pointing back to `?context_profile=raw` for the escape hatch. | Harnesses injecting entity context into an LLM system prompt. |
+
+Adding a new profile (e.g., `preview` for small UI cards) is a one-line entry in `kernel/api/context_profile.py::PROFILE_CAPS`. Entity definitions don't change.
+
+### Hint → byte cap mapping
+
+`kernel/api/context_profile.py::PROFILE_CAPS` is the single source of truth:
+
+| Hint | `raw` | `llm` |
+|---|---|---|
+| `short` | uncapped | 5,000 chars |
+| `medium` | uncapped | 50,000 chars |
+| `long` | uncapped | 500,000 chars |
+| `rich` | uncapped | 1,000,000 chars |
+| unset / `None` | uncapped | 50,000 chars (= `medium` default) |
+
+Default cap for unset hint is `medium` — a safety bound for any string field without an explicit hint. Set `short` on fields that should be visibly capped under LLM consumers; set `rich` on fields that should flow through largely intact.
+
+### Kernel entities are not capped
+
+Kernel entities (`Trace`, `Message`, `Actor`, `Runtime`, …) are Python classes in `kernel_entities/` — they have no `EntityDefinition` row and therefore no `content_size_hint` metadata. By design, they're returned uncapped under every profile. `serialize_for_profile` short-circuits when `_field_definitions` is empty.
+
+This preserves rich kernel-entity payloads (`Trace.outputs` is often 1MB+ of JSON-encoded LLM execution data) and keeps the architectural principle clean: per-field policy lives on the entity definition, not in code.
+
+### Truncation marker shape
+
+When the kernel truncates a field, it appends:
+
+```
+[… truncated — <total> chars total. Refetch with ?context_profile=raw for full content.]
+```
+
+The marker length is subtracted from the cap before slicing, so the returned field length is at most `cap` bytes total (marker included). Consumers reading the marker can opt to refetch the entity at `?context_profile=raw` to get the full content.
+
+### Skill surface
+
+Auto-generated entity skills include `Content size: <hint>` in each field's Details column when a hint is set. This tells the agent (or human reader) that the field may be capped under the `llm` profile.
+
+### Setting hints
+
+```bash
+# Add a hint to an existing field — must merge into the full FieldDefinition spec
+# (server replaces the full field spec on modify_fields; see kernel/api/admin_routes.py)
+indemn entity modify Email --modify-field '{"body": {
+  "type": "str",
+  "required": true,
+  "content_size_hint": "rich"
+}}'
+
+# Bulk migration — see scripts/migrate_content_size_hints.py
+```
+
+### Consumer side: harness
+
+The async-deepagents harness fetches entity context for LLM injection at `?context_profile=llm`. It does NOT apply any client-side truncation — that was the design before this serialization-profile machinery shipped, and is the kind of harness-side policy this pattern explicitly replaces.
+
+```python
+# harnesses/async-deepagents/main.py
+context = indemn(
+    entity_slug, "get", entity_id,
+    "--depth", "3", "--include-related",
+    "--context-profile", "llm",
+)
 ```
 
 ---
