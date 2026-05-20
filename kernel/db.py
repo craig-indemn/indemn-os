@@ -31,6 +31,9 @@ from kernel_entities import (
     Session,
     Trace,
 )
+from kernel_entities.brand_assets import BrandAssets
+from kernel_entities.deployment import Deployment
+from kernel_entities.surface_config import SurfaceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,9 @@ KERNEL_DOCUMENT_MODELS = [
     Runtime,
     Session,
     Trace,
+    Deployment,  # NEW (AI-406)
+    SurfaceConfig,  # NEW (AI-406)
+    BrandAssets,  # NEW (AI-406)
     EntityDefinition,
     Skill,
     Rule,
