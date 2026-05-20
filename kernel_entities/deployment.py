@@ -63,20 +63,37 @@ class Deployment(BaseEntity):
     _is_kernel_entity = True
 
     @model_validator(mode="after")
-    def _derive_acts_as(self) -> Self:
-        """Derive acts_as from parameter_schema if not supplied (design doc §5.1 + §5.6).
+    def _derive_acts_as_and_validate(self) -> Self:
+        """Derive acts_as from parameter_schema if not supplied; validate consistency.
 
-        Rule: if parameter_schema lists actor_id in required, default to
-        session_actor. Otherwise default to associate_self. Derivation runs
-        once at construction time; the value is stored explicitly on the
-        record (not lazily recomputed).
+        Derivation (§5.1 + §5.6): if parameter_schema lists actor_id in
+        required, default to session_actor. Otherwise default to
+        associate_self. Stored explicitly on the record (not lazily recomputed).
+
+        Consistency check (§5.6 implementation-readiness scrub): if acts_as
+        is explicitly set to session_actor but parameter_schema does NOT
+        require actor_id, raise. The runtime's session-start gate extracts
+        actor_id from the JWT and validates against dynamic_params.actor_id;
+        without actor_id in required, the gate has nothing to validate, and
+        an operator that intends session_actor mode but skipped the schema
+        requirement has misconfigured the Deployment. Reject at save time
+        instead of deferring to session-start failures.
         """
+        required_fields = self.parameter_schema.get("required", [])
+        actor_id_required = "actor_id" in required_fields
+
         if self.acts_as is None:
-            required_fields = self.parameter_schema.get("required", [])
-            if "actor_id" in required_fields:
-                self.acts_as = "session_actor"
-            else:
-                self.acts_as = "associate_self"
+            self.acts_as = "session_actor" if actor_id_required else "associate_self"
+
+        if self.acts_as == "session_actor" and not actor_id_required:
+            raise ValueError(
+                "acts_as=session_actor requires parameter_schema to include "
+                "actor_id in 'required'. The runtime's session-start auth gate "
+                "extracts actor_id from the JWT and validates it against "
+                "dynamic_params.actor_id; without actor_id in required, the "
+                "gate has nothing to validate. See design doc §5.6."
+            )
+
         return self
 
     @model_validator(mode="after")

@@ -13,6 +13,7 @@ behavior in unit tests without a real MongoDB connection.
 
 from typing import get_args
 
+import pytest
 from bson import ObjectId
 
 from kernel_entities.deployment import Deployment
@@ -21,7 +22,7 @@ from kernel_entities.deployment import Deployment
 def _make_deployment(**overrides) -> Deployment:
     """Build a Deployment via model_construct (skips all validators).
 
-    Tests invoke `d._derive_acts_as()` or `d._derive_validation_mode()`
+    Tests invoke `d._derive_acts_as_and_validate()` or `d._derive_validation_mode()`
     directly on the returned instance to exercise the specific validator
     under test.
     """
@@ -84,13 +85,14 @@ def test_deployment_settings_collection_name():
 #     by Task 1.10.5's sample_deployment fixture once integration tests land) ---
 
 
-def test_deployment_has_derive_acts_as_validator():
-    """`_derive_acts_as` runs after model init to fill acts_as from parameter_schema (§5.6)."""
+def test_deployment_has_derive_acts_as_and_validate_validator():
+    """`_derive_acts_as_and_validate` derives acts_as from parameter_schema (§5.6)
+    AND enforces the session_actor+actor_id-required consistency check."""
     mvs = Deployment.__pydantic_decorators__.model_validators
-    assert "_derive_acts_as" in mvs, (
-        "Deployment must register a _derive_acts_as model_validator"
+    assert "_derive_acts_as_and_validate" in mvs, (
+        "Deployment must register a _derive_acts_as_and_validate model_validator"
     )
-    assert mvs["_derive_acts_as"].info.mode == "after"
+    assert mvs["_derive_acts_as_and_validate"].info.mode == "after"
 
 
 def test_deployment_has_derive_validation_mode_validator():
@@ -118,7 +120,7 @@ def test_derive_acts_as_session_actor_when_actor_id_required():
             "properties": {"actor_id": {"type": "string"}},
         },
     )
-    d._derive_acts_as()
+    d._derive_acts_as_and_validate()
     assert d.acts_as == "session_actor"
 
 
@@ -131,14 +133,14 @@ def test_derive_acts_as_associate_self_when_actor_id_not_required():
             "properties": {"customer_id": {"type": "string"}},
         },
     )
-    d._derive_acts_as()
+    d._derive_acts_as_and_validate()
     assert d.acts_as == "associate_self"
 
 
 def test_derive_acts_as_associate_self_when_no_schema():
     """Empty parameter_schema → acts_as defaults to associate_self."""
     d = _make_deployment(parameter_schema={})
-    d._derive_acts_as()
+    d._derive_acts_as_and_validate()
     assert d.acts_as == "associate_self"
 
 
@@ -148,7 +150,7 @@ def test_derive_acts_as_explicit_override_wins():
         parameter_schema={"required": ["actor_id"]},
         acts_as="associate_self",
     )
-    d._derive_acts_as()
+    d._derive_acts_as_and_validate()
     assert d.acts_as == "associate_self"
 
 
@@ -174,3 +176,33 @@ def test_derive_validation_mode_explicit_override_wins():
     )
     d._derive_validation_mode()
     assert d.parameter_schema_validation_mode == "forgiving"
+
+
+# --- Task 1.3 — acts_as=session_actor consistency check
+#     §5.6 + implementation-readiness scrub: if operator explicitly sets
+#     acts_as=session_actor but parameter_schema does NOT require actor_id,
+#     reject at save time (runtime's session-start gate would otherwise have
+#     nothing to validate). Validator renamed to _derive_acts_as_and_validate
+#     to signal it does both derivation + consistency enforcement.
+
+
+def test_derive_rejects_session_actor_without_actor_id_in_schema_required():
+    """acts_as=session_actor + parameter_schema missing actor_id → ValueError (§5.6)."""
+    d = _make_deployment(
+        acts_as="session_actor",
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"customer_id": {"type": "string"}},
+            # actor_id NOT in required
+        },
+    )
+    with pytest.raises(ValueError, match="actor_id"):
+        d._derive_acts_as_and_validate()
+
+
+def test_derive_associate_self_without_actor_id_ok():
+    """acts_as=associate_self does not require actor_id in schema — no raise."""
+    d = _make_deployment(acts_as="associate_self")
+    d._derive_acts_as_and_validate()
+    assert d.acts_as == "associate_self"
