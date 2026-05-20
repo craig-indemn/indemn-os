@@ -57,3 +57,17 @@ def validate_parameter_schema_is_valid_json_schema(parameter_schema: dict) -> No
         # An empty dict means "no schema" — trivially valid.
         return
     jsonschema.Draft202012Validator.check_schema(parameter_schema)
+
+
+def validate_static_against_parameter_schema(parameter_schema: dict, static: dict) -> None:
+    """Validate `static_parameters` dict against `parameter_schema` (Track 13e).
+
+    No-op when parameter_schema is empty (no schema = anything goes; operator
+    explicitly opted out of save-time enforcement).
+
+    Raises:
+        jsonschema.ValidationError: static doesn't satisfy parameter_schema
+    """
+    if not parameter_schema:
+        return
+    jsonschema.validate(instance=static, schema=parameter_schema)

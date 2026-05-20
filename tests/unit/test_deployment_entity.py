@@ -208,6 +208,101 @@ def test_derive_associate_self_without_actor_id_ok():
     assert d.acts_as == "associate_self"
 
 
+# --- Task 1.9 — parameter_schema is itself a valid JSON Schema (§5.4)
+
+
+def test_valid_parameter_schema_accepted():
+    """Well-formed JSON Schema dict passes the metaschema check."""
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["actor_id"],
+            "properties": {"actor_id": {"type": "string"}},
+        },
+    )
+    d._validate_parameter_schema()  # should NOT raise
+
+
+def test_invalid_parameter_schema_rejected():
+    """A parameter_schema with a bogus JSON Schema type → ValueError."""
+    d = _make_deployment(
+        parameter_schema={"type": "not-a-real-jsonschema-type"},
+    )
+    with pytest.raises(ValueError, match="(?i)schema"):
+        d._validate_parameter_schema()
+
+
+def test_empty_parameter_schema_passes_validate():
+    """Empty parameter_schema (no validation at session start) → no raise.
+
+    Note: this is distinct from the empty + session_actor combination, which
+    Task 1.3's _derive_acts_as_and_validate rejects (see next test).
+    """
+    d = _make_deployment(parameter_schema={})
+    d._validate_parameter_schema()  # should NOT raise
+
+
+def test_empty_parameter_schema_with_explicit_session_actor_rejects():
+    """acts_as=session_actor + empty parameter_schema → rejection from
+    _derive_acts_as_and_validate (Task 1.3 behavior, exercised via the same
+    bug path as a non-empty schema that simply lacks actor_id in required)."""
+    d = _make_deployment(
+        acts_as="session_actor",
+        parameter_schema={},
+    )
+    # _validate_parameter_schema passes (empty is OK)
+    d._validate_parameter_schema()
+    # _derive_acts_as_and_validate rejects (empty schema → no actor_id in required)
+    with pytest.raises(ValueError, match="actor_id"):
+        d._derive_acts_as_and_validate()
+
+
+# --- Task 1.9 (Track 13e) — static_parameters must satisfy parameter_schema
+
+
+def test_valid_static_parameters_accepted():
+    """static_parameters that satisfy parameter_schema → no raise."""
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "role": {"type": "string", "enum": ["sales", "support"]},
+                "tenant": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        static_parameters={"role": "sales", "tenant": "indemn-internal"},
+        acts_as="associate_self",
+    )
+    d._validate_static_parameters()  # should NOT raise
+
+
+def test_invalid_static_parameters_rejected():
+    """static_parameters violating parameter_schema (wrong enum value) → ValueError."""
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "role": {"type": "string", "enum": ["sales", "support"]},
+            },
+            "additionalProperties": False,
+        },
+        static_parameters={"role": "marketing"},  # not in enum
+        acts_as="associate_self",
+    )
+    with pytest.raises(ValueError, match="(?i)static_parameters|role"):
+        d._validate_static_parameters()
+
+
+def test_empty_static_parameters_with_empty_schema_ok():
+    """No schema + no static → trivially valid (validator is a no-op)."""
+    d = _make_deployment(parameter_schema={}, static_parameters={})
+    d._validate_static_parameters()  # should NOT raise
+
+
 # --- Task 1.4 — state machine transition shape per §5.7
 #     (no instance construction needed; the _state_machine dict is class-level)
 

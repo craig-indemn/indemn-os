@@ -14,11 +14,16 @@ See docs/architecture/deployments.md for the full design.
 
 from typing import Literal, Optional, Self
 
+import jsonschema
 from bson import ObjectId
 from pydantic import Field, model_validator
 from pymongo import ASCENDING, IndexModel
 
 from kernel.entity.base import BaseEntity
+from kernel.schema_validation import (
+    validate_parameter_schema_is_valid_json_schema,
+    validate_static_against_parameter_schema,
+)
 
 
 class Deployment(BaseEntity):
@@ -63,6 +68,23 @@ class Deployment(BaseEntity):
     _is_kernel_entity = True
 
     @model_validator(mode="after")
+    def _validate_parameter_schema(self) -> Self:
+        """Validate parameter_schema is itself a valid JSON Schema (§5.4).
+
+        Runs BEFORE _derive_acts_as_and_validate so downstream validators can
+        rely on the schema being well-formed (otherwise jsonschema.validate
+        downstream would raise opaque SchemaError instead of a clear message).
+        """
+        try:
+            validate_parameter_schema_is_valid_json_schema(self.parameter_schema)
+        except jsonschema.SchemaError as e:
+            raise ValueError(
+                f"Deployment.parameter_schema is not a valid JSON Schema "
+                f"(draft 2020-12): {e.message}"
+            ) from e
+        return self
+
+    @model_validator(mode="after")
     def _derive_acts_as_and_validate(self) -> Self:
         """Derive acts_as from parameter_schema if not supplied; validate consistency.
 
@@ -94,6 +116,28 @@ class Deployment(BaseEntity):
                 "gate has nothing to validate. See design doc §5.6."
             )
 
+        return self
+
+    @model_validator(mode="after")
+    def _validate_static_parameters(self) -> Self:
+        """Validate static_parameters against parameter_schema at save time (Track 13e).
+
+        Catches operator misconfigurations where parameter_schema requires a
+        field but static_parameters omits it (or violates an enum/type).
+        Without this check, the misconfig only surfaces at session-start time
+        after the Deployment is already deployed.
+
+        Runs AFTER _validate_parameter_schema (so the schema is guaranteed
+        well-formed) and AFTER _derive_acts_as_and_validate (placement
+        compatible — acts_as derivation doesn't touch static_parameters).
+        """
+        try:
+            validate_static_against_parameter_schema(self.parameter_schema, self.static_parameters)
+        except jsonschema.ValidationError as e:
+            raise ValueError(
+                f"Deployment.static_parameters does not satisfy parameter_schema: "
+                f"{e.message} at path {list(e.absolute_path)}"
+            ) from e
         return self
 
     @model_validator(mode="after")
