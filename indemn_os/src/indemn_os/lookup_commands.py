@@ -22,10 +22,24 @@ def list_lookups(fmt: str = typer.Option("json", "--format")):
 
 
 @lookup_app.command("get")
-def get_lookup(name: str, fmt: str = typer.Option("json", "--format")):
+def get_lookup(
+    name: str,
+    fmt: str = typer.Option("json", "--format"),
+    context_profile: str = typer.Option(
+        None,
+        "--context-profile",
+        help=(
+            "Apply per-field truncation policy. Kernel entities are uncapped "
+            "by design under all profiles; flag is accepted for harness compatibility."
+        ),
+    ),
+):
     """Get a lookup by name."""
     client = CLIClient()
-    result = client.get(f"/api/lookups/{name}")
+    params: dict = {}
+    if context_profile:
+        params["context_profile"] = context_profile
+    result = client.get(f"/api/lookups/{name}", params=params)
     render(result, fmt)
 
 

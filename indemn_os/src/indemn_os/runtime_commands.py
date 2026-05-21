@@ -110,10 +110,21 @@ def transition_runtime(
 def get_runtime(
     runtime_id: str,
     json_output: bool = typer.Option(False, "--json"),
+    context_profile: str = typer.Option(
+        None,
+        "--context-profile",
+        help=(
+            "Apply per-field truncation policy. Kernel entities are uncapped "
+            "by design under all profiles; flag is accepted for harness compatibility."
+        ),
+    ),
 ):
     """Get a Runtime by ID."""
     client = CLIClient()
-    result = client.get(f"/api/runtimes/{runtime_id}")
+    params: dict = {}
+    if context_profile:
+        params["context_profile"] = context_profile
+    result = client.get(f"/api/runtimes/{runtime_id}", params=params)
     render(result)
 
 
