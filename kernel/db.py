@@ -14,9 +14,54 @@ import logging
 from beanie import init_beanie
 from motor.motor_asyncio import AsyncIOMotorClient
 
+from kernel.changes.collection import ChangeRecord
 from kernel.config import settings
+from kernel.entity.definition import EntityDefinition
+from kernel.message.schema import Message, MessageLog
+from kernel.rule.lookup import Lookup
+from kernel.rule.schema import Rule, RuleGroup
+from kernel.skill.schema import Skill
+from kernel_entities import (
+    Actor,
+    Attention,
+    Integration,
+    Organization,
+    Role,
+    Runtime,
+    Session,
+    Trace,
+)
+from kernel_entities.brand_assets import BrandAssets
+from kernel_entities.deployment import Deployment
+from kernel_entities.surface_config import SurfaceConfig
 
 logger = logging.getLogger(__name__)
+
+# Kernel entities + kernel infrastructure documents that init_beanie must
+# register at startup. Exposed at module-level so tests (and the registration
+# guard test in tests/unit/test_kernel_entity_registration.py) can verify
+# what's wired without instantiating the FastAPI app.
+KERNEL_DOCUMENT_MODELS = [
+    Organization,
+    Actor,
+    Role,
+    Integration,
+    Attention,
+    Runtime,
+    Session,
+    Trace,
+    Deployment,  # NEW (AI-406)
+    SurfaceConfig,  # NEW (AI-406)
+    BrandAssets,  # NEW (AI-406)
+    EntityDefinition,
+    Skill,
+    Rule,
+    RuleGroup,
+    Lookup,
+    Message,
+    MessageLog,
+    ChangeRecord,
+]
 
 # The central registry: entity_name → class
 # Populated by init_database at startup
@@ -47,49 +92,15 @@ async def init_database():
     )
     _db = _client[settings.database_name]
 
-    # Import all models
-    from kernel.changes.collection import ChangeRecord
-    from kernel.entity.definition import EntityDefinition
+    # create_entity_class is needed inside the function (avoids circular imports
+    # with kernel.entity.factory which may transitively reference get_database()).
     from kernel.entity.factory import create_entity_class
-    from kernel.message.schema import Message, MessageLog
-    from kernel.rule.lookup import Lookup
-    from kernel.rule.schema import Rule, RuleGroup
-    from kernel.skill.schema import Skill
-    from kernel_entities import (
-        Actor,
-        Attention,
-        Integration,
-        Organization,
-        Role,
-        Runtime,
-        Session,
-        Trace,
-    )
 
-    # Kernel entities + kernel infrastructure documents
-    kernel_models = [
-        Organization,
-        Actor,
-        Role,
-        Integration,
-        Attention,
-        Runtime,
-        Session,
-        Trace,
-        EntityDefinition,
-        Skill,
-        Rule,
-        RuleGroup,
-        Lookup,
-        Message,
-        MessageLog,
-        ChangeRecord,
-    ]
     # Initialize Beanie with KERNEL models first — EntityDefinition is a Beanie
     # Document, so init_beanie must run before we can construct EntityDefinition objects.
-    await init_beanie(database=_db, document_models=kernel_models)
+    await init_beanie(database=_db, document_models=KERNEL_DOCUMENT_MODELS)
 
-    for cls in kernel_models:
+    for cls in KERNEL_DOCUMENT_MODELS:
         if hasattr(cls, "__name__"):
             ENTITY_REGISTRY[cls.__name__] = cls
 
@@ -117,7 +128,7 @@ async def init_database():
         seen_names[defn.name] = defn
 
     # Reserved names: kernel entity names cannot be used for domain entities
-    RESERVED_NAMES = {cls.__name__ for cls in kernel_models if hasattr(cls, "__name__")}
+    RESERVED_NAMES = {cls.__name__ for cls in KERNEL_DOCUMENT_MODELS if hasattr(cls, "__name__")}
 
     for defn in seen_names.values():
         if defn.name in RESERVED_NAMES:
@@ -156,7 +167,7 @@ async def init_database():
 
     logger.info(
         "Database initialized: %d kernel entities, %d domain entities, %d total",
-        len(kernel_models),
+        len(KERNEL_DOCUMENT_MODELS),
         len(seen_names),
         len(ENTITY_REGISTRY),
     )

@@ -1,0 +1,366 @@
+"""Unit tests for Deployment kernel entity (AI-404-1).
+
+Structure: class-attribute introspection (matches test_trace_entity.py
+convention). Beanie Document subclasses cannot be instantiated via
+`Deployment(...)` without init_beanie() — `Document.__init__` calls
+`get_motor_collection()`.
+
+Behavior: Pydantic v2 `model_construct(...)` bypasses Document.__init__
+entirely (constructs without running validators). Tests then invoke the
+specific model_validator method directly. This lets us verify validator
+behavior in unit tests without a real MongoDB connection.
+"""
+
+from typing import get_args
+
+import pytest
+from bson import ObjectId
+
+from kernel_entities.deployment import Deployment
+
+
+def _make_deployment(**overrides) -> Deployment:
+    """Build a Deployment via model_construct (skips all validators).
+
+    Tests invoke `d._derive_acts_as_and_validate()` or `d._derive_validation_mode()`
+    directly on the returned instance to exercise the specific validator
+    under test.
+    """
+    defaults = dict(
+        org_id=ObjectId(),
+        name="Test",
+        associate_id=ObjectId(),
+        runtime_id=ObjectId(),
+        parameter_schema={},
+        acts_as=None,
+        parameter_schema_validation_mode=None,
+    )
+    defaults.update(overrides)
+    return Deployment.model_construct(**defaults)
+
+
+def test_deployment_can_import():
+    """Deployment class can be imported."""
+    assert Deployment is not None
+
+
+def test_deployment_required_fields():
+    """name, associate_id, runtime_id are required (no Pydantic default)."""
+    for field_name in ("name", "associate_id", "runtime_id"):
+        assert Deployment.model_fields[field_name].is_required(), (
+            f"{field_name} should be required"
+        )
+
+
+def test_deployment_status_default():
+    """status defaults to 'configured' (§5.7 state machine entry)."""
+    assert Deployment.model_fields["status"].default == "configured"
+
+
+def test_deployment_acts_as_literal_values():
+    """acts_as is Optional[Literal['session_actor', 'associate_self']].
+
+    Optional so the derivation model_validator (Task 1.2) can fill it from
+    parameter_schema per §5.6.
+    """
+    annotation = Deployment.model_fields["acts_as"].annotation
+    # Optional[Literal[...]] is Union[Literal[...], NoneType]
+    union_args = get_args(annotation)
+    literal_arg = next(a for a in union_args if a is not type(None))
+    literal_values = get_args(literal_arg)
+    assert set(literal_values) == {"session_actor", "associate_self"}
+
+
+def test_deployment_is_kernel_entity_marker():
+    """Deployment is marked as a kernel entity (kernel ships it; per-org overrides forbidden)."""
+    assert Deployment._is_kernel_entity is True
+
+
+def test_deployment_settings_collection_name():
+    """Beanie Settings.name is 'deployments' (matches auto-route /api/deployments/)."""
+    assert Deployment.Settings.name == "deployments"
+
+
+# --- Task 1.2 — model_validator registration (existence checks; behavior verified
+#     by Task 1.10.5's sample_deployment fixture once integration tests land) ---
+
+
+def test_deployment_has_derive_acts_as_and_validate_validator():
+    """`_derive_acts_as_and_validate` derives acts_as from parameter_schema (§5.6)
+    AND enforces the session_actor+actor_id-required consistency check."""
+    mvs = Deployment.__pydantic_decorators__.model_validators
+    assert "_derive_acts_as_and_validate" in mvs, (
+        "Deployment must register a _derive_acts_as_and_validate model_validator"
+    )
+    assert mvs["_derive_acts_as_and_validate"].info.mode == "after"
+
+
+def test_deployment_has_derive_validation_mode_validator():
+    """`_derive_validation_mode` runs after _derive_acts_as to fill the mode field (§5.4)."""
+    mvs = Deployment.__pydantic_decorators__.model_validators
+    assert "_derive_validation_mode" in mvs, (
+        "Deployment must register a _derive_validation_mode model_validator"
+    )
+    assert mvs["_derive_validation_mode"].info.mode == "after"
+
+
+# --- Task 1.2 — model_validator BEHAVIOR
+#     via Pydantic model_construct + manual invocation (avoids Beanie init while
+#     still exercising real validator logic). Each test invokes the validator
+#     under test on a model_construct'd instance and asserts the resulting state.
+
+
+def test_derive_acts_as_session_actor_when_actor_id_required():
+    """parameter_schema requires actor_id → acts_as defaults to session_actor (§5.6)."""
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["actor_id"],
+            "properties": {"actor_id": {"type": "string"}},
+        },
+    )
+    d._derive_acts_as_and_validate()
+    assert d.acts_as == "session_actor"
+
+
+def test_derive_acts_as_associate_self_when_actor_id_not_required():
+    """parameter_schema does NOT require actor_id → acts_as defaults to associate_self."""
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"customer_id": {"type": "string"}},
+        },
+    )
+    d._derive_acts_as_and_validate()
+    assert d.acts_as == "associate_self"
+
+
+def test_derive_acts_as_associate_self_when_no_schema():
+    """Empty parameter_schema → acts_as defaults to associate_self."""
+    d = _make_deployment(parameter_schema={})
+    d._derive_acts_as_and_validate()
+    assert d.acts_as == "associate_self"
+
+
+def test_derive_acts_as_explicit_override_wins():
+    """Operator-supplied acts_as is preserved (validator does not overwrite)."""
+    d = _make_deployment(
+        parameter_schema={"required": ["actor_id"]},
+        acts_as="associate_self",
+    )
+    d._derive_acts_as_and_validate()
+    assert d.acts_as == "associate_self"
+
+
+def test_derive_validation_mode_strict_for_session_actor():
+    """acts_as=session_actor → validation_mode defaults to strict (§5.4)."""
+    d = _make_deployment(acts_as="session_actor")
+    d._derive_validation_mode()
+    assert d.parameter_schema_validation_mode == "strict"
+
+
+def test_derive_validation_mode_forgiving_for_associate_self():
+    """acts_as=associate_self → validation_mode defaults to forgiving."""
+    d = _make_deployment(acts_as="associate_self")
+    d._derive_validation_mode()
+    assert d.parameter_schema_validation_mode == "forgiving"
+
+
+def test_derive_validation_mode_explicit_override_wins():
+    """Operator-supplied validation_mode is preserved (validator does not overwrite)."""
+    d = _make_deployment(
+        acts_as="session_actor",
+        parameter_schema_validation_mode="forgiving",
+    )
+    d._derive_validation_mode()
+    assert d.parameter_schema_validation_mode == "forgiving"
+
+
+# --- Task 1.3 — acts_as=session_actor consistency check
+#     §5.6 + implementation-readiness scrub: if operator explicitly sets
+#     acts_as=session_actor but parameter_schema does NOT require actor_id,
+#     reject at save time (runtime's session-start gate would otherwise have
+#     nothing to validate). Validator renamed to _derive_acts_as_and_validate
+#     to signal it does both derivation + consistency enforcement.
+
+
+def test_derive_rejects_session_actor_without_actor_id_in_schema_required():
+    """acts_as=session_actor + parameter_schema missing actor_id → ValueError (§5.6)."""
+    d = _make_deployment(
+        acts_as="session_actor",
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"customer_id": {"type": "string"}},
+            # actor_id NOT in required
+        },
+    )
+    with pytest.raises(ValueError, match="actor_id"):
+        d._derive_acts_as_and_validate()
+
+
+def test_derive_associate_self_without_actor_id_ok():
+    """acts_as=associate_self does not require actor_id in schema — no raise."""
+    d = _make_deployment(acts_as="associate_self")
+    d._derive_acts_as_and_validate()
+    assert d.acts_as == "associate_self"
+
+
+# --- Task 1.9 — parameter_schema is itself a valid JSON Schema (§5.4)
+
+
+def test_valid_parameter_schema_accepted():
+    """Well-formed JSON Schema dict passes the metaschema check."""
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["actor_id"],
+            "properties": {"actor_id": {"type": "string"}},
+        },
+    )
+    d._validate_parameter_schema()  # should NOT raise
+
+
+def test_invalid_parameter_schema_rejected():
+    """A parameter_schema with a bogus JSON Schema type → ValueError."""
+    d = _make_deployment(
+        parameter_schema={"type": "not-a-real-jsonschema-type"},
+    )
+    with pytest.raises(ValueError, match="(?i)schema"):
+        d._validate_parameter_schema()
+
+
+def test_empty_parameter_schema_passes_validate():
+    """Empty parameter_schema (no validation at session start) → no raise.
+
+    Note: this is distinct from the empty + session_actor combination, which
+    Task 1.3's _derive_acts_as_and_validate rejects (see next test).
+    """
+    d = _make_deployment(parameter_schema={})
+    d._validate_parameter_schema()  # should NOT raise
+
+
+def test_empty_parameter_schema_with_explicit_session_actor_rejects():
+    """acts_as=session_actor + empty parameter_schema → rejection from
+    _derive_acts_as_and_validate (Task 1.3 behavior, exercised via the same
+    bug path as a non-empty schema that simply lacks actor_id in required)."""
+    d = _make_deployment(
+        acts_as="session_actor",
+        parameter_schema={},
+    )
+    # _validate_parameter_schema passes (empty is OK)
+    d._validate_parameter_schema()
+    # _derive_acts_as_and_validate rejects (empty schema → no actor_id in required)
+    with pytest.raises(ValueError, match="actor_id"):
+        d._derive_acts_as_and_validate()
+
+
+# --- Task 1.9 (Track 13e) — static_parameters must satisfy parameter_schema
+
+
+def test_valid_static_parameters_accepted():
+    """static_parameters that satisfy parameter_schema → no raise."""
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "role": {"type": "string", "enum": ["sales", "support"]},
+                "tenant": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        static_parameters={"role": "sales", "tenant": "indemn-internal"},
+        acts_as="associate_self",
+    )
+    d._validate_static_parameters()  # should NOT raise
+
+
+def test_invalid_static_parameters_rejected():
+    """static_parameters violating parameter_schema (wrong enum value) → ValueError."""
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "role": {"type": "string", "enum": ["sales", "support"]},
+            },
+            "additionalProperties": False,
+        },
+        static_parameters={"role": "marketing"},  # not in enum
+        acts_as="associate_self",
+    )
+    with pytest.raises(ValueError, match="(?i)static_parameters|role"):
+        d._validate_static_parameters()
+
+
+def test_empty_static_parameters_with_empty_schema_ok():
+    """No schema + no static → trivially valid (validator is a no-op)."""
+    d = _make_deployment(parameter_schema={}, static_parameters={})
+    d._validate_static_parameters()  # should NOT raise
+
+
+def test_empty_static_parameters_with_required_in_schema_accepted():
+    """Schema has `required` but static is empty — ACCEPTED at save time.
+
+    Per design §5.4 + §5.6: `static_parameters` is a subset of the eventual
+    static+dynamic merge. The `required` check happens at /sessions on the
+    merged set, not at Deployment save. This is the session_actor pattern:
+    schema requires actor_id; static is empty; actor_id comes from the JWT
+    at session start. Strict enforcement here would forbid the Sales-Web
+    worked example.
+    """
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["actor_id"],
+            "properties": {"actor_id": {"type": "string"}},
+        },
+        static_parameters={},
+        acts_as="session_actor",
+    )
+    d._validate_static_parameters()  # should NOT raise — required enforced at /sessions
+
+
+# --- Task 1.4 — state machine transition shape per §5.7
+#     (no instance construction needed; the _state_machine dict is class-level)
+
+
+def test_state_machine_configured_to_active_allowed():
+    """configured → active is the standard activation transition."""
+    assert "active" in Deployment._state_machine["configured"]
+
+
+def test_state_machine_active_to_paused_allowed():
+    """active → paused for incident response / A/B off-period (§5.7)."""
+    assert "paused" in Deployment._state_machine["active"]
+
+
+def test_state_machine_paused_to_active_allowed():
+    """paused → active to resume after incident resolution."""
+    assert "active" in Deployment._state_machine["paused"]
+
+
+def test_state_machine_active_to_archived_allowed():
+    """active → archived to permanently retire a Deployment."""
+    assert "archived" in Deployment._state_machine["active"]
+
+
+def test_state_machine_any_to_error_allowed():
+    """configured + active can transition to error per §5.7."""
+    assert "error" in Deployment._state_machine["configured"]
+    assert "error" in Deployment._state_machine["active"]
+
+
+def test_state_machine_error_to_configured_allowed():
+    """Recovery path from error — mirrors other kernel entities."""
+    assert "configured" in Deployment._state_machine["error"]
+
+
+def test_state_machine_archived_is_terminal():
+    """archived state has no outgoing transitions (§5.7)."""
+    assert Deployment._state_machine["archived"] == []

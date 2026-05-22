@@ -47,6 +47,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path in self.PUBLIC_PATHS or path.startswith(self.PUBLIC_PREFIXES):
             return await call_next(request)
 
+        # Deployment /public endpoint is intentionally unauthed (semi-public per
+        # design §10.7 threat model — deployment_id is exposed by embed.js
+        # snippets on customer sites by necessity; the auth gate is at
+        # /sessions, not at /public discovery). Pattern: /api/deployments/<id>/public.
+        if path.startswith("/api/deployments/") and path.endswith("/public"):
+            return await call_next(request)
+
         auth = request.headers.get("authorization", "")
         if not auth.startswith("Bearer "):
             return JSONResponse(status_code=401, content={"error": "Missing auth token"})

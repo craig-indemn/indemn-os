@@ -21,6 +21,7 @@ from kernel.api.admin_routes import admin_router
 from kernel.api.auth_routes import auth_router
 from kernel.api.bootstrap import bootstrap_router
 from kernel.api.bulk import bulk_router
+from kernel.api.deployment_routes import deployment_router
 from kernel.api.direct_invoke import invoke_router
 from kernel.api.errors import register_error_handlers
 from kernel.api.events import events_router
@@ -161,6 +162,7 @@ def create_app() -> FastAPI:
     app.include_router(events_router)
     app.include_router(interaction_router)
     app.include_router(trace_router)
+    app.include_router(deployment_router)  # AI-406 — /public custom route
     # assistant_router DELETED (G2.3) — replaced by chat-harness instance
 
     # WebSocket endpoint [G-34]
