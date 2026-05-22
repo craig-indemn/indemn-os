@@ -12,6 +12,8 @@ import logging
 from uuid import uuid4
 
 import orjson
+from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import WebSocket, WebSocketDisconnect
 
 from kernel.auth.jwt import verify_access_token
@@ -81,12 +83,28 @@ async def _watch_changes(connection_id: str, org_id: str, websocket: WebSocket):
     """Watch MongoDB Change Streams and push matching changes to the client.
 
     Filter-aware: only sends changes matching active subscriptions. [G-34]
+
+    The JWT carries `org_id` as a hex string, but MongoDB stores `org_id`
+    as a BSON ObjectId. `$match` is exact-type, so the filter MUST cast
+    the string to an ObjectId or it silently matches zero documents and
+    every WebSocket consumer gets dead air. Cast defensively — a
+    malformed claim raises InvalidId, which we log and abort.
     """
     db = get_database()
 
-    # Database-level change stream filtered by org_id
+    try:
+        org_oid = ObjectId(org_id)
+    except (InvalidId, TypeError):
+        logger.warning(
+            "WebSocket %s: invalid org_id claim %r; aborting watcher",
+            connection_id,
+            org_id,
+        )
+        return
+
+    # Database-level change stream filtered by org_id (BSON ObjectId form).
     pipeline = [
-        {"$match": {"fullDocument.org_id": org_id}},
+        {"$match": {"fullDocument.org_id": org_oid}},
     ]
 
     try:
