@@ -25,6 +25,7 @@ from harness.agent import build_agent
 from harness.cron_runner import run_cron_skill
 from harness_common.cli import CLIError, indemn
 from harness.trace_helpers import serialize_messages, serialize_run_tree, derive_child_runs, aggregate_tokens
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.mongodb import MongoDBSaver
@@ -159,10 +160,21 @@ def _format_entity_xml(data: dict, entity_type: str) -> str:
     return "\n".join(lines)
 
 
-def _build_context_with_skills(entity_data: dict, entity_type: str, associate: dict) -> str:
-    """Build the full initial context: skills + entity, formatted as XML sections."""
-    parts = ["<context>"]
+def _build_skill_section_xml(associate: dict) -> str:
+    """Build the skill section XML for the Phase-4 <skill> SystemMessage.
 
+    AI-407 §15.5: replaces the Phase-3 user-message `<skill>` block with a
+    dedicated SystemMessage composed by compose_initial_messages. This helper
+    fetches the associate's operating skill(s) and emits per-skill blocks
+    `<skill name="X">...content...</skill>` joined by blank lines. The caller
+    (compose_initial_messages) wraps the result in an outer <skill>...</skill>
+    when constructing the SystemMessage so the agent's DEFAULT_PROMPT
+    "<skill> SystemMessage" reference is satisfied.
+
+    Returns empty string when associate has no skills (multi-skill operating
+    set; cron_runner mode skips this path entirely).
+    """
+    parts: list[str] = []
     skill_refs = associate.get("skills") or []
     for ref in skill_refs:
         try:
@@ -174,10 +186,21 @@ def _build_context_with_skills(entity_data: dict, entity_type: str, associate: d
             parts.append("")
         except CLIError as e:
             log.warning("Failed to load skill %s: %s", ref, e)
+    return "\n".join(parts).rstrip()
 
-    parts.append(_format_entity_xml(entity_data, entity_type))
-    parts.append("</context>")
-    return "\n".join(parts)
+
+def compose_initial_messages(skill_content: str, entity_xml: str) -> list:
+    """Compose the initial agent input messages for a single async invocation.
+
+    Phase 4 (AI-407 §15.5): the operating skill is a SystemMessage; the entity
+    context is the HumanMessage. Mirrors real-time harness composition (chat,
+    voice). The agent's DEFAULT_PROMPT references "<skill> SystemMessage" —
+    this function produces it.
+    """
+    return [
+        SystemMessage(content=f"<skill>\n{skill_content}\n</skill>"),
+        HumanMessage(content=entity_xml),
+    ]
 
 
 def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> dict:
@@ -725,17 +748,16 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                 _heartbeat_with_status_check("agent_running")
             )
 
-            context_str = _build_context_with_skills(context, input.entity_type, associate)
+            # AI-407 Phase 4: compose <skill> as SystemMessage + entity as HumanMessage
+            # (replaces the Phase 3 single-HumanMessage with <context><skill>...</context>
+            # composition via _build_context_with_skills). The agent's Phase-4
+            # DEFAULT_PROMPT references "<skill> SystemMessage" + "<entity> reference".
+            skill_xml = _build_skill_section_xml(associate)
+            entity_xml = _format_entity_xml(context, input.entity_type)
+            initial_messages = compose_initial_messages(skill_xml, entity_xml)
 
             result = await agent.ainvoke(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": f"Process this work:\n\n{context_str}",
-                        }
-                    ],
-                },
+                {"messages": initial_messages},
                 config={
                     "run_id": _langsmith_run_id,
                     "recursion_limit": 200,
