@@ -13,22 +13,26 @@ from unittest.mock import MagicMock
 
 # Make the harness package importable as `main` + `agent` (mirrors test_agent.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Add harnesses/_base so the real harness_common package loads (main.py imports
+# harness_common.thread_id which has actual logic, not just stubs).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_base"))
 
 # langchain_core is a real dep of the harness — leave it real so SystemMessage
 # / HumanMessage are actual types (isinstance() needs that). Import BEFORE
 # stubbing the other deps so sys.modules has the real langchain_core.
 from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 
+# Import real harness_common.thread_id before stubbing other submodules so the
+# real package + module land in sys.modules (main.py uses derive_checkpointer_thread_id).
+from harness_common.thread_id import derive_checkpointer_thread_id  # noqa: E402,F401
+
 # Stub the other heavy runtime deps that aren't installed in the test env.
-# compose_initial_messages is a pure function but main.py imports a lot at
-# module load.
 for mod in [
     "deepagents",
     "harness",
     "harness.agent",
     "harness.cron_runner",
     "harness.trace_helpers",
-    "harness_common",
     "harness_common.backend",
     "harness_common.cli",
     "harness_common.runtime",

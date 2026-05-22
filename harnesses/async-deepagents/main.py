@@ -25,6 +25,7 @@ from harness.agent import build_agent
 from harness.cron_runner import run_cron_skill
 from harness_common.cli import CLIError, indemn
 from harness.trace_helpers import serialize_messages, serialize_run_tree, derive_child_runs, aggregate_tokens
+from harness_common.thread_id import derive_checkpointer_thread_id
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 from langgraph.checkpoint.memory import MemorySaver
@@ -201,6 +202,63 @@ def compose_initial_messages(skill_content: str, entity_xml: str) -> list:
         SystemMessage(content=f"<skill>\n{skill_content}\n</skill>"),
         HumanMessage(content=entity_xml),
     ]
+
+
+def build_runnable_config(input, associate: dict, runtime_id) -> dict:
+    """Compose the LangChain RunnableConfig per AI-407 §13.5 (async harness).
+
+    Two-part contract from §13.2:
+      - LangSmith `metadata.thread_id` = correlation_id (UI grouping by lineage —
+        async cascades show as one thread, real-time sessions show as one thread,
+        cross-channel chains show as one thread).
+      - LangGraph `configurable.thread_id` = derive_checkpointer_thread_id(ctx)
+        (checkpointer persistence key — per-message isolation for cascades, or
+        per-Interaction continuity for handoff cases).
+
+    Field-name adapter: AgentExecutionInput uses `entity_type` / `entity_id`
+    (the §13 work_context's `target_entity_type` / `target_entity_id`).
+    """
+    from types import SimpleNamespace
+
+    work_ctx = SimpleNamespace(
+        is_real_time_session=False,  # async harness — by definition
+        interaction_id=None,
+        target_entity_type=input.entity_type,
+        target_entity_id=input.entity_id,
+        message_id=input.message_id,
+    )
+    checkpointer_thread_id = derive_checkpointer_thread_id(work_ctx)
+
+    associate_name = associate.get("name")
+    associate_id = associate.get("_id") or input.associate_id
+
+    return {
+        "configurable": {"thread_id": str(checkpointer_thread_id)},
+        "metadata": {
+            "thread_id": input.correlation_id,  # LangSmith UI grouping
+            "correlation_id": input.correlation_id,
+            "message_id": str(input.message_id),
+            "interaction_id": (
+                str(input.entity_id)
+                if input.entity_type == "Interaction"
+                else None
+            ),
+            "associate_id": str(associate_id),
+            "associate_name": associate_name,
+            "entity_type": input.entity_type,
+            "entity_id": str(input.entity_id),
+            "runtime_id": str(runtime_id),
+        },
+        "tags": [
+            f"associate:{associate_name or 'unknown'}",
+            "channel:async",
+            f"runtime:{runtime_id}",
+        ],
+        "run_name": (
+            f"{associate_name or 'agent'} → {input.entity_type} "
+            f"{str(input.entity_id)[:8]}"
+        ),
+    }
 
 
 def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> dict:
@@ -756,30 +814,18 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
             entity_xml = _format_entity_xml(context, input.entity_type)
             initial_messages = compose_initial_messages(skill_xml, entity_xml)
 
+            # AI-407 §13.5: build_runnable_config encapsulates the thread_id rule
+            # (configurable = derived per §13.3; metadata.thread_id = correlation_id)
+            # plus all LangSmith metadata. Per-invocation overrides (run_id,
+            # recursion_limit, callbacks) are added on top.
+            runnable_config = build_runnable_config(input, associate, runtime_id)
+            runnable_config["run_id"] = _langsmith_run_id
+            runnable_config["recursion_limit"] = 200
+            runnable_config["callbacks"] = [_run_collector]
+
             result = await agent.ainvoke(
                 {"messages": initial_messages},
-                config={
-                    "run_id": _langsmith_run_id,
-                    "recursion_limit": 200,
-                    "callbacks": [_run_collector],
-                    "configurable": {"thread_id": str(input.message_id)},
-                    "metadata": {
-                        "associate_id": str(input.associate_id),
-                        "associate_name": associate.get("name"),
-                        "message_id": str(input.message_id),
-                        "entity_type": input.entity_type,
-                        "entity_id": str(input.entity_id),
-                        "runtime_id": str(runtime_id),
-                        "correlation_id": input.correlation_id,
-                        "thread_id": input.correlation_id,
-                    },
-                    "tags": [
-                        f"associate:{associate.get('name', 'unknown')}",
-                        f"entity_type:{input.entity_type}",
-                        f"runtime:{RUNTIME_ID}",
-                    ],
-                    "run_name": f"{associate.get('name', 'agent')} → {input.entity_type} {str(input.entity_id)[:8]}",
-                },
+                config=runnable_config,
             )
         finally:
             if heartbeat_task:
