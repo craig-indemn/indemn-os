@@ -62,12 +62,29 @@ def validate_parameter_schema_is_valid_json_schema(parameter_schema: dict) -> No
 def validate_static_against_parameter_schema(parameter_schema: dict, static: dict) -> None:
     """Validate `static_parameters` dict against `parameter_schema` (Track 13e).
 
-    No-op when parameter_schema is empty (no schema = anything goes; operator
-    explicitly opted out of save-time enforcement).
+    Save-time validation catches **value-level operator errors** on the baked-in
+    static parameters — wrong enum values, type mismatches, unknown fields
+    when `additionalProperties: false`. It does NOT enforce the schema's
+    `required` constraints: per design §5.4 + §5.6, `static_parameters` is a
+    SUBSET of the eventual `static + dynamic_params` merge. Completeness
+    (the `required` check) is enforced at `/sessions` on the merged set, not
+    at Deployment save_tracked.
+
+    Concretely: for a `session_actor` Deployment with `parameter_schema.required
+    = ["actor_id"]`, an operator's `static_parameters = {}` is valid at save
+    time — `actor_id` is dynamic (extracted from the JWT at session start).
+    Strict enforcement here would forbid that pattern, which is exactly the
+    design's worked example for Sales-Web (§5.6).
+
+    No-op when parameter_schema is empty (no schema = anything goes).
 
     Raises:
-        jsonschema.ValidationError: static doesn't satisfy parameter_schema
+        jsonschema.ValidationError: a value in `static` violates the schema
+            (wrong enum, wrong type, unknown field) — NOT for missing required.
     """
     if not parameter_schema:
         return
-    jsonschema.validate(instance=static, schema=parameter_schema)
+    # Strip `required` so save-time only checks value-level constraints.
+    # Completeness is `/sessions`' job on merged static+dynamic.
+    schema_no_required = {k: v for k, v in parameter_schema.items() if k != "required"}
+    jsonschema.validate(instance=static, schema=schema_no_required)

@@ -303,6 +303,29 @@ def test_empty_static_parameters_with_empty_schema_ok():
     d._validate_static_parameters()  # should NOT raise
 
 
+def test_empty_static_parameters_with_required_in_schema_accepted():
+    """Schema has `required` but static is empty — ACCEPTED at save time.
+
+    Per design §5.4 + §5.6: `static_parameters` is a subset of the eventual
+    static+dynamic merge. The `required` check happens at /sessions on the
+    merged set, not at Deployment save. This is the session_actor pattern:
+    schema requires actor_id; static is empty; actor_id comes from the JWT
+    at session start. Strict enforcement here would forbid the Sales-Web
+    worked example.
+    """
+    d = _make_deployment(
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["actor_id"],
+            "properties": {"actor_id": {"type": "string"}},
+        },
+        static_parameters={},
+        acts_as="session_actor",
+    )
+    d._validate_static_parameters()  # should NOT raise — required enforced at /sessions
+
+
 # --- Task 1.4 — state machine transition shape per §5.7
 #     (no instance construction needed; the _state_machine dict is class-level)
 
