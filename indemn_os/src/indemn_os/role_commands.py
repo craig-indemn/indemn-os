@@ -61,10 +61,24 @@ def list_roles(
 
 
 @role_app.command("get")
-def get_role(role_id: str, fmt: str = typer.Option("json", "--format")):
+def get_role(
+    role_id: str,
+    fmt: str = typer.Option("json", "--format"),
+    context_profile: str = typer.Option(
+        None,
+        "--context-profile",
+        help=(
+            "Apply per-field truncation policy. Kernel entities are uncapped "
+            "by design under all profiles; flag is accepted for harness compatibility."
+        ),
+    ),
+):
     """Get a role by ID."""
     client = CLIClient()
-    result = client.get(f"/api/roles/{role_id}")
+    params: dict = {}
+    if context_profile:
+        params["context_profile"] = context_profile
+    result = client.get(f"/api/roles/{role_id}", params=params)
     render(result, fmt)
 
 

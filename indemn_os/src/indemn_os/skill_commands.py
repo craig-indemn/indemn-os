@@ -31,11 +31,22 @@ def get_skill(
     name: str,
     raw: bool = typer.Option(False, "--raw", help="Show full entity JSON"),
     fmt: str = typer.Option("json", "--format"),
+    context_profile: str = typer.Option(
+        None,
+        "--context-profile",
+        help=(
+            "Apply per-field truncation policy. Kernel entities are uncapped "
+            "by design under all profiles; flag is accepted for harness compatibility."
+        ),
+    ),
 ):
     """Get a skill by name. Returns content directly (use --raw for full entity)."""
     import os
     client = CLIClient()
-    result = client.get(f"/api/skills/by-name/{name}")
+    params: dict = {}
+    if context_profile:
+        params["context_profile"] = context_profile
+    result = client.get(f"/api/skills/by-name/{name}", params=params)
     if raw or os.environ.get("INDEMN_OUTPUT_FORMAT") == "json":
         render(result, fmt, raw=True)
     elif isinstance(result, dict):

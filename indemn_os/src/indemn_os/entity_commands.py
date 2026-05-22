@@ -75,10 +75,24 @@ def list_entity_defs(fmt: str = typer.Option("json", "--format")):
 
 
 @entity_app.command("get")
-def get_entity_def(name: str, fmt: str = typer.Option("json", "--format")):
+def get_entity_def(
+    name: str,
+    fmt: str = typer.Option("json", "--format"),
+    context_profile: str = typer.Option(
+        None,
+        "--context-profile",
+        help=(
+            "Apply per-field truncation policy. Kernel entities are uncapped "
+            "by design under all profiles; flag is accepted for harness compatibility."
+        ),
+    ),
+):
     """Get an entity definition by name."""
     client = CLIClient()
-    result = client.get(f"/api/entitydefinitions/{name}")
+    params: dict = {}
+    if context_profile:
+        params["context_profile"] = context_profile
+    result = client.get(f"/api/entitydefinitions/{name}", params=params)
     render(result, fmt)
 
 
@@ -106,17 +120,31 @@ def delete_entity_def(
 def modify_entity_def(
     name: str,
     add_field: str = typer.Option(None, "--add-field", help='JSON: {"field_name": {...}}'),
+    modify_field: str = typer.Option(
+        None,
+        "--modify-field",
+        help='JSON: {"field_name": {...}} — full FieldDefinition spec replaces existing',
+    ),
     remove_field: str = typer.Option(None, "--remove-field"),
     state_machine: str = typer.Option(
         None, "--state-machine", help='JSON: {"state": ["target1", ...], ...}'
     ),
 ):
-    """Modify an entity definition (add/remove fields, update state machine)."""
+    """Modify an entity definition (add/modify/remove fields, update state machine).
+
+    `--modify-field` posts a FULL FieldDefinition spec which REPLACES the
+    existing field entirely (per admin_routes:modify_entity_definition).
+    For partial updates (e.g. setting only `content_size_hint`), read the
+    current field spec first, merge your change, then post the merged
+    spec back.
+    """
     import orjson
 
     data = {}
     if add_field:
         data["add_fields"] = orjson.loads(add_field)
+    if modify_field:
+        data["modify_fields"] = orjson.loads(modify_field)
     if remove_field:
         data["remove_fields"] = [remove_field]
     if state_machine:
@@ -124,7 +152,7 @@ def modify_entity_def(
 
     if not data:
         typer.echo(
-            "Nothing to modify. Use --add-field, --remove-field, or --state-machine.",
+            "Nothing to modify. Use --add-field, --modify-field, --remove-field, or --state-machine.",
             err=True,
         )
         raise typer.Exit(1)

@@ -88,10 +88,23 @@ def list_runs(
 
 
 @eval_app.command("get")
-def get_run(run_id: str):
+def get_run(
+    run_id: str,
+    context_profile: str = typer.Option(
+        None,
+        "--context-profile",
+        help=(
+            "Apply per-field truncation policy. Kernel entities are uncapped "
+            "by design under all profiles; flag is accepted for harness compatibility."
+        ),
+    ),
+):
     """Get evaluation run summary with aggregate scores."""
     client = CLIClient()
-    result = client.get(f"/api/_eval/runs/{run_id}")
+    params: dict = {}
+    if context_profile:
+        params["context_profile"] = context_profile
+    result = client.get(f"/api/_eval/runs/{run_id}", params=params)
     render(result)
 
 

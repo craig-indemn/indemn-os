@@ -68,6 +68,14 @@ def get_trace(
     trace_id: str,
     depth: int = typer.Option(1, "--depth", help="Resolve related entities (1-5)"),
     include_related: bool = typer.Option(False, "--include-related"),
+    context_profile: str = typer.Option(
+        None,
+        "--context-profile",
+        help=(
+            "Apply per-field truncation policy. Kernel entities are uncapped "
+            "by design under all profiles; flag is accepted for harness compatibility."
+        ),
+    ),
 ):
     """Get a Trace entity by ID."""
     client = CLIClient()
@@ -76,6 +84,8 @@ def get_trace(
         params["depth"] = depth
     if include_related:
         params["include_related"] = "true"
+    if context_profile:
+        params["context_profile"] = context_profile
     result = client.get(f"/api/traces/{trace_id}", params=params)
     render(result)
 

@@ -117,10 +117,24 @@ def list_actors(
 
 
 @actor_app.command("get")
-def get_actor(actor_id: str, fmt: str = typer.Option("json", "--format")):
+def get_actor(
+    actor_id: str,
+    fmt: str = typer.Option("json", "--format"),
+    context_profile: str = typer.Option(
+        None,
+        "--context-profile",
+        help=(
+            "Apply per-field truncation policy. Kernel entities are uncapped "
+            "by design under all profiles; flag is accepted for harness compatibility."
+        ),
+    ),
+):
     """Get an actor by ID."""
     client = CLIClient()
-    result = client.get(f"/api/actors/{actor_id}")
+    params: dict = {}
+    if context_profile:
+        params["context_profile"] = context_profile
+    result = client.get(f"/api/actors/{actor_id}", params=params)
     render(result, fmt)
 
 
