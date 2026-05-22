@@ -110,6 +110,16 @@ def create_app() -> FastAPI:
             if name not in _INFRASTRUCTURE:
                 register_entity_routes(app, name, cls)
 
+        # Re-register the deployment_router AFTER register_entity_routes.
+        # AI-406: `register_entity_routes("Deployment", ...)` calls
+        # `_evict_routes_for_prefix("/api/deployments")` which wipes ALL routes
+        # under that prefix — including the `/{deployment_id}/public` route
+        # added via the earlier `app.include_router(deployment_router)` call
+        # in this same factory. Re-add it here so it survives the eviction.
+        # (Bug surfaced post-deploy; integration tests using ASGITransport
+        # without lifespan didn't trigger the eviction path.)
+        app.include_router(deployment_router)
+
         # Bootstrap revocation cache [G-42]
         from kernel.auth.jwt import bootstrap_revocation_cache, watch_revocations
 
