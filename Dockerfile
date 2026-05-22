@@ -16,6 +16,10 @@ RUN uv sync --frozen --no-dev
 COPY kernel/ kernel/
 COPY kernel_entities/ kernel_entities/
 COPY seed/ seed/
+# AI-406: per-vendor JSON Schema files for SurfaceConfig.config validation
+# (kernel/schema_validation.py reads these at SurfaceConfig instance construction —
+# including Beanie's load path — so they must be present in the image).
+COPY schemas/ schemas/
 
 # Entrypoint dispatches based on SERVICE_TYPE env var
 COPY entrypoint.sh /app/entrypoint.sh
