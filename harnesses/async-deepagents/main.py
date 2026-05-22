@@ -26,6 +26,9 @@ from harness.cron_runner import run_cron_skill
 from harness_common.cli import CLIError, indemn
 from harness.trace_helpers import serialize_messages, serialize_run_tree, derive_child_runs, aggregate_tokens
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.mongodb import MongoDBSaver
+from motor.motor_asyncio import AsyncIOMotorClient
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from indemn_os.types import AgentExecutionInput, AgentExecutionResult
 from temporalio import activity
@@ -37,6 +40,53 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 TASK_QUEUE = f"runtime-{RUNTIME_ID}"
+
+# AI-407 §15.4: Phase-4 MongoDBSaver checkpointer for async harness.
+# Adapted from chat-deepagents' lifespan-init pattern; async-deepagents uses
+# Temporal worker (no Starlette lifespan event), so we lazy-init on first use
+# with a False-sentinel for "tried and failed — degraded to MemorySaver fallback".
+# Mirrors voice harness Task 2.16 (an asyncio.Lock there guards concurrent room
+# dispatches; here Temporal activities are concurrent in the same event loop,
+# but the worst case is duplicate MotorClient construction on first race — not
+# catastrophic. Keep simple per playbook spec.)
+_checkpointer = None
+
+
+async def _get_or_init_checkpointer():
+    """Return the module-level MongoDBSaver, lazily initialized.
+
+    Returns None if MONGODB_URI is absent or the ping fails — caller falls
+    back to MemorySaver so the activity doesn't block on missing infra
+    (mirrors chat-deepagents degradation pattern).
+    """
+    global _checkpointer
+    # `False` sentinel = "tried + failed; don't keep retrying within process lifetime"
+    if _checkpointer is False:
+        return None
+    if _checkpointer is not None:
+        return _checkpointer
+    mongodb_uri = os.environ.get("MONGODB_URI", "")
+    if not mongodb_uri:
+        log.warning(
+            "MONGODB_URI not set — async checkpointer disabled "
+            "(falling back to MemorySaver; no human-in-the-loop pause/resume)"
+        )
+        _checkpointer = False
+        return None
+    try:
+        motor_client = AsyncIOMotorClient(mongodb_uri)
+        await motor_client.admin.command("ping")
+        _checkpointer = MongoDBSaver(
+            motor_client.delegate, db_name="indemn_os_checkpoints"
+        )
+        log.info("Async MongoDB checkpointer initialized")
+        return _checkpointer
+    except Exception as e:
+        log.warning(
+            "MongoDB checkpointer unavailable: %s — degraded to MemorySaver", e
+        )
+        _checkpointer = False
+        return None
 
 
 def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -> dict:
@@ -644,9 +694,17 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # build_system_prompt directive — no filesystem SKILL.md writes here.
         activity_id = f"act-{input.message_id}"
 
+        # AI-407 §15.4: MongoDBSaver checkpointer (durable async state for
+        # human-in-the-loop pause/resume). Falls back to MemorySaver if
+        # MongoDB unavailable so the activity never blocks on missing infra.
+        checkpointer = await _get_or_init_checkpointer()
+        if checkpointer is None:
+            checkpointer = MemorySaver()
+
         agent = build_agent(
             associate=associate,
             llm_config=llm_config,
+            checkpointer=checkpointer,
             activity_id=activity_id,
         )
 

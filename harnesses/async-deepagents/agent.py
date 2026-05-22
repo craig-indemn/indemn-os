@@ -18,7 +18,6 @@ from typing import Callable
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
-from langgraph.checkpoint.memory import MemorySaver
 from harness_common.backend import build_backend
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import ToolMessage
@@ -62,28 +61,22 @@ class ExecuteErrorStatusMiddleware(AgentMiddleware):
 
 DEFAULT_PROMPT = (
     "You are an Indemn OS Associate.\n\n"
-    "Your context contains two sections:\n"
-    "- <skill> — your operating instructions. Follow them.\n"
-    "- <entity> — the entity you are processing.\n\n"
-    "Your work follows this order:\n"
-    "  1. Read your skill in the context — it defines your procedure.\n"
-    "  2. Follow the skill's instructions. If it says to run a rules\n"
-    "     check first (e.g., `auto-classify --auto`), do that BEFORE\n"
-    "     loading entity skills. If rules handle the work, you're done.\n"
-    "  3. Only if the skill requires full reasoning: load entity\n"
-    "     skill(s) via `execute('indemn skill get <EntityName>')` for each\n"
-    "     entity type you'll touch.\n"
-    "  4. Use the todo tool to plan every step your skill prescribes.\n"
-    "  5. Execute the plan via `indemn` CLI calls. Update todos as you "
-    "complete each step.\n\n"
+    "Your input contains:\n"
+    "- A <skill> SystemMessage: your operating instructions for this work\n"
+    "- An <entity> reference: the entity you are processing\n\n"
+    "Work order:\n"
+    "  1. Read your <skill> SystemMessage — it defines your procedure\n"
+    "  2. Follow it. If the skill instructs a rules check first (e.g. 'auto-classify --auto'),\n"
+    "     do that BEFORE loading entity skills. If rules handle the work, you're done.\n"
+    "  3. Only if full reasoning is required: load entity skill(s) via\n"
+    "     execute('indemn skill get <EntityName>') for each entity type you'll touch.\n"
+    "  4. Use the todo tool to plan steps your skill prescribes.\n"
+    "  5. Execute the plan via indemn CLI. Update todos as you go.\n\n"
     "RULES:\n"
-    "- ALWAYS use execute for entity operations — entity data lives in the OS, "
-    "never in files.\n"
-    "- Your skill in the context takes precedence over these general guidelines.\n"
-    "- write_file is fine for intermediate scratch (notes, drafts) but "
-    "never for entity data — that goes through the CLI.\n"
-    "- NEVER use task subagents for entity lookups.\n"
-    "- Lead with the action. Be concise.\n"
+    "- ALWAYS use execute for entity operations — entity data lives in the OS, not in files\n"
+    "- Your skill takes precedence over these guidelines\n"
+    "- NEVER spawn task subagents for entity lookups\n"
+    "- Be concise; lead with action\n"
 )
 
 
@@ -99,9 +92,15 @@ def build_system_prompt(associate: dict) -> str:
 def build_agent(
     associate: dict,
     llm_config: dict,
+    checkpointer,
     activity_id: str | None = None,
 ):
     """Construct the agent from merged LLM config + per-associate system prompt.
+
+    checkpointer: LangGraph checkpointer (Phase 4 — required parameter, no
+    MemorySaver default). Caller passes MongoDBSaver for durable async state
+    (human-in-the-loop pause/resume) or MemorySaver fallback if MongoDB is
+    unavailable. See main.py::_get_or_init_checkpointer.
 
     activity_id: per-invocation identifier passed to build_backend so the
     sandbox is scoped per-activity, preventing cross-invocation tool-cache
@@ -118,5 +117,5 @@ def build_agent(
         system_prompt=build_system_prompt(associate),
         backend=build_backend(activity_id=activity_id),
         middleware=[ExecuteErrorStatusMiddleware()],
-        checkpointer=MemorySaver(),
+        checkpointer=checkpointer,
     )
