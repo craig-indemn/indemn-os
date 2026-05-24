@@ -34,3 +34,31 @@ from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402,F4
 # derive_checkpointer_thread_id. Pre-loading here makes the real package land
 # in sys.modules before any test's MagicMock setdefault would conflict.
 from harness_common.thread_id import derive_checkpointer_thread_id  # noqa: E402,F401
+
+# Stub the heavy runtime deps that session.py + agent.py import at module load
+# (deepagents, harness.agent, harness_common submodules, langchain, starlette,
+# langgraph checkpointer libs, motor). Per-file stubs would duplicate this; the
+# conftest centralizes so all chat tests benefit + ordering issues don't recur.
+from unittest.mock import MagicMock  # noqa: E402
+
+for mod in [
+    "deepagents",
+    "harness",
+    "harness.agent",
+    "harness_common.backend",
+    "harness_common.cli",
+    "harness_common.runtime",
+    "harness_common.attention",
+    "harness_common.interaction",
+    "langchain",
+    "langchain.chat_models",
+    "starlette",
+    "starlette.websockets",
+    "langgraph",
+    "langgraph.checkpoint",
+    "langgraph.checkpoint.memory",
+    "langgraph.checkpoint.mongodb",
+    "motor",
+    "motor.motor_asyncio",
+]:
+    sys.modules.setdefault(mod, MagicMock())

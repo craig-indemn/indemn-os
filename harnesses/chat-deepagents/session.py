@@ -40,6 +40,28 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
 class ChatSession:
     """Manages one WebSocket conversation session."""
 
+    def _session_indemn(self, *args):
+        """Per-session indemn() wrapper — passes session-local correlation_id
+        + effective_actor_id as kwargs (AI-407 Task 2.11 + Task 2.5).
+
+        Chat is multi-session-per-process. Mutating os.environ to set
+        INDEMN_CORRELATION_ID at session start would race with concurrent
+        sessions and contaminate cross-session lineage attribution. Per-call
+        kwargs (added on the wrapper by Task 2.5) are the concurrency-safe
+        path. Early-lifecycle calls (before self.correlation_id is set)
+        safely pass None — the wrapper's `if correlation_id is not None`
+        branch skips the env-setting.
+
+        effective_actor_id = self.associate_id (the chat associate's actor).
+        AI-408's session_actor Deployment flow will revisit this when chat
+        starts impersonating end-users.
+        """
+        return indemn(
+            *args,
+            correlation_id=self.correlation_id,
+            effective_actor_id=self.associate_id,
+        )
+
     @staticmethod
     def build_runnable_config(
         *,
@@ -149,20 +171,21 @@ class ChatSession:
 
     async def start(self):
         """Initialize the session — load config, create Interaction + Attention, build agent."""
-        # Load associate config
-        associate = indemn("actor", "get", self.associate_id)
+        # Load associate config (correlation_id not yet set — that's OK; _session_indemn
+        # handles None by skipping the per-call env override)
+        associate = self._session_indemn("actor", "get", self.associate_id)
         log.info("Loaded associate: %s (%s)", associate.get("name"), self.associate_id)
         self.associate = associate
 
         # Load Runtime config for three-layer merge
-        runtime = indemn("runtime", "get", RUNTIME_ID)
+        runtime = self._session_indemn("runtime", "get", RUNTIME_ID)
 
         # Load Deployment if present
         deployment = None
         deployment_id = associate.get("deployment_id")
         if deployment_id:
             try:
-                deployment = indemn("deployment", "get", str(deployment_id))
+                deployment = self._session_indemn("deployment", "get", str(deployment_id))
             except CLIError:
                 pass
         self.deployment_id = str(deployment_id) if deployment_id else None
@@ -178,7 +201,7 @@ class ChatSession:
             # tracks lineage on the conversation entity). Pre-Phase-4 Interactions
             # may have no correlation_id — fall back to fresh UUID.
             try:
-                interaction = indemn("interaction", "get", self.interaction_id)
+                interaction = self._session_indemn("interaction", "get", self.interaction_id)
                 self.correlation_id = interaction.get("correlation_id") or str(uuid.uuid4())
             except Exception:
                 self.correlation_id = str(uuid.uuid4())
@@ -253,7 +276,7 @@ class ChatSession:
         parts: list[str] = []
         for ref in associate.get("skills") or []:
             try:
-                skill = indemn("skill", "get", ref)
+                skill = self._session_indemn("skill", "get", ref)
                 content = skill.get("content", "") if isinstance(skill, dict) else str(skill)
                 parts.append(f'<skill name="{ref}">')
                 parts.append(content)
@@ -291,7 +314,7 @@ class ChatSession:
         # Save first message preview for conversation history UI
         if self._message_count == 0 and self.interaction_id:
             try:
-                indemn(
+                self._session_indemn(
                     "interaction",
                     "update",
                     self.interaction_id,
