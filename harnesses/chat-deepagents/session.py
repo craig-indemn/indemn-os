@@ -19,6 +19,7 @@ from harness_common.attention import attention_heartbeat_loop, close_attention, 
 from harness_common.cli import CLIError, indemn
 from harness_common.interaction import close_interaction, create_interaction
 from harness_common.runtime import RUNTIME_ID
+from langchain_core.messages import SystemMessage
 from starlette.websockets import WebSocket
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,38 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
 
 class ChatSession:
     """Manages one WebSocket conversation session."""
+
+    @staticmethod
+    def compose_initial_messages(
+        skill_content: str, deployment_context: dict
+    ) -> list:
+        """Compose the <skill> + <deployment_context> SystemMessages prepended
+        at chat session start (AI-407 §15.5 chat).
+
+        Phase 4 chat shape: the agent's DEFAULT_PROMPT tells the agent to
+        "Read your <skill> SystemMessage" + "Read <deployment_context>
+        SystemMessage". This function produces both. The caller (start()
+        for new sessions) prepends them to the agent's checkpointer state
+        keyed by interaction_id; subsequent turns see them in conversation
+        history without re-prepending. Resumed sessions inherit the
+        prior-session state directly.
+
+        deployment_context is a dict the agent reads to know who the user
+        is, what page they're on, what scope this session has. Sanitization
+        of user-controlled values is the caller's job (sanitize_dynamic_params
+        from harness_common.sanitize — Task 2.0.5).
+        """
+        ctx_lines = "\n".join(f"  {k}: {v}" for k, v in deployment_context.items())
+        return [
+            SystemMessage(content=f"<skill>\n{skill_content}\n</skill>"),
+            SystemMessage(
+                content=(
+                    f"<deployment_context>\n{ctx_lines}\n</deployment_context>\n\n"
+                    "Read this block before responding. It tells you who the "
+                    "user is and what context this session has."
+                )
+            ),
+        ]
 
     def __init__(
         self,
