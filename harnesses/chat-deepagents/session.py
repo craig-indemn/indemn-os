@@ -19,8 +19,11 @@ from harness_common.attention import attention_heartbeat_loop, close_attention, 
 from harness_common.cli import CLIError, indemn
 from harness_common.interaction import close_interaction, create_interaction
 from harness_common.runtime import RUNTIME_ID
+from harness_common.thread_id import derive_checkpointer_thread_id
 from langchain_core.messages import SystemMessage
 from starlette.websockets import WebSocket
+from types import SimpleNamespace
+import uuid
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +39,54 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
 
 class ChatSession:
     """Manages one WebSocket conversation session."""
+
+    @staticmethod
+    def build_runnable_config(
+        *,
+        interaction_id: str,
+        correlation_id: str,
+        associate: dict,
+        runtime_id: str,
+        deployment_id: str | None,
+    ) -> dict:
+        """RunnableConfig per AI-407 §13.5 (chat — real-time).
+
+        - configurable.thread_id = interaction_id (checkpointer state continuity
+          across turns; matches Phase 3 keying so no checkpoint invalidation).
+        - metadata.thread_id = correlation_id (LangSmith UI groups runs by
+          cascade lineage; distinct from the checkpointer key per §13.2).
+        - metadata carries the full ID set for cross-pivot LangSmith search.
+        """
+        work_ctx = SimpleNamespace(
+            is_real_time_session=True,
+            interaction_id=interaction_id,
+            target_entity_type=None,
+            target_entity_id=None,
+            message_id=None,
+        )
+        checkpointer_thread_id = derive_checkpointer_thread_id(work_ctx)
+        associate_name = associate.get("name", "Chat Assistant")
+        return {
+            "configurable": {"thread_id": str(checkpointer_thread_id)},
+            "metadata": {
+                "thread_id": correlation_id,  # LangSmith UI grouping
+                "correlation_id": correlation_id,
+                "interaction_id": interaction_id,
+                "associate_id": str(associate.get("_id", "")),
+                "associate_name": associate_name,
+                "entity_type": "Interaction",
+                "entity_id": interaction_id,
+                "runtime_id": str(runtime_id),
+                "deployment_id": deployment_id,
+            },
+            "tags": [
+                f"associate:{associate_name}",
+                "channel:chat",
+                f"runtime:{runtime_id}",
+                (f"deployment:{deployment_id}" if deployment_id else "deployment:none"),
+            ],
+            "run_name": f"{associate_name} → Interaction {interaction_id[:8]}",
+        }
 
     @staticmethod
     def compose_initial_messages(
@@ -89,12 +140,19 @@ class ChatSession:
         self._events_process = None
         self._event_queue: list[dict] = []
         self._message_count = 0
+        # AI-407 Phase 4: tracked at session start; consumed by build_runnable_config + compose_initial_messages
+        self.correlation_id: str | None = None
+        self.runtime_id: str = RUNTIME_ID
+        self.deployment_id: str | None = None
+        self.associate: dict | None = None
+        self._initial_systemmessages: list | None = None
 
     async def start(self):
         """Initialize the session — load config, create Interaction + Attention, build agent."""
         # Load associate config
         associate = indemn("actor", "get", self.associate_id)
         log.info("Loaded associate: %s (%s)", associate.get("name"), self.associate_id)
+        self.associate = associate
 
         # Load Runtime config for three-layer merge
         runtime = indemn("runtime", "get", RUNTIME_ID)
@@ -107,13 +165,23 @@ class ChatSession:
                 deployment = indemn("deployment", "get", str(deployment_id))
             except CLIError:
                 pass
+        self.deployment_id = str(deployment_id) if deployment_id else None
 
         # Three-layer LLM config merge
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
         # Resume existing Interaction or create a new one
-        if self.interaction_id:
+        is_resume = bool(self.interaction_id)
+        if is_resume:
             log.info("Resuming interaction: %s", self.interaction_id)
+            # Try to recover correlation_id from existing Interaction (Phase 4
+            # tracks lineage on the conversation entity). Pre-Phase-4 Interactions
+            # may have no correlation_id — fall back to fresh UUID.
+            try:
+                interaction = indemn("interaction", "get", self.interaction_id)
+                self.correlation_id = interaction.get("correlation_id") or str(uuid.uuid4())
+            except Exception:
+                self.correlation_id = str(uuid.uuid4())
         else:
             interaction = await create_interaction(
                 channel_type="chat",
@@ -121,6 +189,9 @@ class ChatSession:
                 deployment_id=deployment_id,
             )
             self.interaction_id = interaction.get("_id")
+            # AI-407 §13.5: chat sessions generate a fresh correlation_id at start.
+            # AI-408 will let the connect message pass one in for cross-channel chains.
+            self.correlation_id = str(uuid.uuid4())
 
         # Open Attention (real-time session tracking)
         attention = await open_attention(
@@ -132,13 +203,27 @@ class ChatSession:
         )
         self.attention_id = attention.get("_id")
 
-        # Build agent — skills load via CLI directives in the system prompt
-        # (commit `7281b83` pattern), no filesystem skill writing.
+        # Build agent — operating skill arrives as <skill> SystemMessage at
+        # session start (Phase 4 — Task 2.9 + this task). Entity skills still
+        # via CLI directives in DEFAULT_PROMPT (Step 3).
         self.agent = build_agent(
             associate=associate,
             llm_config=llm_config,
             checkpointer=self.checkpointer,
         )
+
+        # AI-407 Phase 4: compose initial <skill> + <deployment_context>
+        # SystemMessages for NEW sessions. They're prepended to the per-turn
+        # messages array on the first turn only (handle_message); the MongoDB
+        # checkpointer persists them in state via the add_messages reducer,
+        # so subsequent turns see them in history without re-prepending.
+        # Resumed sessions inherit the prior state directly (no re-prepend).
+        if not is_resume:
+            skill_xml = self._load_skill_section_xml(associate)
+            deployment_context = self._build_deployment_context(associate, deployment)
+            self._initial_systemmessages = ChatSession.compose_initial_messages(
+                skill_xml, deployment_context
+            )
 
         # Start heartbeat loop
         self._heartbeat_task = asyncio.create_task(
@@ -149,10 +234,53 @@ class ChatSession:
         self._events_task = asyncio.create_task(self._run_events_stream())
 
         log.info(
-            "Session started: interaction=%s, attention=%s",
+            "Session started: interaction=%s, attention=%s, correlation=%s",
             self.interaction_id,
             self.attention_id,
+            self.correlation_id,
         )
+
+    def _load_skill_section_xml(self, associate: dict) -> str:
+        """Load operating skill(s) content via CLI, format as nested
+        <skill name="X">...</skill> blocks. compose_initial_messages wraps
+        the result in an outer <skill>...</skill> for the SystemMessage.
+
+        Mirrors async-deepagents' _build_skill_section_xml. Pulled inline
+        rather than DRY'd into harness_common to keep Phase 2A's harness-
+        common touch surface minimal (only adds the new utility modules +
+        cli.py kwargs).
+        """
+        parts: list[str] = []
+        for ref in associate.get("skills") or []:
+            try:
+                skill = indemn("skill", "get", ref)
+                content = skill.get("content", "") if isinstance(skill, dict) else str(skill)
+                parts.append(f'<skill name="{ref}">')
+                parts.append(content)
+                parts.append("</skill>")
+                parts.append("")
+            except CLIError as e:
+                log.warning("Failed to load skill %s: %s", ref, e)
+        return "\n".join(parts).rstrip()
+
+    def _build_deployment_context(
+        self, associate: dict, deployment: dict | None
+    ) -> dict:
+        """Build the deployment_context dict for the <deployment_context>
+        SystemMessage. Pre-AI-408 (current scope): no user-supplied
+        dynamic_params; context is operator-trusted (no sanitization needed).
+        AI-408 will add dynamic_params from the connect message + run them
+        through sanitize_dynamic_params (Task 2.0.5) before merging here.
+        """
+        ctx = {
+            "actor_id": str(self.associate_id),
+            "actor_name": associate.get("name", "Assistant"),
+            "channel_kind": "chat",
+        }
+        if deployment:
+            ctx["deployment_id"] = str(deployment.get("_id", ""))
+            ctx["deployment_name"] = deployment.get("name", "")
+        return ctx
 
     async def handle_message(self, content: str, context: dict | None = None):
         """Process one user message — stream response tokens to the UI."""
@@ -193,13 +321,36 @@ class ChatSession:
                 event_summaries.append(f"{entity_type}/{entity_id}: {event_type}")
             system_event_msg = "[System events since last turn: " + "; ".join(event_summaries) + "]"
             messages.append({"role": "system", "content": system_event_msg})
+
+        # AI-407 Phase 4: prepend initial <skill> + <deployment_context>
+        # SystemMessages on FIRST turn of new sessions. Set by start() for
+        # non-resume sessions; cleared after first use so we don't re-prepend.
+        # Persists in checkpointer state via add_messages reducer.
+        if self._initial_systemmessages:
+            initial = [
+                {"role": "system", "content": m.content}
+                for m in self._initial_systemmessages
+            ]
+            messages = initial + messages
+            self._initial_systemmessages = None
+
         messages.append({"role": "user", "content": user_content})
 
-        # Stream agent response — tokens arrive as they're generated
+        # Stream agent response — tokens arrive as they're generated.
+        # Per-turn RunnableConfig per AI-407 §13.5: configurable.thread_id =
+        # interaction_id (state across turns); metadata.thread_id = correlation_id
+        # (LangSmith UI grouping); plus full §13 metadata block for cross-pivot.
+        runnable_config = ChatSession.build_runnable_config(
+            interaction_id=self.interaction_id,
+            correlation_id=self.correlation_id,
+            associate=self.associate or {},
+            runtime_id=self.runtime_id,
+            deployment_id=self.deployment_id,
+        )
         try:
             async for event in self.agent.astream_events(
                 {"messages": messages},
-                config={"configurable": {"thread_id": self.interaction_id}},
+                config=runnable_config,
                 version="v2",
             ):
                 kind = event.get("event", "")
