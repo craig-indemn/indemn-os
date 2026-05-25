@@ -168,6 +168,19 @@ class DeepagentsLLMStream(LLMStream):
             log.warning("DeepagentsLLMStream._run: no messages in chat_ctx; skipping")
             return
 
+        # AI-407 Phase 4: prepend initial <skill> + <deployment_context>
+        # SystemMessages on FIRST turn (set by VoiceSession.start() in Task 2.17;
+        # consumed + cleared here). Persists in checkpointer state via
+        # add_messages reducer.
+        initial_msgs = getattr(self._llm, "_initial_systemmessages", None)
+        if initial_msgs:
+            messages = list(initial_msgs) + messages
+            self._llm._initial_systemmessages = None
+            log.info(
+                "DeepagentsLLM: prepended %d initial SystemMessages",
+                len(initial_msgs),
+            )
+
         # Mid-conversation awareness: drain entity-change events that arrived
         # while the agent was idle and prepend them as a SystemMessage so the
         # agent knows the world has moved while the user was talking.
@@ -183,32 +196,32 @@ class DeepagentsLLMStream(LLMStream):
             type(messages[-1]).__name__,
         )
 
-        # Build RunnableConfig with checkpointer thread_id + LangSmith metadata.
-        # Mirrors `harnesses/async-deepagents/main.py` so traces appear under
-        # the same `indemn-os-associates` LangSmith project, queryable by
-        # associate_id / entity_id / runtime_id (per CLAUDE.md § 8 debugging
-        # recipe). Voice's `entity_type` is always "Interaction" and the
-        # entity_id is the Interaction.id (== thread_id here).
-        associate_name = associate.get("name") or "Voice Agent"
-        config: dict = {}
-        if thread_id:
-            config["configurable"] = {"thread_id": thread_id}
-        config["metadata"] = {
-            "associate_id": str(associate.get("_id", "")),
-            "associate_name": associate_name,
-            "entity_type": "Interaction",
-            "entity_id": str(thread_id) if thread_id else "",
-            "runtime_id": str(runtime_id) if runtime_id else "",
-        }
-        config["tags"] = [
-            f"associate:{associate_name}",
-            "entity_type:Interaction",
-            f"runtime:{runtime_id}" if runtime_id else "runtime:unknown",
-            "channel:voice",
-        ]
-        config["run_name"] = (
-            f"{associate_name} → Interaction {str(thread_id)[:8] if thread_id else '?'}"
-        )
+        # AI-407 §13.5 voice: build RunnableConfig via VoiceSession.build_runnable_config
+        # — configurable.thread_id = interaction_id (state across turns);
+        # metadata.thread_id = correlation_id (LangSmith UI grouping); full
+        # §13 metadata block + tags + run_name. Replaces the inline config
+        # build that was missing metadata.thread_id = correlation_id (§13.5
+        # called out this gap explicitly).
+        correlation_id = getattr(self._llm, "_correlation_id", None)
+        deployment_id = getattr(self._llm, "_deployment_id", None)
+        if thread_id and correlation_id:
+            # Local import to avoid circular: session.py imports llm_adapter
+            from harness.session import VoiceSession
+
+            config = VoiceSession.build_runnable_config(
+                interaction_id=thread_id,
+                correlation_id=correlation_id,
+                associate=associate,
+                runtime_id=str(runtime_id) if runtime_id else "",
+                deployment_id=deployment_id,
+            )
+        else:
+            # Local-dev fallback (no correlation_id / interaction_id wired in) —
+            # preserve minimal LangSmith trace metadata
+            associate_name = associate.get("name") or "Voice Agent"
+            config = {"metadata": {"associate_name": associate_name}}
+            if thread_id:
+                config["configurable"] = {"thread_id": thread_id}
 
         try:
             result = await agent.ainvoke({"messages": messages}, config=config)
@@ -253,9 +266,15 @@ class DeepagentsLLM(LLM):
         event_queue: list | None = None,
         associate: dict | None = None,
         runtime_id: str | None = None,
+        correlation_id: str | None = None,
+        deployment_id: str | None = None,
+        initial_systemmessages: list | None = None,
     ) -> None:
         super().__init__()
         self._agent = agent
+        # thread_id retained for back-compat naming (existing tests pass it);
+        # semantically it's the interaction_id per AI-407 §13.3 (voice is a
+        # real-time session → checkpointer key = interaction_id).
         self._thread_id = thread_id
         # event_queue is shared with VoiceSession._run_events_stream — appended
         # by the events-stream subprocess reader thread, drained here on each
@@ -263,10 +282,19 @@ class DeepagentsLLM(LLM):
         self._event_queue = event_queue
         # associate + runtime_id power LangSmith metadata + tags so voice
         # traces appear in the indemn-os-associates project queryable by
-        # associate_id / entity_id / runtime_id (CLAUDE.md § 8). Both
-        # optional — falls back to bare-minimum config if missing.
+        # associate_id / entity_id / runtime_id (CLAUDE.md § 8).
         self._associate = associate
         self._runtime_id = runtime_id
+        # AI-407 Phase 4 additions:
+        # - correlation_id: §13.5 voice — metadata.thread_id (LangSmith UI
+        #   grouping; cascade lineage). Distinct from thread_id (configurable
+        #   checkpointer key per §13.2).
+        # - deployment_id: §13.5 metadata field (cross-pivot search).
+        # - initial_systemmessages: composed by VoiceSession.start() (Task 2.17);
+        #   prepended to messages on the first agent.ainvoke() call.
+        self._correlation_id = correlation_id
+        self._deployment_id = deployment_id
+        self._initial_systemmessages = initial_systemmessages
 
     @property
     def model(self) -> str:

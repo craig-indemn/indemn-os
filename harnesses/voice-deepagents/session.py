@@ -37,6 +37,7 @@ from harness_common.cli import CLIError, indemn
 from harness_common.interaction import close_interaction
 from harness_common.runtime import RUNTIME_ID
 from harness_common.sanitize import sanitize_dynamic_params
+from harness_common.thread_id import derive_checkpointer_thread_id
 from langchain_core.messages import AIMessage, SystemMessage
 
 log = logging.getLogger(__name__)
@@ -56,6 +57,70 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
 
 class VoiceSession:
     """Manages one LiveKit room's voice conversation session."""
+
+    @staticmethod
+    def build_runnable_config(
+        *,
+        interaction_id: str,
+        correlation_id: str,
+        associate: dict,
+        runtime_id: str,
+        deployment_id: str | None,
+        channel_kind: str = "voice",
+    ) -> dict:
+        """RunnableConfig per AI-407 §13.5 (voice — real-time).
+
+        - configurable.thread_id = interaction_id (checkpointer state continuity
+          across turns within a session; MongoDB checkpointer key per §13.3).
+        - metadata.thread_id = correlation_id (LangSmith UI groups runs by
+          cascade lineage; distinct from the checkpointer key per §13.2).
+        - metadata carries the full ID set for cross-pivot LangSmith search
+          (correlation_id, interaction_id, associate_id, associate_name,
+          entity_type=Interaction, entity_id=interaction_id, runtime_id,
+          deployment_id).
+
+        Pre-fix the voice harness set ONLY configurable.thread_id and let
+        LangSmith infer thread from that as a fallback — which conflates the
+        observability key with the checkpointer state key. §13.5: set both
+        explicitly + distinctly.
+        """
+        from types import SimpleNamespace
+
+        work_ctx = SimpleNamespace(
+            is_real_time_session=True,
+            interaction_id=interaction_id,
+            target_entity_type=None,
+            target_entity_id=None,
+            message_id=None,
+        )
+        # derive_checkpointer_thread_id imported at module top (real harness_common)
+        checkpointer_thread_id = derive_checkpointer_thread_id(work_ctx)
+        associate_name = associate.get("name", "Voice Assistant")
+        return {
+            "configurable": {"thread_id": str(checkpointer_thread_id)},
+            "metadata": {
+                "thread_id": correlation_id,  # LangSmith UI grouping
+                "correlation_id": correlation_id,
+                "interaction_id": interaction_id,
+                "associate_id": str(associate.get("_id", "")),
+                "associate_name": associate_name,
+                "entity_type": "Interaction",
+                "entity_id": interaction_id,
+                "runtime_id": str(runtime_id),
+                "deployment_id": deployment_id,
+            },
+            "tags": [
+                f"associate:{associate_name}",
+                f"channel:{channel_kind}",
+                f"runtime:{runtime_id}",
+                (
+                    f"deployment:{deployment_id}"
+                    if deployment_id
+                    else "deployment:none"
+                ),
+            ],
+            "run_name": f"{associate_name} → Interaction {interaction_id[:8]}",
+        }
 
     @staticmethod
     def compose_initial_messages(
@@ -277,6 +342,16 @@ class VoiceSession:
             event_queue=self._event_queue,
             associate=associate,
             runtime_id=RUNTIME_ID,
+            # AI-407 §13.5 voice: correlation_id (LangSmith metadata.thread_id;
+            # cascade lineage) + deployment_id (metadata field for cross-pivot
+            # search). Both flow into the RunnableConfig built in
+            # VoiceSession.build_runnable_config per turn.
+            correlation_id=self.correlation_id,
+            deployment_id=self.deployment_id,
+            # AI-407 Phase 4: initial <skill> + <deployment_context>
+            # SystemMessages composed at start() (Task 2.17); consumed on
+            # first agent.ainvoke().
+            initial_systemmessages=self._initial_systemmessages,
         )
 
         # Heartbeat keeps Attention alive (TTL = 2 min, refresh every 30s)
