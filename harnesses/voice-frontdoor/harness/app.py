@@ -17,6 +17,8 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from harness.sessions import create_session
+
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 
@@ -35,7 +37,7 @@ async def health(request):
 
 routes = [
     Route("/health", health, methods=["GET"]),
-    # /sessions added in Task 2.25+
+    Route("/sessions", create_session, methods=["POST"]),
 ]
 
 app = Starlette(debug=False, routes=routes)
