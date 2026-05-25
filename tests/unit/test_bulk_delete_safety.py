@@ -125,3 +125,67 @@ def test_singular_delete_has_confirmation_prompt():
         assert '"--yes"' in delete_block, (
             f"{src_path.name}: delete missing --yes opt-out"
         )
+
+
+# Bug #4 follow-on (2026-05-25) — BulkOperationSpec schema drift on match_all.
+#
+# Surfaced during the eval framework refactor's P1.1 wipe of 155 old eval records.
+# Symptom: every `bulk-delete --all` (and `bulk-update --all`) call put a workflow
+# into `WorkflowTaskFailedCauseWorkflowWorkerUnhandledFailure` retry-loop with
+# `TypeError: BulkOperationSpec.__init__() got an unexpected keyword argument
+# 'match_all'`. Bulk workflows had been stuck in dev for ~4 weeks (April 27
+# bulk-* workflows still showed lifecycle_status=RUNNING through May 25) because
+# no one had attempted a destructive bulk-all wipe since the Bug #4 mitigation
+# introduced match_all at the API + CLI layers without extending BulkOperationSpec
+# at the workflow layer.
+
+
+def _workflows_py_in_this_checkout() -> Path:
+    """Resolve workflows.py relative to THIS test file, so the test reads from
+    the current checkout (or worktree) rather than a hardcoded absolute path
+    that may point at a different branch."""
+    # tests/unit/test_bulk_delete_safety.py -> ../../kernel/temporal/workflows.py
+    return Path(__file__).resolve().parents[2] / "kernel" / "temporal" / "workflows.py"
+
+
+def test_bulk_operation_spec_declares_match_all_field():
+    """Shape pin: BulkOperationSpec must declare match_all as a dataclass field
+    with default False. The actual workflow-side instantiation is
+    `BulkOperationSpec(**spec_dict)` at kernel/temporal/workflows.py:246, which
+    fails with TypeError if any spec key isn't a field on the dataclass. The
+    API + CLI layers send `match_all` in the spec dict; if this field isn't
+    declared here, every `bulk-delete --all` puts the workflow into
+    WorkflowTaskFailedCauseWorkflowWorkerUnhandledFailure retry-loop and the
+    delete never executes (silent failure visible only via Temporal CLI describe).
+
+    Source-string pin (vs. runtime instantiate) so this test doesn't require
+    Settings env-var setup."""
+    src = _workflows_py_in_this_checkout().read_text()
+    # The dataclass field declaration must exist with the right default
+    assert "match_all: bool = False" in src, (
+        "Bug #4 follow-on regression: BulkOperationSpec.match_all field removed. "
+        "Every bulk-delete --all (and bulk-update --all) will explode with "
+        "TypeError at BulkOperationSpec(**spec_dict) and stick in a Temporal "
+        "worker retry loop. Surfaced 2026-05-25 during eval framework refactor."
+    )
+
+
+def test_bulk_operation_spec_match_all_inside_dataclass_block():
+    """Pin that match_all lives inside the BulkOperationSpec @dataclass block,
+    not somewhere else in the module (a stray module-level var would still
+    satisfy the substring check but wouldn't fix the bug)."""
+    src = _workflows_py_in_this_checkout().read_text()
+    # Find the dataclass block
+    start = src.find("class BulkOperationSpec:")
+    assert start != -1, "BulkOperationSpec class definition not found"
+    # End of the dataclass = start of the next @dataclass or class
+    rest = src[start:]
+    end_relative = rest.find("\n@dataclass", 1)
+    if end_relative == -1:
+        end_relative = rest.find("\nclass ", 1)
+    assert end_relative != -1, "could not bound BulkOperationSpec block"
+    block = rest[:end_relative]
+    assert "match_all: bool = False" in block, (
+        "match_all field is in workflows.py but NOT inside the "
+        "BulkOperationSpec @dataclass block — the workflow will still TypeError."
+    )

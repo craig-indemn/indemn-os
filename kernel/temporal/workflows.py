@@ -198,6 +198,16 @@ class BulkOperationSpec:
     target_state: Optional[str] = None
     sets: Optional[dict] = None
     org_id: Optional[str] = None
+    # Bug #4 follow-on: the API handler gates destructive empty-filter ops
+    # on `match_all: true` (kernel/api/registration.py:826). That field was
+    # passed through to the workflow's spec dict but BulkOperationSpec didn't
+    # accept it — every `bulk-delete --all` call exploded with
+    # `WorkflowTaskFailedCauseWorkflowWorkerUnhandledFailure: TypeError: got
+    # unexpected keyword argument 'match_all'` and stuck in the worker retry
+    # loop indefinitely. Surfaced 2026-05-25 by the eval framework refactor's
+    # P1.1 wipe of old eval records. Workflow layer never reads match_all
+    # (the gate is API-side); presence here is just to accept the kwarg.
+    match_all: bool = False
 
 
 @dataclass
