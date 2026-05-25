@@ -237,12 +237,17 @@ async def entrypoint(ctx: JobContext) -> None:
 
     await agent_session.start(room=ctx.room, agent=bare_agent)
 
-    # Greet the user. The deepagents agent will load its skill on the
-    # first user turn — this opener just confirms the line is live.
-    await agent_session.say(
-        "Hi, this is your Indemn OS assistant. What can I help you with?",
-        allow_interruptions=False,
+    # Greet the user via TTS (literal text from Deployment.greeting — not an
+    # LLM call). After playback completes, persist the greeting as an AIMessage
+    # to the agent's checkpointer state so resumed sessions don't re-greet
+    # (AI-407 §17.2.22). Fall back to a generic greeting if Deployment.greeting
+    # is unset (defensive — Deployment is operator-configured).
+    greeting = (
+        voice_session.greeting
+        or "Hi, this is your Indemn OS assistant. What can I help you with?"
     )
+    await agent_session.say(greeting, allow_interruptions=False)
+    await voice_session.persist_greeting_to_state(greeting)
 
     # Hold the entrypoint open until the room disconnects. AgentSession
     # runs the voice loop in the background; we just need to wait.

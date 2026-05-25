@@ -36,6 +36,8 @@ from harness_common.attention import attention_heartbeat_loop, close_attention, 
 from harness_common.cli import CLIError, indemn
 from harness_common.interaction import close_interaction
 from harness_common.runtime import RUNTIME_ID
+from harness_common.sanitize import sanitize_dynamic_params
+from langchain_core.messages import AIMessage, SystemMessage
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +56,40 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
 
 class VoiceSession:
     """Manages one LiveKit room's voice conversation session."""
+
+    @staticmethod
+    def compose_initial_messages(
+        skill_content: str, merged_context: dict
+    ) -> list:
+        """Compose the <skill> + <deployment_context> SystemMessages prepended
+        at voice session start (AI-407 §15.5 voice).
+
+        Phase 4 voice shape: the agent's DEFAULT_PROMPT tells the agent to
+        "Read your <skill> SystemMessage" + "Read <deployment_context>
+        SystemMessage". This function produces both. The caller (start())
+        stores them on self._initial_systemmessages; the DeepagentsLLM
+        adapter prepends them to the first turn's messages array. The
+        MongoDB checkpointer keyed by interaction_id (§13.3) persists them
+        as part of state via the add_messages reducer.
+
+        merged_context is the result of merging Deployment.static_parameters
+        with sanitize_dynamic_params(self.dynamic_params) — caller's job
+        (see _build_deployment_context). Sanitization MUST happen before
+        compose (§10.7 layer-c).
+
+        Mirrors chat-deepagents/session.py::ChatSession.compose_initial_messages.
+        """
+        ctx_lines = "\n".join(f"  {k}: {v}" for k, v in merged_context.items())
+        return [
+            SystemMessage(content=f"<skill>\n{skill_content}\n</skill>"),
+            SystemMessage(
+                content=(
+                    f"<deployment_context>\n{ctx_lines}\n</deployment_context>\n\n"
+                    "Read this block before responding. It tells you who the "
+                    "user is and what context this session has."
+                )
+            ),
+        ]
 
     @staticmethod
     def parse_room_metadata(room: Any) -> dict:
@@ -134,6 +170,12 @@ class VoiceSession:
         self._events_task: asyncio.Task | None = None
         self._events_process: subprocess.Popen | None = None
         self._event_queue: list[dict] = []
+        # Phase 4: composed at start(), stored for the first agent.ainvoke()
+        # to prepend; consumed and cleared by the LLM adapter on first user turn.
+        self._initial_systemmessages: list | None = None
+        # Phase 4: greeting from Deployment (TTS speaks it at session start;
+        # persist_greeting_to_state then writes it to checkpointer state per §17.2.22).
+        self.greeting: str = ""
 
     async def start(self) -> None:
         """Initialize the session — load config, open Attention, build agent
@@ -194,13 +236,31 @@ class VoiceSession:
         )
         self.attention_id = attention.get("_id")
 
-        # Build the deepagents agent — skills load via CLI directives in the
-        # system prompt (commit `7281b83` pattern), no filesystem skill writing.
+        # Build the deepagents agent. Phase 4: operating skill arrives as a
+        # <skill> SystemMessage at session start (composed below); entity
+        # skills still load via CLI on demand at Step 3 of DEFAULT_PROMPT.
         self.agent = build_agent(
             associate=associate,
             llm_config=llm_config,
             checkpointer=self.checkpointer,
         )
+
+        # AI-407 §15.5 voice: compose initial <skill> + <deployment_context>
+        # SystemMessages prepended on the first agent.ainvoke() call after
+        # the user's first turn. The DeepagentsLLM adapter (Task 2.21) reads
+        # _initial_systemmessages, prepends them to the LangChain message
+        # list, clears the field. The MongoDB checkpointer (Task 2.16) keyed
+        # by interaction_id persists them in state via add_messages reducer.
+        skill_xml = self._load_skill_section_xml(associate)
+        deployment_context = self._build_deployment_context(associate, deployment)
+        self._initial_systemmessages = VoiceSession.compose_initial_messages(
+            skill_xml, deployment_context
+        )
+
+        # Greeting comes from Deployment (TTS speaks it at session start in
+        # main.py; persist_greeting_to_state writes it to checkpointer state
+        # AFTER playback so resume doesn't re-greet — §17.2.22).
+        self.greeting = deployment.get("greeting", "") or ""
 
         # Wrap the agent for LiveKit's AgentSession via the LLM adapter.
         # - thread_id binds LangGraph checkpointing to this Interaction so
@@ -234,6 +294,91 @@ class VoiceSession:
             self.interaction_id,
             self.attention_id,
         )
+
+    def _load_skill_section_xml(self, associate: dict) -> str:
+        """Load operating skill(s) content via CLI, format as nested
+        <skill name="X">...</skill> blocks. compose_initial_messages wraps
+        the result in an outer <skill>...</skill> for the SystemMessage.
+
+        Mirrors chat-deepagents/session.py::_load_skill_section_xml +
+        async-deepagents/main.py::_build_skill_section_xml. Pulled inline
+        rather than DRY'd into harness_common to keep Phase 2B's harness-
+        common touch surface minimal.
+        """
+        parts: list[str] = []
+        for ref in associate.get("skills") or []:
+            try:
+                skill = indemn("skill", "get", ref)
+                content = (
+                    skill.get("content", "")
+                    if isinstance(skill, dict)
+                    else str(skill)
+                )
+                parts.append(f'<skill name="{ref}">')
+                parts.append(content)
+                parts.append("</skill>")
+                parts.append("")
+            except CLIError as e:
+                log.warning("Failed to load skill %s: %s", ref, e)
+        return "\n".join(parts).rstrip()
+
+    def _build_deployment_context(
+        self, associate: dict, deployment: dict
+    ) -> dict:
+        """Build the deployment_context dict for the <deployment_context>
+        SystemMessage. Per §10.7 layer-c: sanitize_dynamic_params runs BEFORE
+        merging dynamic into static, so user-controlled values can't inject
+        pseudo-SystemMessage content into the agent.
+
+        Merge order: static_parameters (operator-trusted, no sanitize needed)
+        UNDER sanitized dynamic_params (user-supplied at session start).
+        Plus a few session-level fields the agent always wants (deployment_id,
+        deployment_name, channel_kind, actor_name).
+        """
+        safe_dynamic = sanitize_dynamic_params(self.dynamic_params)
+        static = deployment.get("static_parameters") or {}
+        ctx = {
+            "deployment_id": str(deployment.get("_id", self.deployment_id)),
+            "deployment_name": deployment.get("name", ""),
+            "actor_name": associate.get("name", "Voice Assistant"),
+            "channel_kind": "voice",
+            **static,
+            **safe_dynamic,
+        }
+        return ctx
+
+    async def persist_greeting_to_state(self, greeting: str) -> None:
+        """Append the greeting as an AIMessage to the agent's checkpointer
+        state (AI-407 §17.2.22 resolution).
+
+        Called by main.py AFTER the TTS playback completes. Ensures resumed
+        sessions (Task 2.35) see the greeting in conversation history and
+        don't re-greet. Also makes the LangSmith trace include the greeting
+        as part of the conversation.
+
+        Noop if:
+        - No checkpointer (degraded mode — no resume capability anyway)
+        - No interaction_id (local-dev fallback — can't address state without
+          a thread_id)
+        - Empty greeting (Deployment.greeting unset)
+
+        Tags the state update with `as_node="greeting"` for trace clarity.
+        """
+        if not self.checkpointer or not self.interaction_id or not greeting:
+            return
+        config = {"configurable": {"thread_id": self.interaction_id}}
+        try:
+            await self.agent.aupdate_state(
+                config,
+                values={"messages": [AIMessage(content=greeting)]},
+                as_node="greeting",
+            )
+        except Exception as e:
+            log.warning(
+                "Failed to persist greeting to checkpointer state: %s "
+                "(non-fatal — TTS already played the greeting)",
+                e,
+            )
 
     async def close(self) -> None:
         """Clean up — cancel background tasks, close Attention + Interaction.
