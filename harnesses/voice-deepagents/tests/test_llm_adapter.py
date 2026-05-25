@@ -274,26 +274,36 @@ class TestEventQueueDrain:
         assert _drain_event_queue(None) is None
 
     def test_drain_summarizes_events(self, patch_livekit_imports):
+        """Post-AI-407 Task 2.21: drain wraps events in <entity_events> tags
+        with bulleted per-event lines (vs the Phase 3 bracket-summary format).
+        Per-event format: `- {event_type} id={entity_id} {known_fields}`."""
         from llm_adapter import _drain_event_queue
 
         queue = [
-            {"entity_type": "Touchpoint", "entity_id": "tp-1", "event_type": "created"},
-            {"entity_type": "Email", "entity_id": "e-9", "event_type": "transitioned"},
+            {"event_type": "Touchpoint:created", "entity_id": "tp-1"},
+            {"event_type": "Email:transitioned", "entity_id": "e-9"},
         ]
         msg = _drain_event_queue(queue)
         assert msg is not None
-        assert "Touchpoint/tp-1: created" in msg
-        assert "Email/e-9: transitioned" in msg
-        assert msg.startswith("[System events since last turn:")
+        assert msg.startswith("<entity_events>")
+        assert msg.endswith("</entity_events>")
+        assert "Touchpoint:created" in msg
+        assert "id=tp-1" in msg
+        assert "Email:transitioned" in msg
+        assert "id=e-9" in msg
         # Drain mutates — queue should be empty after.
         assert queue == []
 
     def test_drain_handles_missing_fields(self, patch_livekit_imports):
-        """Robust against malformed events from the stream subprocess."""
+        """Robust against malformed events from the stream subprocess.
+        Post-AI-407: missing event_type renders as '?'; missing entity_id
+        is just omitted from the line."""
         from llm_adapter import _drain_event_queue
 
         msg = _drain_event_queue([{}])
-        assert "unknown/unknown: change" in msg
+        # Falls back to "?" sentinel for missing event_type
+        assert "?" in msg
+        assert msg.startswith("<entity_events>")
 
     @pytest.mark.asyncio
     async def test_stream_prepends_system_message_when_events_present(
@@ -321,9 +331,11 @@ class TestEventQueueDrain:
         agent = MagicMock()
         agent.astream_events = fake_astream_events
 
-        # Pre-populate the queue (as if the events subprocess pushed events)
+        # Pre-populate the queue (as if the events subprocess pushed events).
+        # Post-AI-407 Task 2.21: event_type uses combined "Entity:event" form
+        # (vs separate entity_type + event_type fields in the Phase 3 shape).
         event_queue = [
-            {"entity_type": "Touchpoint", "entity_id": "tp-99", "event_type": "created"}
+            {"event_type": "Touchpoint:created", "entity_id": "tp-99"}
         ]
 
         llm = DeepagentsLLM(agent=agent, thread_id="i-3", event_queue=event_queue)
@@ -338,7 +350,10 @@ class TestEventQueueDrain:
         # Should have prepended a SystemMessage describing the queued event.
         assert len(captured_messages) == 2
         assert isinstance(captured_messages[0], SystemMessage)
-        assert "Touchpoint/tp-99: created" in captured_messages[0].content
+        # New <entity_events> format with bulleted per-event lines
+        assert "<entity_events>" in captured_messages[0].content
+        assert "Touchpoint:created" in captured_messages[0].content
+        assert "id=tp-99" in captured_messages[0].content
         assert isinstance(captured_messages[1], HumanMessage)
         assert event_queue == []  # drained
 

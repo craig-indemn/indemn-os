@@ -95,17 +95,40 @@ def _livekit_chat_ctx_to_langchain(chat_ctx: ChatContext) -> list:
     return messages
 
 
+def _format_event(event: dict) -> str:
+    """Render an entity-change event as one bulleted line for the agent.
+
+    Format: `- {event_type} id={entity_id} company={X} actor={Y} summary={Z}`
+
+    Per AI-407 Task 2.21: voice uses a structured per-event line (vs chat's
+    semicolon-joined one-line summary) to surface more context for the
+    voice agent's mid-conversation awareness — company / actor / summary
+    fields help the agent connect the event to the conversation in
+    progress without making an extra CLI call to look up details.
+    """
+    parts = [event.get("event_type", "?")]
+    if "entity_id" in event:
+        parts.append(f"id={event['entity_id']}")
+    for key in ("company", "actor", "summary"):
+        if key in event:
+            parts.append(f"{key}={event[key]}")
+    return "- " + " ".join(parts)
+
+
 def _drain_event_queue(event_queue: list | None) -> str | None:
     """Drain pending entity-change events from the events-stream queue.
 
-    Returns a one-line system message summarizing the events (suitable for
-    prepending to the agent's input messages), or None if the queue is empty.
+    Returns a <entity_events>...</entity_events>-wrapped SystemMessage content
+    string suitable for prepending to the agent's input messages, or None
+    if the queue is empty.
 
-    Mirrors the chat-deepagents pattern in `ChatSession.handle_message`:
-    on each user turn, drain queued events and inject them as a system
-    message so the agent has mid-conversation awareness of state changes
-    (a supervisor updated the Interaction, a related Touchpoint arrived,
-    a related Email got classified, etc.).
+    Per AI-407 Task 2.21: voice uses the `<entity_events>` XML wrapper to
+    align with `<skill>` + `<deployment_context>` SystemMessage conventions
+    so the agent's DEFAULT_PROMPT can guide it uniformly: "read your
+    SystemMessages before responding."
+
+    Mirrors chat-deepagents' `handle_message` drain semantics (same mid-
+    conversation awareness pattern) with voice-specific format choices.
 
     Mutates the queue: pops everything currently in it. Safe across
     concurrent appends from the events-stream subprocess thread because
@@ -115,13 +138,14 @@ def _drain_event_queue(event_queue: list | None) -> str | None:
         return None
     events = list(event_queue)
     event_queue.clear()
-    summaries = []
-    for ev in events:
-        entity_type = ev.get("entity_type", "unknown")
-        entity_id = ev.get("entity_id", "unknown")
-        event_type = ev.get("event_type", "change")
-        summaries.append(f"{entity_type}/{entity_id}: {event_type}")
-    return "[System events since last turn: " + "; ".join(summaries) + "]"
+    event_lines = [_format_event(e) for e in events]
+    event_summary = "\n".join(event_lines)
+    return (
+        "<entity_events>\n"
+        "The following entity changes happened since the last turn:\n"
+        f"{event_summary}\n"
+        "</entity_events>"
+    )
 
 
 def _extract_final_assistant_text(agent_result: dict) -> str:
