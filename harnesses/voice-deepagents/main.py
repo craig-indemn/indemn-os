@@ -38,6 +38,7 @@ import threading
 from harness.session import VoiceSession
 from harness_common.cli import indemn
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop
+from langgraph.checkpoint.mongodb import MongoDBSaver
 from livekit import agents
 from livekit.agents import (
     AgentSession,
@@ -50,12 +51,72 @@ from livekit.plugins import (
     deepgram,
     silero,
 )
+from motor.motor_asyncio import AsyncIOMotorClient
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 log = logging.getLogger("voice-deepagents")
+
+
+# AI-407 Task 2.16: MongoDB checkpointer for voice — real-time sessions
+# accumulate state across turns; resume across reconnects (Task 2.35)
+# loads prior state via interaction_id thread (§13.3).
+#
+# Why module-level lazy init + asyncio.Lock (vs chat's Starlette lifespan):
+# LiveKit Agents (`agents.cli.run_app(WorkerOptions(...))`) owns its own
+# event loop and dispatches per-room jobs into it. There's no Starlette
+# app to attach a lifespan to. Module-level cache + asyncio.Lock makes
+# init safe under concurrent room dispatches.
+#
+# The cache uses three states: None (not yet attempted), MongoDBSaver
+# instance (initialized successfully), False (tried + failed; don't retry).
+_checkpointer = None
+_checkpointer_init_lock: asyncio.Lock | None = None
+
+
+async def _get_or_init_checkpointer():
+    """Lazy MongoDBSaver init. Returns None if MONGODB_URI is absent or
+    unreachable — voice falls back to per-turn in-memory state (no resume),
+    matching today's degraded behavior.
+
+    Mirrors chat-deepagents/main.py:_init_checkpointer_at_startup but without
+    the Starlette lifespan dependency (LiveKit Agents owns the event loop
+    and dispatches per-room jobs into it; no lifespan hook available).
+    """
+    global _checkpointer, _checkpointer_init_lock
+    # Lock created lazily so module-import doesn't need an event loop
+    if _checkpointer_init_lock is None:
+        _checkpointer_init_lock = asyncio.Lock()
+    async with _checkpointer_init_lock:
+        # `False` sentinel = "tried + failed; don't keep retrying"
+        if _checkpointer is False:
+            return None
+        if _checkpointer is not None:
+            return _checkpointer
+        mongodb_uri = os.environ.get("MONGODB_URI", "")
+        if not mongodb_uri:
+            log.warning(
+                "MONGODB_URI not set — voice checkpointer disabled (no resume)"
+            )
+            _checkpointer = False
+            return None
+        try:
+            motor_client = AsyncIOMotorClient(mongodb_uri)
+            await motor_client.admin.command("ping")  # verify reachable
+            _checkpointer = MongoDBSaver(
+                motor_client.delegate, db_name="indemn_os_checkpoints"
+            )
+            log.info("Voice MongoDB checkpointer initialized")
+            return _checkpointer
+        except Exception as e:
+            log.warning(
+                "Voice MongoDB checkpointer unavailable: %s — degraded mode",
+                e,
+            )
+            _checkpointer = False
+            return None
 
 
 def _setup_gcp_credentials() -> None:
@@ -115,14 +176,18 @@ async def entrypoint(ctx: JobContext) -> None:
     # OS-side session lifecycle: load Deployment (derive associate from it),
     # load Runtime + LLM config, attach to existing Interaction (already
     # created by frontdoor), open Attention, build agent, wrap in DeepagentsLLM.
+    # MongoDB checkpointer — keyed by interaction_id per §13.3. Lazy init at
+    # first call (module-level cache shared across rooms). Returns None if
+    # MONGODB_URI is unset or Mongo is unreachable (degraded mode — no resume).
+    checkpointer = await _get_or_init_checkpointer()
+
     voice_session = VoiceSession(
         deployment_id=meta["deployment_id"],
         interaction_id=meta["interaction_id"],
         dynamic_params=meta["dynamic_params"],
         correlation_id=meta["correlation_id"],
         auth_token=auth_token,
-        # Checkpointer wired in Task 2.16 (MongoDBSaver via lazy lock-protected init).
-        checkpointer=None,
+        checkpointer=checkpointer,
     )
     await voice_session.start()
 
