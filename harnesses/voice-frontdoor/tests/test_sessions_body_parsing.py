@@ -65,11 +65,26 @@ class TestSessionsBodyParsing:
         validation may still reject it (Origin / JWT etc), but the parsing
         step itself doesn't 400.
 
-        Currently returns 501 (next task in chain not yet implemented);
-        the assertion is that we get past the 400 from this task.
+        Post-Task-2.27: mocks _load_deployment + supplies a valid Origin so
+        the chain reaches the 501 skeleton. The assertion remains: parsing
+        passed (status != 400).
         """
-        response = client.post(
-            "/sessions",
-            json={"deployment_id": "dep_test", "dynamic_params": {}},
-        )
+        from unittest.mock import AsyncMock, patch
+
+        with patch(
+            "harness.sessions._load_deployment",
+            new=AsyncMock(
+                return_value={
+                    "_id": "dep_test",
+                    "allowed_origins": ["https://test.example.com"],
+                    "status": "active",
+                }
+            ),
+        ):
+            response = client.post(
+                "/sessions",
+                json={"deployment_id": "dep_test", "dynamic_params": {}},
+                headers={"Origin": "https://test.example.com"},
+            )
+
         assert response.status_code != 400  # parsing passed

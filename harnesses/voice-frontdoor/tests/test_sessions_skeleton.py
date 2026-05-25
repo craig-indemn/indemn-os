@@ -1,14 +1,16 @@
 """POST /sessions skeleton (AI-407 §10.3.1).
 
-Task 2.25 — skeleton route returns 501 (Not Implemented) for any valid
-request shape. Subsequent tasks (2.26+) progressively fill the validation
-chain: body parse → Origin → JWT → Deployment → params → acts_as →
-rate-limit → Interaction → LiveKit dispatch → 200 response.
+Task 2.25 — skeleton route returns 501 (Not Implemented) once parsing +
+Origin + Deployment-load passes (Task 2.26 + 2.27). Subsequent tasks
+(2.28+) progressively fill the rest of the validation chain: JWT →
+parameter_schema → acts_as → rate-limit → Interaction → LiveKit dispatch →
+200 response.
 
-The skeleton's purpose: route exists, accepts POST, hands off to the
-sessions handler module — so Tasks 2.26+ can fill the body without
-restructuring the route table.
+Post-Task-2.27: these tests mock _load_deployment + supply an allowed
+Origin header so the chain reaches the skeleton's 501.
 """
+
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -20,9 +22,19 @@ def client():
     return TestClient(app)
 
 
+def _stub_deployment():
+    """Minimal Deployment dict permitting Origin check to pass."""
+    return {
+        "_id": "dep_test",
+        "name": "Test",
+        "allowed_origins": ["https://test.example.com"],
+        "status": "active",
+    }
+
+
 def test_sessions_endpoint_registered(client):
-    """POST /sessions returns SOMETHING (not 404). Auth/validation not
-    yet wired in skeleton."""
+    """POST /sessions returns SOMETHING (not 404). Validation chain may
+    still 400/403/etc but the route IS registered."""
     response = client.post(
         "/sessions",
         json={"deployment_id": "test", "dynamic_params": {}},
@@ -37,10 +49,15 @@ def test_sessions_get_not_allowed(client):
 
 
 def test_sessions_skeleton_returns_501(client):
-    """Skeleton response is 501 (Not Implemented) — subsequent tasks
-    replace with progressively-validated success/error responses."""
-    response = client.post(
-        "/sessions",
-        json={"deployment_id": "test", "dynamic_params": {}},
-    )
+    """Post-parsing + Origin check, the skeleton returns 501 (Not
+    Implemented) — subsequent tasks fill the rest of the chain."""
+    with patch(
+        "harness.sessions._load_deployment",
+        new=AsyncMock(return_value=_stub_deployment()),
+    ):
+        response = client.post(
+            "/sessions",
+            json={"deployment_id": "test", "dynamic_params": {}},
+            headers={"Origin": "https://test.example.com"},
+        )
     assert response.status_code == 501

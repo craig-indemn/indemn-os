@@ -38,11 +38,21 @@ return 500 with request_id per §10.3.1 status table.
 
 import json
 import logging
+import os
 
+import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 log = logging.getLogger(__name__)
+
+
+class DeploymentNotFound(Exception):
+    """Raised by _load_deployment when the OS API returns 404."""
+
+    def __init__(self, deployment_id: str):
+        super().__init__(f"Deployment not found: {deployment_id}")
+        self.deployment_id = deployment_id
 
 
 def _validation_error(details: str) -> JSONResponse:
@@ -51,6 +61,57 @@ def _validation_error(details: str) -> JSONResponse:
         {"error": "validation_error", "details": details},
         status_code=400,
     )
+
+
+def _forbidden(reason: str) -> JSONResponse:
+    """403 response per §10.3.1 error table."""
+    return JSONResponse(
+        {"error": "forbidden", "reason": reason}, status_code=403
+    )
+
+
+def _not_found(resource: str) -> JSONResponse:
+    """404 response per §10.3.1 error table."""
+    return JSONResponse(
+        {"error": "not_found", "resource": resource}, status_code=404
+    )
+
+
+async def _load_deployment(deployment_id: str) -> dict:
+    """Load the Deployment record from the OS API.
+
+    Uses the public-metadata endpoint `/api/deployments/{id}/public` per
+    §15.1 — returns the surface-safe field subset (allowed_origins,
+    parameter_schema, acts_as, status, runtime_endpoint, etc.). No auth
+    required (Deployment ID is semi-public per §10.7 — embed snippets on
+    customer sites necessarily expose it).
+
+    Raises DeploymentNotFound on 404; raises httpx.HTTPError on other
+    failures (caller can wrap with try/except for 500).
+    """
+    api_url = os.environ.get("INDEMN_API_URL", "http://localhost:8000")
+    url = f"{api_url.rstrip('/')}/api/deployments/{deployment_id}/public"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(url)
+    if resp.status_code == 404:
+        raise DeploymentNotFound(deployment_id)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _origin_allowed(origin: str | None, allowed_origins: list[str]) -> bool:
+    """Return True iff `origin` is in `allowed_origins`.
+
+    Per §5.1: empty allowed_origins = reject all. Missing Origin header
+    also rejects (can't match what's absent).
+
+    Case-sensitive — Origin headers are case-sensitive per RFC 6454.
+    """
+    if not origin:
+        return False
+    if not allowed_origins:
+        return False
+    return origin in allowed_origins
 
 
 async def create_session(request: Request) -> JSONResponse:
@@ -91,8 +152,41 @@ async def create_session(request: Request) -> JSONResponse:
             "(expected non-empty string)"
         )
 
-    # Subsequent validation chain to be filled in Tasks 2.27–2.36.
-    # Until then, return 501 (parsing passed but downstream not wired).
+    # Step 3 (conceptual §10.3.1 step 2 + step 4): load Deployment first,
+    # then check Origin. Per the §10.3.1 note: design enumerates Origin
+    # before Deployment-load as conceptual ordering, but execution must
+    # load the Deployment first because Origin compares against
+    # deployment.allowed_origins. Outcome is identical (invalid origin →
+    # 403; missing deployment → 404).
+    try:
+        deployment = await _load_deployment(deployment_id)
+    except DeploymentNotFound:
+        return _not_found("deployment")
+    except Exception as e:
+        # Upstream OS API unreachable / 5xx — return 500 with request_id.
+        # Task 2.34 will formalize the request_id generation; until then
+        # log + return a generic 500 so tests don't trip on the bare
+        # exception.
+        log.exception("Failed to load Deployment %s: %s", deployment_id, e)
+        return JSONResponse(
+            {"error": "internal", "details": "failed to load deployment"},
+            status_code=500,
+        )
+
+    # Step 4: Origin allowlist check per §5.1 + §10.7
+    origin = request.headers.get("origin")
+    allowed_origins = deployment.get("allowed_origins") or []
+    if not _origin_allowed(origin, allowed_origins):
+        log.info(
+            "Rejecting session (origin %r not in allowlist %r for deployment %s)",
+            origin,
+            allowed_origins,
+            deployment_id,
+        )
+        return _forbidden("origin_not_allowed")
+
+    # Subsequent validation chain to be filled in Tasks 2.28–2.36.
+    # Until then, return 501 (parsing + origin passed but JWT/etc not wired).
     return JSONResponse(
         {"error": "not_implemented", "deployment_id": deployment_id},
         status_code=501,
