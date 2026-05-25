@@ -36,15 +36,64 @@ Wrap steps 10–11 in try/except to catch LiveKit/Interaction failures and
 return 500 with request_id per §10.3.1 status table.
 """
 
+import json
+import logging
+
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+log = logging.getLogger(__name__)
+
+
+def _validation_error(details: str) -> JSONResponse:
+    """400 response per §10.3.1 error table — malformed input."""
+    return JSONResponse(
+        {"error": "validation_error", "details": details},
+        status_code=400,
+    )
+
 
 async def create_session(request: Request) -> JSONResponse:
-    """POST /sessions handler. Currently a skeleton (Task 2.25).
+    """POST /sessions handler. Validation chain per §10.3.1.
 
-    Subsequent tasks fill the validation chain inline; the final shape
-    will be a sequence of guards followed by LiveKit dispatch + Interaction
-    creation + 200 response.
+    Current state (Task 2.26): body-parse + required-fields validation.
+    Subsequent tasks fill: Origin allowlist (2.27), JWT (2.28), Deployment
+    load + status (2.29), parameter_schema (2.30), acts_as (2.31), resume
+    (2.35), rate-limit (2.36), Interaction (2.32), LiveKit dispatch
+    (2.33), success response (2.34).
     """
-    return JSONResponse({"error": "not_implemented"}, status_code=501)
+    # Step 1: parse JSON body
+    try:
+        raw = await request.body()
+    except Exception as e:
+        log.warning("Failed to read request body: %s", e)
+        return _validation_error("Failed to read request body")
+
+    if not raw:
+        return _validation_error("Request body is empty; expected JSON object")
+
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return _validation_error(f"Malformed JSON: {e}")
+
+    if not isinstance(body, dict):
+        return _validation_error(
+            "Request body must be a JSON object (got "
+            f"{type(body).__name__})"
+        )
+
+    # Step 2: required field — deployment_id
+    deployment_id = body.get("deployment_id")
+    if not deployment_id or not isinstance(deployment_id, str):
+        return _validation_error(
+            "Missing or invalid required field 'deployment_id' "
+            "(expected non-empty string)"
+        )
+
+    # Subsequent validation chain to be filled in Tasks 2.27–2.36.
+    # Until then, return 501 (parsing passed but downstream not wired).
+    return JSONResponse(
+        {"error": "not_implemented", "deployment_id": deployment_id},
+        status_code=501,
+    )
