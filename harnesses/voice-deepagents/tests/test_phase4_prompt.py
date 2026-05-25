@@ -85,3 +85,23 @@ class TestVoicePhase4DefaultPrompt:
         """Voice rule preserved: never spawn task subagents."""
         body = DEFAULT_PROMPT.lower()
         assert "subagent" in body or "task subagents" in body
+
+    def test_prompt_does_not_mandate_write_todos(self):
+        """Phase 4 voice DEFAULT_PROMPT per §11.3: voice agents don't need
+        todos for conversational turns. The Phase 3 anti-pattern ("Plan with
+        the todo tool", "Use the todo tool") is gone. Skills CAN still drive
+        todos when conversation is task-shaped (e.g., the Sales Assistant
+        proposal skill may call write_todos to enumerate proposal sections);
+        but the framework prompt no longer mandates it.
+
+        Skips the ~500-800ms planning step on pure dialogue turns (§11.3 —
+        latency budget).
+
+        Task 2.22: this is verification, not implementation. The locked
+        Phase 4 prompt (Task 2.14) does the work; this test pins it.
+        """
+        body = DEFAULT_PROMPT.lower()
+        # Negative assertions — these phrases were in the Phase 3 voice prompt
+        assert "use the todo tool" not in body
+        assert "plan with the todo" not in body
+        assert "write_todos for every" not in body
