@@ -87,46 +87,44 @@ def _setup_gcp_credentials() -> None:
     log.info("GCP credentials written to %s", sa_path)
 
 
-# Sole-tenant: one associate per voice runtime. The associate id comes from
-# env so the harness image stays generic and the OS routes voice calls to
-# whichever actor owns this Runtime instance. Async + chat use the same
-# convention (the async harness reads associate from message; the chat
-# harness reads from the WebSocket connect message; voice reads from env).
-def _voice_associate_id() -> str:
-    aid = os.environ.get("VOICE_ASSOCIATE_ID", "")
-    if not aid:
-        # Fallback for local dev — harness still boots but greets that
-        # the associate isn't configured. Real deployments set this.
-        log.warning("VOICE_ASSOCIATE_ID not set — voice will be unconfigured")
-    return aid
-
-
 async def entrypoint(ctx: JobContext) -> None:
     """LiveKit per-room job entrypoint.
 
-    Called once per room a user joins. Constructs a VoiceSession (which
-    creates Interaction + Attention + builds the deepagents agent), then
-    plugs the deepagents-backed LLM into a LiveKit AgentSession with
-    Deepgram STT + Cartesia TTS + Silero VAD. Joins the room, greets the
-    user, runs the voice loop until the room closes.
+    Called once per room a user joins. Per AI-407 §10.3.2: the voice frontdoor
+    creates the Interaction + LiveKit room (with metadata) at /sessions time;
+    the worker reads deployment_id + dynamic_params + interaction_id +
+    correlation_id from room.metadata, loads the Deployment to derive the
+    associate, opens Attention, builds the deepagents agent, then plugs the
+    deepagents-backed LLM into a LiveKit AgentSession with Deepgram STT +
+    Cartesia TTS + Silero VAD. Joins the room, greets the user, runs the
+    voice loop until the room closes.
     """
     log.info("Job started: room=%s", ctx.room.name)
 
-    associate_id = _voice_associate_id()
+    # AI-407 §10.3.2: parse the frontdoor-supplied context out of room.metadata.
+    # NO auth tokens here (visible to all participants per LiveKit protocol).
+    # The worker authenticates via its own INDEMN_SERVICE_TOKEN env var.
+    try:
+        meta = VoiceSession.parse_room_metadata(ctx.room)
+    except ValueError as e:
+        log.error("Cannot start voice session: %s", e)
+        return
+
     auth_token = os.environ.get("INDEMN_SERVICE_TOKEN", "")
 
-    # OS-side session lifecycle: load config, create Interaction + Attention,
-    # build the deepagents agent, wrap it in DeepagentsLLM.
+    # OS-side session lifecycle: load Deployment (derive associate from it),
+    # load Runtime + LLM config, attach to existing Interaction (already
+    # created by frontdoor), open Attention, build agent, wrap in DeepagentsLLM.
     voice_session = VoiceSession(
-        associate_id=associate_id,
+        deployment_id=meta["deployment_id"],
+        interaction_id=meta["interaction_id"],
+        dynamic_params=meta["dynamic_params"],
+        correlation_id=meta["correlation_id"],
         auth_token=auth_token,
-        # Checkpointer is per-runtime concern; voice uses the in-memory
-        # default for now. MongoDB checkpointer can be wired later
-        # alongside chat-deepagents (commit `7281b83` follow-up).
+        # Checkpointer wired in Task 2.16 (MongoDBSaver via lazy lock-protected init).
         checkpointer=None,
     )
-    if associate_id:
-        await voice_session.start()
+    await voice_session.start()
 
     # STT — Deepgram, matching voice-livekit (Indemn's customer voice product).
     stt_instance = deepgram.STT(

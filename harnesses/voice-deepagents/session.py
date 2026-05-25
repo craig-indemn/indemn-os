@@ -28,12 +28,13 @@ import json
 import logging
 import os
 import subprocess
+from typing import Any
 
 from harness.agent import build_agent
 from harness.llm_adapter import DeepagentsLLM
 from harness_common.attention import attention_heartbeat_loop, close_attention, open_attention
 from harness_common.cli import CLIError, indemn
-from harness_common.interaction import close_interaction, create_interaction
+from harness_common.interaction import close_interaction
 from harness_common.runtime import RUNTIME_ID
 
 log = logging.getLogger(__name__)
@@ -54,16 +55,78 @@ def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -
 class VoiceSession:
     """Manages one LiveKit room's voice conversation session."""
 
+    @staticmethod
+    def parse_room_metadata(room: Any) -> dict:
+        """Parse the LiveKit room.metadata JSON. Required fields validated.
+
+        Per design §10.3.2: the voice frontdoor sets `room.metadata =
+        JSON({deployment_id, dynamic_params, interaction_id, correlation_id})`
+        at /sessions time. NO auth tokens (room metadata is visible to all
+        participants per LiveKit protocol — Gap A from §17.1).
+
+        Args:
+            room: A livekit.rtc.Room (or test stub) with a `.metadata` attribute.
+
+        Returns:
+            dict with keys `deployment_id` (required str), `interaction_id`
+            (optional str), `dynamic_params` (dict, defaults to {}),
+            `correlation_id` (optional str).
+
+        Raises:
+            ValueError: metadata is empty, not valid JSON, or missing
+                deployment_id.
+        """
+        if not room.metadata:
+            raise ValueError(
+                "LiveKit room.metadata is empty; expected JSON dict "
+                "with at least deployment_id. The voice frontdoor must set this."
+            )
+        try:
+            meta = json.loads(room.metadata)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"LiveKit room.metadata is not valid JSON: {e}"
+            ) from e
+
+        if "deployment_id" not in meta:
+            raise ValueError(
+                "LiveKit room.metadata missing 'deployment_id'. "
+                "The voice frontdoor service must set this."
+            )
+
+        return {
+            "deployment_id": meta["deployment_id"],
+            "interaction_id": meta.get("interaction_id"),
+            "dynamic_params": meta.get("dynamic_params", {}),
+            "correlation_id": meta.get("correlation_id"),
+        }
+
     def __init__(
         self,
-        associate_id: str,
-        auth_token: str,
+        deployment_id: str,
+        interaction_id: str | None = None,
+        dynamic_params: dict | None = None,
+        correlation_id: str | None = None,
+        auth_token: str = "",
         checkpointer=None,
     ):
-        self.associate_id = associate_id
+        """Construct a per-room VoiceSession.
+
+        Phase 4 (AI-407 §10.3.2): the voice frontdoor creates the Interaction
+        at /sessions time and passes interaction_id + correlation_id +
+        dynamic_params via room.metadata. The worker reads them with
+        parse_room_metadata + passes them here. associate_id is derived in
+        start() from the loaded Deployment (Deployment.associate_id) —
+        no more 1:1 Actor.deployment_id assumption.
+        """
+        self.deployment_id = deployment_id
+        self.interaction_id = interaction_id
+        self.dynamic_params = dynamic_params or {}
+        self.correlation_id = correlation_id
         self.auth_token = auth_token
         self.checkpointer = checkpointer
-        self.interaction_id: str | None = None
+        # associate_id derived from Deployment in start()
+        self.associate_id: str | None = None
         self.attention_id: str | None = None
         self.agent = None
         self.deepagents_llm: DeepagentsLLM | None = None
@@ -73,39 +136,52 @@ class VoiceSession:
         self._event_queue: list[dict] = []
 
     async def start(self) -> None:
-        """Initialize the session — load config, create Interaction + Attention,
-        build agent + DeepagentsLLM. Returns once the LLM is ready to plug into
-        a LiveKit AgentSession.
+        """Initialize the session — load config, open Attention, build agent
+        + DeepagentsLLM. Returns once the LLM is ready to plug into a
+        LiveKit AgentSession.
 
-        Mirrors ChatSession.start() — same OS lifecycle, no WebSocket-specific
-        steps; the LiveKit AgentSession.start() is invoked separately by main.py.
+        Phase 4 lifecycle (AI-407 §10.3.2):
+          1. Load Deployment by self.deployment_id (set in __init__)
+          2. Derive self.associate_id = deployment.associate_id (drops the
+             1:1 Actor.deployment_id assumption)
+          3. Load Associate + Runtime for three-layer LLM config merge
+          4. Interaction is NOT created here — the frontdoor already created
+             it at /sessions and passed self.interaction_id via room.metadata
+          5. Open Attention for real-time session tracking
+          6. Build agent + wrap in DeepagentsLLM
         """
+        # Load Deployment first (Phase 4: the deployment IS the venue spec)
+        deployment = indemn("deployment", "get", self.deployment_id)
+        log.info(
+            "Loaded deployment: %s (%s)",
+            deployment.get("name"),
+            self.deployment_id,
+        )
+
+        # Derive associate_id from Deployment (drops Phase 3's Actor.deployment_id pattern)
+        self.associate_id = str(deployment["associate_id"])
+
         # Load associate config
         associate = indemn("actor", "get", self.associate_id)
-        log.info("Loaded associate: %s (%s)", associate.get("name"), self.associate_id)
+        log.info(
+            "Loaded associate: %s (%s)",
+            associate.get("name"),
+            self.associate_id,
+        )
 
         # Load Runtime config for three-layer merge
         runtime = indemn("runtime", "get", RUNTIME_ID)
 
-        # Load Deployment if present
-        deployment = None
-        deployment_id = associate.get("deployment_id")
-        if deployment_id:
-            try:
-                deployment = indemn("deployment", "get", str(deployment_id))
-            except CLIError:
-                pass
-
         # Three-layer LLM config merge (Runtime defaults < Associate < Deployment)
         llm_config = _merge_llm_config(runtime, associate, deployment)
 
-        # Create Interaction (voice channel)
-        interaction = await create_interaction(
-            channel_type="voice",
-            associate_id=self.associate_id,
-            deployment_id=deployment_id,
-        )
-        self.interaction_id = interaction.get("_id")
+        # Interaction was created by the voice frontdoor at /sessions —
+        # interaction_id arrived via room.metadata. No need to create here.
+        if not self.interaction_id:
+            log.warning(
+                "VoiceSession.start: no interaction_id from frontdoor — "
+                "this indicates a frontdoor bug or local-dev path"
+            )
 
         # Open Attention with purpose=real_time_session — gates scoped watches
         # so mid-conversation entity changes route via the events stream
