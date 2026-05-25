@@ -223,31 +223,55 @@ class DeepagentsLLMStream(LLMStream):
             if thread_id:
                 config["configurable"] = {"thread_id": thread_id}
 
+        # AI-407 §11.4: tap agent.astream_events for token-level TTS streaming.
+        # Replaces agent.ainvoke (wait-for-full-result + emit one ChatChunk).
+        # TTS starts synthesizing as soon as the first chunk arrives — biggest
+        # single voice latency win per §11.4.
+        #
+        # Filter strategy: emit ChatChunks only for on_chat_model_stream events
+        # with non-empty text content AND no tool_call_chunks. Skips:
+        # - on_tool_start/end + on_chain_start/end (no assistant tokens)
+        # - on_chat_model_start/end (lifecycle markers)
+        # - chunks with tool_call_chunks (those are tool call args, not user-
+        #   spoken text — TTS'ing them would speak JSON aloud)
+        # - empty-content chunks (Gemini emits these between tool-call setups)
+        chunk_count = 0
         try:
-            result = await agent.ainvoke({"messages": messages}, config=config)
+            async for event in agent.astream_events(
+                {"messages": messages}, config=config, version="v2"
+            ):
+                if event.get("event") != "on_chat_model_stream":
+                    continue
+                model_chunk = event.get("data", {}).get("chunk")
+                if model_chunk is None:
+                    continue
+                tool_call_chunks = getattr(model_chunk, "tool_call_chunks", []) or []
+                if tool_call_chunks:
+                    continue
+                text = getattr(model_chunk, "content", "") or ""
+                if isinstance(text, list):
+                    # Multi-part content — extract text parts only
+                    text = " ".join(
+                        str(p.get("text", "")) if isinstance(p, dict) else str(p)
+                        for p in text
+                    ).strip()
+                if not text:
+                    continue
+
+                self._event_ch.send_nowait(
+                    ChatChunk(
+                        id=f"deepagents-{chunk_count}",
+                        delta=ChoiceDelta(role="assistant", content=text),
+                    )
+                )
+                chunk_count += 1
         except Exception as e:
-            log.exception("DeepagentsLLM agent.ainvoke failed: %s", e)
+            log.exception("DeepagentsLLM agent.astream_events failed: %s", e)
             raise
 
-        text = _extract_final_assistant_text(result)
-        if not text:
-            log.warning(
-                "DeepagentsLLM: agent returned no final assistant text "
-                "(result keys: %s)",
-                list(result.keys()) if isinstance(result, dict) else "?",
-            )
-            return
-
-        log.info("DeepagentsLLM final assistant text: %d chars", len(text))
-
-        # Emit the text as a single ChatChunk. Sentence-boundary chunking
-        # would let TTS start sooner; for v1 we keep it simple — TTS will
-        # see one chunk and start synthesizing immediately.
-        chunk = ChatChunk(
-            id=f"deepagents-{id(result)}",
-            delta=ChoiceDelta(role="assistant", content=text),
+        log.info(
+            "DeepagentsLLM emitted %d streaming ChatChunks", chunk_count
         )
-        self._event_ch.send_nowait(chunk)
 
 
 class DeepagentsLLM(LLM):

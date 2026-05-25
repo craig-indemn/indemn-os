@@ -218,20 +218,27 @@ class TestDeepagentsLLMShape:
     @pytest.mark.asyncio
     async def test_chat_returns_stream_that_runs_agent(self, patch_livekit_imports):
         """End-to-end smoke: chat() returns an LLMStream; iterating it invokes
-        the wrapped agent and yields a ChatChunk with the final assistant text."""
+        the wrapped agent via astream_events and yields ChatChunks with the
+        streamed assistant tokens. Post-AI-407 Task 2.20: astream_events
+        replaces ainvoke for token-level TTS streaming."""
         from livekit.agents.llm import ChatContext
 
         from llm_adapter import DeepagentsLLM
 
+        astream_calls = []
+
+        async def fake_astream_events(input_dict, config=None, **kwargs):
+            astream_calls.append(input_dict)
+
+            class _Chunk:
+                content = "All good."
+                tool_call_chunks = []
+
+            yield {"event": "on_chat_model_stream", "data": {"chunk": _Chunk()}}
+            yield {"event": "on_chat_model_end", "data": {}}
+
         agent = MagicMock()
-        agent.ainvoke = AsyncMock(
-            return_value={
-                "messages": [
-                    HumanMessage(content="status"),
-                    AIMessage(content="All good."),
-                ]
-            }
-        )
+        agent.astream_events = fake_astream_events
 
         llm = DeepagentsLLM(agent=agent, thread_id="i-2")
 
@@ -251,7 +258,7 @@ class TestDeepagentsLLMShape:
             c.delta and c.delta.content and "All good." in c.delta.content
             for c in chunks
         )
-        agent.ainvoke.assert_called_once()
+        assert len(astream_calls) == 1  # astream_events called once
 
 
 class TestEventQueueDrain:
@@ -293,19 +300,26 @@ class TestEventQueueDrain:
         self, patch_livekit_imports
     ):
         """The full path: events queued → adapter drains → SystemMessage
-        prepended to the agent's input messages."""
+        prepended to the agent's input messages. Post-AI-407 Task 2.20:
+        astream_events captures the input via the first call argument."""
         from livekit.agents.llm import ChatContext
 
         from llm_adapter import DeepagentsLLM
 
         captured_messages: list = []
 
-        async def fake_ainvoke(input_dict, config=None):
+        async def fake_astream_events(input_dict, config=None, **kwargs):
             captured_messages.extend(input_dict.get("messages", []))
-            return {"messages": [AIMessage(content="ack")]}
+
+            class _Chunk:
+                content = "ack"
+                tool_call_chunks = []
+
+            yield {"event": "on_chat_model_stream", "data": {"chunk": _Chunk()}}
+            yield {"event": "on_chat_model_end", "data": {}}
 
         agent = MagicMock()
-        agent.ainvoke = fake_ainvoke
+        agent.astream_events = fake_astream_events
 
         # Pre-populate the queue (as if the events subprocess pushed events)
         event_queue = [
@@ -332,19 +346,26 @@ class TestEventQueueDrain:
     async def test_stream_skips_system_message_when_queue_empty(
         self, patch_livekit_imports
     ):
-        """No drain message when no events queued."""
+        """No drain message when no events queued. Post-AI-407 Task 2.20:
+        astream_events replaces ainvoke."""
         from livekit.agents.llm import ChatContext
 
         from llm_adapter import DeepagentsLLM
 
         captured_messages: list = []
 
-        async def fake_ainvoke(input_dict, config=None):
+        async def fake_astream_events(input_dict, config=None, **kwargs):
             captured_messages.extend(input_dict.get("messages", []))
-            return {"messages": [AIMessage(content="ack")]}
+
+            class _Chunk:
+                content = "ack"
+                tool_call_chunks = []
+
+            yield {"event": "on_chat_model_stream", "data": {"chunk": _Chunk()}}
+            yield {"event": "on_chat_model_end", "data": {}}
 
         agent = MagicMock()
-        agent.ainvoke = fake_ainvoke
+        agent.astream_events = fake_astream_events
 
         llm = DeepagentsLLM(agent=agent, thread_id="i-4", event_queue=[])
 
