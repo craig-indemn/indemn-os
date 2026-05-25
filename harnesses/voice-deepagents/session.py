@@ -59,6 +59,59 @@ class VoiceSession:
     """Manages one LiveKit room's voice conversation session."""
 
     @staticmethod
+    def _resolve_effective_actor_id(
+        deployment: dict, dynamic_params: dict, associate_id: str
+    ) -> str:
+        """Resolve INDEMN_EFFECTIVE_ACTOR_ID per Deployment.acts_as (§5.6).
+
+        - `session_actor` → dynamic_params["actor_id"] (the user driving the
+          conversation, validated upstream by frontdoor's JWT check —
+          §10.3.1 step 7 ensures JWT.sub == dynamic_params.actor_id when
+          acts_as=session_actor)
+        - `associate_self` (or missing/unknown) → associate_id (the agent
+          acts as itself, with its own role permissions)
+
+        Defensive fallback: if acts_as=session_actor but actor_id is missing
+        from dynamic_params (shouldn't happen if /sessions parameter_schema
+        validation worked, but be safe), fall back to associate_id. The
+        operator can detect this via runtime logs.
+        """
+        acts_as = deployment.get("acts_as", "associate_self")
+        if acts_as == "session_actor":
+            user_actor_id = dynamic_params.get("actor_id")
+            if user_actor_id:
+                return user_actor_id
+            log.warning(
+                "Deployment.acts_as=session_actor but dynamic_params.actor_id "
+                "is missing — falling back to associate_id (operator should "
+                "investigate /sessions parameter_schema)"
+            )
+            return associate_id
+        # associate_self or unknown
+        return associate_id
+
+    def _session_indemn(self, *args):
+        """Per-session indemn() wrapper — passes session-local correlation_id
+        + effective_actor_id as kwargs (AI-407 §5.6 + §13.7).
+
+        Voice is single-session-per-process today, but using per-call kwargs
+        (vs os.environ mutation) keeps the harness contract uniform across
+        all 3 harnesses (async + chat + voice) AND insulates against future
+        LiveKit-Agents changes to multi-room-per-worker.
+
+        effective_actor_id is computed once in start() via
+        _resolve_effective_actor_id and stored on self._effective_actor_id.
+        Early-lifecycle calls (before correlation_id is set from
+        room.metadata) pass None — the wrapper's None-safe branch skips
+        the per-call env override.
+        """
+        return indemn(
+            *args,
+            correlation_id=self.correlation_id,
+            effective_actor_id=self._effective_actor_id,
+        )
+
+    @staticmethod
     def build_runnable_config(
         *,
         interaction_id: str,
@@ -241,6 +294,11 @@ class VoiceSession:
         # Phase 4: greeting from Deployment (TTS speaks it at session start;
         # persist_greeting_to_state then writes it to checkpointer state per §17.2.22).
         self.greeting: str = ""
+        # AI-407 §5.6: effective_actor_id resolved in start() from Deployment.acts_as.
+        # Used by _session_indemn wrapper for per-call kwargs on every indemn() call.
+        # `assoc:unknown` is a placeholder pre-start — start() always resolves it
+        # before the first session-bearing indemn call.
+        self._effective_actor_id: str = "assoc:unknown"
 
     async def start(self) -> None:
         """Initialize the session — load config, open Attention, build agent
@@ -257,7 +315,10 @@ class VoiceSession:
           5. Open Attention for real-time session tracking
           6. Build agent + wrap in DeepagentsLLM
         """
-        # Load Deployment first (Phase 4: the deployment IS the venue spec)
+        # Load Deployment first (Phase 4: the deployment IS the venue spec).
+        # Use bare indemn() for this single bootstrap call — correlation_id +
+        # effective_actor_id aren't fully set yet (effective_actor_id depends
+        # on acts_as from this same Deployment).
         deployment = indemn("deployment", "get", self.deployment_id)
         log.info(
             "Loaded deployment: %s (%s)",
@@ -268,8 +329,23 @@ class VoiceSession:
         # Derive associate_id from Deployment (drops Phase 3's Actor.deployment_id pattern)
         self.associate_id = str(deployment["associate_id"])
 
+        # AI-407 §5.6: resolve effective_actor_id per Deployment.acts_as.
+        # All subsequent CLI calls go through self._session_indemn which
+        # passes correlation_id + effective_actor_id as per-call kwargs
+        # (vs os.environ mutation — uniform with chat per Task 2.11).
+        self._effective_actor_id = VoiceSession._resolve_effective_actor_id(
+            deployment=deployment,
+            dynamic_params=self.dynamic_params,
+            associate_id=self.associate_id,
+        )
+        log.info(
+            "Resolved effective_actor_id=%s (acts_as=%s)",
+            self._effective_actor_id,
+            deployment.get("acts_as", "associate_self"),
+        )
+
         # Load associate config
-        associate = indemn("actor", "get", self.associate_id)
+        associate = self._session_indemn("actor", "get", self.associate_id)
         log.info(
             "Loaded associate: %s (%s)",
             associate.get("name"),
@@ -277,7 +353,7 @@ class VoiceSession:
         )
 
         # Load Runtime config for three-layer merge
-        runtime = indemn("runtime", "get", RUNTIME_ID)
+        runtime = self._session_indemn("runtime", "get", RUNTIME_ID)
 
         # Three-layer LLM config merge (Runtime defaults < Associate < Deployment)
         llm_config = _merge_llm_config(runtime, associate, deployment)
@@ -383,7 +459,7 @@ class VoiceSession:
         parts: list[str] = []
         for ref in associate.get("skills") or []:
             try:
-                skill = indemn("skill", "get", ref)
+                skill = self._session_indemn("skill", "get", ref)
                 content = (
                     skill.get("content", "")
                     if isinstance(skill, dict)
