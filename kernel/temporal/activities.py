@@ -199,7 +199,18 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
         # valid rows iterate normally; malformed rows are handled below
         # by the DELETE-cleanup pass when the operator's filter targets
         # them for removal.
-        if spec.filter_query:
+        #
+        # Bug #4 follow-on (2026-05-25): `if spec.filter_query` is Python-truthy,
+        # which treats filter_query={} as "no filter" and falls through to the
+        # else branch — even when match_all=True opts in to match-everything-in-org
+        # explicitly. Need to also accept the empty-filter-with-match_all case.
+        # The API layer (registration.py:826) ALREADY rejects empty filter without
+        # match_all for destructive ops, so by the time we get here, an empty
+        # filter implies match_all is the operator's intent.
+        use_filter = spec.filter_query is not None and (
+            spec.filter_query or spec.match_all
+        )
+        if use_filter:
             typed_filter = _coerce_bulk_filter(
                 entity_cls, spec.entity_type, spec.filter_query
             )
@@ -352,7 +363,14 @@ async def preview_bulk_operation(spec_dict: dict) -> dict:
     if not entity_cls:
         return {"count": 0, "error": f"Entity type {spec.entity_type} not found"}
 
-    if spec.filter_query:
+    # Bug #4 follow-on (2026-05-25): same truthy-check fix as process_bulk_batch.
+    # Accept the empty-filter-with-match_all case so dry-runs report the actual
+    # match count (instead of returning {"count": 0} and misleading the operator
+    # into thinking nothing would be deleted).
+    use_filter = spec.filter_query is not None and (
+        spec.filter_query or spec.match_all
+    )
+    if use_filter:
         # Restore org_id context for find_scoped (same reason as process_bulk_batch)
         if spec.org_id:
             current_org_id.set(ObjectId(spec.org_id))

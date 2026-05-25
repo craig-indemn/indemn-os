@@ -189,3 +189,70 @@ def test_bulk_operation_spec_match_all_inside_dataclass_block():
         "match_all field is in workflows.py but NOT inside the "
         "BulkOperationSpec @dataclass block — the workflow will still TypeError."
     )
+
+
+def _activities_py_in_this_checkout() -> Path:
+    """Resolve activities.py relative to THIS test file."""
+    return Path(__file__).resolve().parents[2] / "kernel" / "temporal" / "activities.py"
+
+
+def test_bulk_activities_honor_empty_filter_with_match_all():
+    """Bug #4 follow-on (round 2, 2026-05-25). The first round (commit b5d8060)
+    added match_all to BulkOperationSpec — unblocking workflow instantiation —
+    but the activities still treated `filter_query: {}` as Python-falsy and
+    fell through to the no-op branch. Operator-facing symptom: dry-run reports
+    `count: 0` even when there are records to delete; live delete reports
+    `done: True, batch_processed: 0`. Same misleading silence as Bug #4 itself.
+
+    Fix: both `process_bulk_batch` and `preview_bulk_operation` must accept
+    `filter_query == {}` when `match_all` is True (i.e. use the empty filter
+    against find_scoped, which org-scopes to all records in the org).
+
+    Source-string pin so the test doesn't require runtime env setup."""
+    src = _activities_py_in_this_checkout().read_text()
+    # Both functions should have the same shape — a `use_filter` guard or
+    # equivalent that admits the empty-filter-with-match_all case
+    assert "spec.match_all" in src, (
+        "activities.py doesn't reference spec.match_all — empty-filter-with-"
+        "match_all dry-runs and deletes will silently match 0 records"
+    )
+    # Pin both bulk-activity functions reference match_all (one for
+    # process_bulk_batch, one for preview_bulk_operation)
+    occurrences = src.count("spec.match_all")
+    assert occurrences >= 2, (
+        f"expected match_all referenced in both process_bulk_batch + "
+        f"preview_bulk_operation, found {occurrences} occurrence(s) — "
+        f"one of the two activities is still on the buggy truthy-only path"
+    )
+
+
+def test_bulk_activities_do_not_use_bare_truthy_filter_check():
+    """The bare `if spec.filter_query:` pattern is the Bug #4-round-2 footgun
+    — Python truthy on {} skips the matching path. After the fix, neither
+    bulk activity should use it; both should use a check that admits
+    {} when match_all is set."""
+    src = _activities_py_in_this_checkout().read_text()
+    # Find both function bodies (process_bulk_batch + preview_bulk_operation)
+    for fn_name in ("def process_bulk_batch", "def preview_bulk_operation"):
+        start = src.find(fn_name)
+        assert start != -1, f"{fn_name} not found in activities.py"
+        # Bound by next `async def` or `def ` at module level
+        rest = src[start:]
+        end_rel = rest.find("\nasync def ", 10)
+        if end_rel == -1:
+            end_rel = rest.find("\n@activity.defn", 10)
+        if end_rel == -1:
+            end_rel = len(rest)
+        body = rest[:end_rel]
+        # Body must NOT contain the bare truthy check at top-level guard.
+        # Allow `if spec.filter_query` as part of a compound expression
+        # (`if spec.filter_query is not None`, `if spec.filter_query or ...`) — those are the fix shape.
+        # Bare check: line ending with `if spec.filter_query:` (colon, no extras)
+        import re
+        bare_pattern = re.compile(r"^\s*if spec\.filter_query:\s*$", re.MULTILINE)
+        bare_matches = bare_pattern.findall(body)
+        assert not bare_matches, (
+            f"{fn_name} still uses bare `if spec.filter_query:` guard — "
+            f"empty filter with match_all will silently skip matching. "
+            f"Expected the compound `is not None and (filter_query or match_all)` shape."
+        )
