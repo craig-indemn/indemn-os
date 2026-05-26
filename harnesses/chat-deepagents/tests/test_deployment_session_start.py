@@ -50,12 +50,15 @@ def _run(coro):
         loop.close()
 
 
-def _mock_websocket():
+def _mock_websocket(origin: str | None = "https://sales.indemn.ai"):
+    """Default origin matches `_ACTIVE_DEPLOYMENT.allowed_origins` so Task 3.2
+    tests pass through the Task 3.3 Origin check transparently. Tests that
+    exercise Origin rejection explicitly pass a different origin (or None)."""
     ws = MagicMock()
     ws.accept = AsyncMock()
     ws.send_json = AsyncMock()
     ws.close = AsyncMock()
-    ws.headers = {}
+    ws.headers = {"origin": origin} if origin else {}
     return ws
 
 

@@ -104,6 +104,25 @@ def get_checkpointer():
 _sessions: dict[int, ChatSession] = {}
 
 
+def _is_origin_allowed(origin: str | None, allowed_origins: list[str]) -> bool:
+    """Return True iff the WebSocket's `Origin` header is in the Deployment's
+    allowed_origins list (AI-408 Task 3.3).
+
+    Per §5.1: empty allowed_origins = reject ALL (Track 13f equivalent for
+    chat). Missing Origin header also rejects — RFC 6455 requires browsers
+    to send it on WebSocket upgrade, so absence indicates a non-browser
+    client we have no allowlist policy for.
+
+    Case-sensitive comparison — RFC 6454 specifies Origin headers are
+    case-sensitive. Exact match only (no wildcards in v1).
+    """
+    if not origin:
+        return False
+    if not allowed_origins:
+        return False
+    return origin in allowed_origins
+
+
 async def _start_deployment_session(
     *,
     websocket: WebSocket,
@@ -152,7 +171,33 @@ async def _start_deployment_session(
         await websocket.close(code=4004)
         return None
 
-    # Step 2: Deployment status check per §5.7 state machine — only `active`
+    # Step 2: Origin allowlist check (Task 3.3) — must come before status check
+    # so an unauthorized origin can't probe Deployment activation state. Mirrors
+    # voice-frontdoor's validation order (sessions.py: Origin → JWT → status).
+    origin = websocket.headers.get("origin") if websocket.headers else None
+    allowed_origins = deployment.get("allowed_origins") or []
+    if not _is_origin_allowed(origin, allowed_origins):
+        log.info(
+            "Rejecting session for deployment %s (origin %r not in allowlist %r)",
+            deployment_id,
+            origin,
+            allowed_origins,
+        )
+        await websocket.send_json(
+            {
+                "type": "error",
+                "content": (
+                    f"Origin '{origin}' not allowed for deployment {deployment_id}"
+                ),
+                "code": "origin_not_allowed",
+            }
+        )
+        # RFC 6455 close code 1008 = "Policy Violation" — the canonical
+        # WebSocket-side analog of HTTP 403.
+        await websocket.close(code=1008)
+        return None
+
+    # Step 3: Deployment status check per §5.7 state machine — only `active`
     # accepts sessions. `configured` / `paused` / `archived` / `error` reject.
     status = deployment.get("status")
     if status != "active":
@@ -172,7 +217,6 @@ async def _start_deployment_session(
         await websocket.close(code=4009)
         return None
 
-    # TODO Task 3.3: Origin header validation against deployment.allowed_origins
     # TODO Task 3.4: JWT validation (HS256 + purpose-claim per AI-407)
     # TODO Task 3.5: acts_as security gate — JWT.sub vs supplied actor_id
     # TODO Task 3.6: parameter_schema validation of dynamic_params
