@@ -199,11 +199,17 @@ async def entrypoint(ctx: JobContext) -> None:
     """
     log.info("Job started: room=%s", ctx.room.name)
 
-    # AI-407 §10.3.2: parse the frontdoor-supplied context out of room.metadata.
-    # NO auth tokens here (visible to all participants per LiveKit protocol).
-    # The worker authenticates via its own INDEMN_SERVICE_TOKEN env var.
+    # AI-407 §10.3.2: parse the frontdoor-supplied context out of the
+    # AgentDispatch metadata (ctx.job.metadata). The frontdoor sets the
+    # SAME JSON payload on both room.metadata AND dispatch metadata, but
+    # ctx.room.metadata is only populated after ctx.connect() syncs room
+    # state from the LiveKit server — by then it's too late to short-circuit
+    # an invalid session. ctx.job.metadata arrives with the dispatch and is
+    # readable immediately. NO auth tokens here (the dispatch metadata is
+    # also visible to participants per LiveKit protocol; worker auths via
+    # its own INDEMN_SERVICE_TOKEN env var).
     try:
-        meta = VoiceSession.parse_room_metadata(ctx.room)
+        meta = VoiceSession.parse_room_metadata(ctx.job)
     except ValueError as e:
         log.error("Cannot start voice session: %s", e)
         return
