@@ -346,14 +346,51 @@ async def create_session(request: Request) -> JSONResponse:
             validation_warnings,
         )
 
-    # Subsequent validation chain to be filled in Tasks 2.31–2.36.
-    # Until then, return 501 (parsing + origin + JWT + status + params
-    # passed but acts_as/Interaction/LiveKit not wired).
+    # Step 8: acts_as security gate per §10.3.1 step 7 + §5.6 + §10.7.
+    # LOAD-BEARING — this is the gate that makes the session_actor
+    # capability safe. JWT IS the source of truth for effective_actor_id;
+    # dynamic_params.actor_id is consulted ONLY for the mismatch check.
+    # Code review verifies the gate is right by reading the
+    # `effective_actor_id = authenticated_actor_id` line.
+    acts_as = deployment.get("acts_as")
+    if acts_as == "session_actor":
+        supplied_actor_id = dynamic_params.get("actor_id")
+        # `is not None` (not truthy-check) — empty string / 0 / False
+        # still count as "supplied" and must match. Schema validation
+        # earlier rejects most malformed cases; this is defense-in-depth
+        # in case a Deployment's schema doesn't enforce the type.
+        if (
+            supplied_actor_id is not None
+            and supplied_actor_id != authenticated_actor_id
+        ):
+            log.warning(
+                "JWT impersonation attempt rejected — JWT.sub=%r, "
+                "supplied actor_id=%r, deployment=%s",
+                authenticated_actor_id,
+                supplied_actor_id,
+                deployment_id,
+            )
+            return _forbidden("actor_mismatch")
+        # Source of truth: JWT. Never the supplied value, even when
+        # they're identical — keeps the security invariant load-bearing
+        # in code, not just in comments.
+        effective_actor_id = authenticated_actor_id
+    else:
+        # associate_self (default for public surfaces / anonymous users)
+        # — the agent acts AS the associate with its own permissions.
+        # Supplied actor_id is ignored entirely. JWT only proved the
+        # caller is authenticated; the JWT's actor_id is irrelevant.
+        effective_actor_id = str(deployment.get("associate_id"))
+
+    # Subsequent validation chain to be filled in Tasks 2.32–2.36.
+    # Until then, return 501 (parsing + origin + JWT + status + params +
+    # acts_as passed but Interaction/LiveKit not wired).
     return JSONResponse(
         {
             "error": "not_implemented",
             "deployment_id": deployment_id,
             "authenticated_actor_id": authenticated_actor_id,
+            "effective_actor_id": effective_actor_id,
             "validation_warnings": validation_warnings,
         },
         status_code=501,
