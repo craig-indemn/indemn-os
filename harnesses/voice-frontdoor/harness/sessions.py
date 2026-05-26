@@ -226,9 +226,25 @@ async def create_session(request: Request) -> JSONResponse:
         deployment_id,
     )
 
-    # Subsequent validation chain to be filled in Tasks 2.29–2.36.
-    # Until then, return 501 (parsing + origin + JWT passed but
-    # status/parameter_schema/acts_as/etc not wired).
+    # Step 6: Deployment status check per §10.3.1 step 5 + §5.7 state
+    # machine. Only `active` accepts sessions; configured/paused/archived/
+    # error reject. The SDK surfaces `status` so the user-facing message
+    # can be specific ("temporarily paused" vs generic "unavailable").
+    deployment_status = deployment.get("status")
+    if deployment_status != "active":
+        log.info(
+            "Rejecting session for deployment %s (status=%r, expected active)",
+            deployment_id,
+            deployment_status,
+        )
+        return JSONResponse(
+            {"error": "deployment_not_active", "status": deployment_status},
+            status_code=409,
+        )
+
+    # Subsequent validation chain to be filled in Tasks 2.30–2.36.
+    # Until then, return 501 (parsing + origin + JWT + status passed but
+    # parameter_schema/acts_as/etc not wired).
     return JSONResponse(
         {
             "error": "not_implemented",
