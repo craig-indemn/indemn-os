@@ -52,14 +52,16 @@ class ChatSession:
         safely pass None — the wrapper's `if correlation_id is not None`
         branch skips the env-setting.
 
-        effective_actor_id = self.associate_id (the chat associate's actor).
-        AI-408's session_actor Deployment flow will revisit this when chat
-        starts impersonating end-users.
+        effective_actor_id reads from self.effective_actor_id (AI-408 Phase 3).
+        For the legacy associate_id-only path this still resolves to
+        self.associate_id (the __init__ default). For Deployment-driven
+        sessions Task 3.5 wires this to JWT.sub when acts_as=session_actor
+        or to Deployment.associate_id when acts_as=associate_self.
         """
         return indemn(
             *args,
             correlation_id=self.correlation_id,
-            effective_actor_id=self.associate_id,
+            effective_actor_id=self.effective_actor_id,
         )
 
     @staticmethod
@@ -149,6 +151,9 @@ class ChatSession:
         auth_token: str,
         checkpointer=None,
         interaction_id=None,
+        deployment: dict | None = None,
+        dynamic_params: dict | None = None,
+        effective_actor_id: str | None = None,
     ):
         self.ws = websocket
         self.associate_id = associate_id
@@ -168,6 +173,20 @@ class ChatSession:
         self.deployment_id: str | None = None
         self.associate: dict | None = None
         self._initial_systemmessages: list | None = None
+        # AI-408 Phase 3: Deployment-driven session shape. When `deployment`
+        # is None we're on the legacy associate_id-only path (current OS
+        # Base UI). When set, start() uses the supplied Deployment instead
+        # of the one referenced from associate.deployment_id; dynamic_params
+        # + effective_actor_id flow into build_runnable_config + the
+        # <deployment_context> SystemMessage (Task 3.7).
+        self.deployment: dict | None = deployment
+        self.dynamic_params: dict = dynamic_params or {}
+        # effective_actor_id is the identity attributed to entity writes
+        # this session makes. Defaults to associate_id (legacy + pre-Task-3.5
+        # state). Task 3.5 overrides this with JWT.sub for session_actor
+        # Deployments. _session_indemn reads this attribute on every CLI
+        # call (kept in sync with the AI-407 per-call kwarg path).
+        self.effective_actor_id: str = effective_actor_id or associate_id
 
     async def start(self):
         """Initialize the session — load config, create Interaction + Attention, build agent."""

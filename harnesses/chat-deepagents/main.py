@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from harness.session import ChatSession
+from harness_common.cli import CLIError, indemn
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
@@ -113,25 +114,89 @@ async def _start_deployment_session(
 ):
     """Start a Deployment-driven chat session (AI-408 §15.3).
 
-    Full implementation lands in Task 3.2 (Deployment load + status check),
-    Task 3.3 (Origin allowlist), Task 3.4 (JWT validation), Task 3.5 (acts_as
-    gate), Task 3.6 (parameter_schema validation), Task 3.7 (deployment_context
-    SystemMessage with sanitized dynamic_params).
+    Validation chain (additively wired across Tasks 3.2-3.7):
+      Task 3.2 — Deployment load + status check (this task)
+      Task 3.3 — Origin allowlist (Deployment.allowed_origins)
+      Task 3.4 — JWT validation (HS256 dual-mode + purpose-claim per AI-407)
+      Task 3.5 — acts_as security gate
+      Task 3.6 — JSON Schema validation of dynamic_params
+      Task 3.7 — <deployment_context> SystemMessage with sanitized params
 
-    Task 3.1 ships only the dispatch wiring + this stub so the call-site is
-    testable. The stub returns None + closes the websocket with a clear
-    "not yet implemented" error so the routing branch is exercised end-to-end
-    without leaking a half-built deployment flow.
+    WebSocket close codes (chat-vs-HTTP divergence from voice frontdoor):
+      4004 — deployment_not_found  (HTTP analog: 404)
+      4009 — deployment_not_active (HTTP analog: 409)
+      1008 — policy_violation      (HTTP analogs: 401/403; future tasks)
+
+    Returns ChatSession on success, None on validation failure (after
+    sending an error message + closing the WebSocket).
     """
-    await websocket.send_json(
-        {
-            "type": "error",
-            "content": "Deployment-driven sessions not yet implemented (AI-408 Tasks 3.2-3.7)",
-            "code": "not_implemented",
-        }
+    # Step 1: Load Deployment via authenticated CLI. The runtime's
+    # INDEMN_SERVICE_TOKEN (process env) carries read access; we don't pass
+    # the connect-message auth_token here because the runtime needs to read
+    # the Deployment regardless of which user is connecting.
+    try:
+        deployment = await asyncio.to_thread(
+            indemn, "deployment", "get", deployment_id
+        )
+    except CLIError as e:
+        log.info(
+            "Deployment not found or CLI error: %s (%s)", deployment_id, e
+        )
+        await websocket.send_json(
+            {
+                "type": "error",
+                "content": f"Deployment not found: {deployment_id}",
+                "code": "not_found",
+            }
+        )
+        await websocket.close(code=4004)
+        return None
+
+    # Step 2: Deployment status check per §5.7 state machine — only `active`
+    # accepts sessions. `configured` / `paused` / `archived` / `error` reject.
+    status = deployment.get("status")
+    if status != "active":
+        log.info(
+            "Rejecting session for deployment %s (status=%r, expected active)",
+            deployment_id,
+            status,
+        )
+        await websocket.send_json(
+            {
+                "type": "error",
+                "content": f"Deployment not active (status={status})",
+                "code": "deployment_not_active",
+                "status": status,
+            }
+        )
+        await websocket.close(code=4009)
+        return None
+
+    # TODO Task 3.3: Origin header validation against deployment.allowed_origins
+    # TODO Task 3.4: JWT validation (HS256 + purpose-claim per AI-407)
+    # TODO Task 3.5: acts_as security gate — JWT.sub vs supplied actor_id
+    # TODO Task 3.6: parameter_schema validation of dynamic_params
+
+    # Pre-Task-3.5 default: effective_actor_id = Deployment.associate_id
+    # (i.e., associate_self semantics — the agent acts as itself, the
+    # supplied dynamic_params.actor_id is irrelevant until the acts_as gate
+    # is wired in Task 3.5). The legacy associate_id-only path reaches
+    # ChatSession with this same defaulting via the existing __init__ logic.
+    associate_id = str(deployment["associate_id"])
+    effective_actor_id = associate_id
+
+    session = ChatSession(
+        websocket=websocket,
+        associate_id=associate_id,
+        auth_token=auth_token,
+        checkpointer=get_checkpointer(),
+        interaction_id=connect_msg.get("interaction_id"),
+        deployment=deployment,
+        dynamic_params=dynamic_params,
+        effective_actor_id=effective_actor_id,
     )
-    await websocket.close(code=4501)
-    return None
+    await session.start()
+    return session
 
 
 async def websocket_handler(websocket: WebSocket):

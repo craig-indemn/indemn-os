@@ -38,6 +38,14 @@ _harness_session_stub = MagicMock()
 _harness_session_stub.ChatSession = MagicMock()
 sys.modules["harness.session"] = _harness_session_stub
 
+# main.py uses CLIError in an `except` clause (Task 3.2 onward). MagicMock
+# can't be caught — replace the conftest's harness_common.cli stub with the
+# real module so `except CLIError` resolves to a real class. test_deployment_
+# session_start.py does the same — both must reload before main is imported.
+if isinstance(sys.modules.get("harness_common.cli"), MagicMock):
+    del sys.modules["harness_common.cli"]
+import harness_common.cli  # noqa: E402,F401  — real import
+
 import main as harness_main  # noqa: E402
 
 
@@ -275,36 +283,7 @@ class TestConnectMessageExtension:
         assert mock_dep.call_args.kwargs["dynamic_params"] == {}
 
 
-class TestStartDeploymentSessionStub:
-    """Task 3.1 ships only the dispatch wiring + a stub for
-    `_start_deployment_session`. Full implementation lands in Tasks 3.2-3.7.
-    The stub must send a clear "not yet implemented" error + close so the
-    routing branch is exercised end-to-end without leaking a half-built flow.
-    """
-
-    def test_stub_sends_not_implemented_error_and_closes(self):
-        """The real stub (no patch) sends a structured error + closes the WS."""
-        connect_msg = {
-            "type": "connect",
-            "deployment_id": "dep_test",
-            "auth_token": "tok",
-        }
-        ws = _build_mock_websocket(connect_msg)
-
-        # Do NOT patch _start_deployment_session — exercise the real stub.
-        with patch.object(harness_main, "ChatSession") as mock_cls:
-            _run(harness_main.websocket_handler(ws))
-
-        errors = [p for p in _send_payloads(ws) if p.get("type") == "error"]
-        assert len(errors) >= 1
-        # The stub uses code="not_implemented" so callers can distinguish
-        # "Phase 3 in flight" from real validation failures.
-        assert any(
-            p.get("code") == "not_implemented" for p in errors
-        ), f"expected error with code=not_implemented; got {errors}"
-        ws.close.assert_called()
-        # Legacy path NOT taken
-        mock_cls.assert_not_called()
-        # NO "connected" message sent (deployment stub bailed)
-        connected = [p for p in _send_payloads(ws) if p.get("type") == "connected"]
-        assert connected == []
+# NOTE: The Task 3.1 commit shipped `_start_deployment_session` as a stub
+# that emitted `code: "not_implemented"` + close 4501. Task 3.2 (next commit
+# in this branch) replaces the stub with the real Deployment-load flow —
+# end-to-end coverage of that behavior moves to test_deployment_session_start.py.
