@@ -56,10 +56,25 @@ def _resolve_indemn_binary() -> str:
 _INDEMN_BIN = _resolve_indemn_binary()
 
 
-def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
+def indemn(
+    *args: str,
+    timeout: float = 30.0,
+    parse_json: bool = True,
+    correlation_id: str | None = None,
+    effective_actor_id: str | None = None,
+    service_token: str | None = None,
+) -> Any:
     """Run `indemn <args>` as subprocess, parse JSON result.
 
     The CLI outputs JSON by default — no --json flag needed.
+
+    Per-call env overrides (AI-407 Task 2.5):
+      correlation_id, effective_actor_id, service_token — when set, take
+      precedence over the os.environ value. Required for chat + voice
+      harnesses (multi-session per process) where mutating os.environ
+      races across concurrent sessions in the same event loop. The async
+      harness keeps mutating os.environ (single activity per process at
+      a time) — back-compat preserved when these kwargs are omitted.
     """
     env = {
         "INDEMN_API_URL": os.environ["INDEMN_API_URL"],
@@ -85,6 +100,14 @@ def indemn(*args: str, timeout: float = 30.0, parse_json: bool = True) -> Any:
     # agent run sets the same X-Correlation-ID header.
     if "INDEMN_CORRELATION_ID" in os.environ:
         env["INDEMN_CORRELATION_ID"] = os.environ["INDEMN_CORRELATION_ID"]
+
+    # Per-call kwargs override process env (AI-407 Task 2.5).
+    if correlation_id is not None:
+        env["INDEMN_CORRELATION_ID"] = str(correlation_id)
+    if effective_actor_id is not None:
+        env["INDEMN_EFFECTIVE_ACTOR_ID"] = str(effective_actor_id)
+    if service_token is not None:
+        env["INDEMN_SERVICE_TOKEN"] = str(service_token)
 
     cmd = [_INDEMN_BIN, *args]
 

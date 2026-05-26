@@ -21,69 +21,37 @@ from harness_common.backend import build_backend
 from langchain.chat_models import init_chat_model
 
 DEFAULT_PROMPT = (
-    "You are the Indemn OS Assistant.\n\n"
-    "Your work follows this order on every task:\n"
-    "  1. Load your operating skill(s) via `execute('indemn skill get <name>')`\n"
-    "     (the names are listed in the 'Your Operating Skill' section below). "
-    "These define the procedure for the kind of work you do.\n"
-    "  2. Load entity skill(s) for each entity type your operating skill says "
-    "you'll touch via `execute('indemn skill get <EntityName>')`. "
-    "These give you exact field names, state machines, and CLI shapes — the "
-    "HOW for each action.\n"
-    "  3. Use the todo tool to plan every step your operating skill prescribes "
-    "for this work item. Be specific: name the CLI calls, the decision points, "
-    "the expected outcomes.\n"
-    "  4. Execute the plan via `indemn` CLI calls. Update todos as you "
-    "complete each step.\n\n"
+    "You are an Indemn OS Assistant talking with a user via real-time chat.\n\n"
+    "Your conversation contains:\n"
+    "- <skill> SystemMessage(s): your operating instructions\n"
+    "- <deployment_context> SystemMessage: surface-specific context\n"
+    "  (who the user is, what page they're on, what data scope you have)\n"
+    "- The conversation history\n\n"
+    "Each user turn:\n"
+    "  1. Read your <skill> — your procedure\n"
+    "  2. Read <deployment_context> — your scope for this conversation\n"
+    "  3. Load entity skill(s) via execute('indemn skill get <EntityName>') if you need them\n"
+    "  4. Respond. Use execute for CLI actions.\n\n"
     "RULES:\n"
-    "- ALWAYS use execute for entity operations — entity data lives in the OS, "
-    "never in files.\n"
-    "- ALWAYS load relevant skills (operating + entity) before planning.\n"
-    "- ALWAYS plan with the todo tool after reading skills, before acting.\n"
-    "- When [UI Context] includes entity_data, use it directly — don't "
-    "re-fetch what you already have.\n"
-    "- Lead with the answer or result. Be concise. Tables and lists over "
-    "paragraphs.\n"
-    "- For destructive operations (transitions to terminal states like "
-    "churned/lost/cancelled, entity deletion, bulk operations), state what "
-    "you will do and ask for confirmation BEFORE executing.\n"
-    "- For reads, non-terminal transitions, and updates — execute "
-    "immediately without asking.\n"
-    "- write_file is fine for intermediate scratch (notes, drafts) but "
-    "never for entity data — that goes through the CLI.\n"
-    "- If context is insufficient to resolve a reference, ask one "
-    "clarifying question.\n"
-    "- NEVER use the task tool to spawn subagents. Always respond directly.\n"
-)
-
-OPERATING_SKILL_SECTION = (
-    "\n\n## Your Operating Skill{plural}\n\n"
-    "Step 1 of every task: run these CLI calls to load your operating "
-    "instructions:\n"
-    "{calls}\n"
-    "These skills define WHO you are and HOW you process this kind of work. "
-    "They take precedence over the general guidance above when they conflict.\n"
+    "- Be helpful and concise\n"
+    "- Use execute for entity operations\n"
+    "- NEVER fabricate — query first\n"
+    "- For destructive operations (deletes, terminal transitions, new-entity creation):\n"
+    "  confirm with the user FIRST\n"
+    "- Your skill takes precedence over these guidelines\n"
 )
 
 
 def build_system_prompt(associate: dict) -> str:
-    """Compose the system prompt: base prompt + per-associate skill section.
+    """Compose the system prompt.
 
-    base = `associate.prompt` if set (operator override), else DEFAULT_PROMPT.
-    Suffix lists the associate's skill refs with the exact `execute(...)`
-    invocations the agent should make in step 1 of its procedure. Empty
-    skills list → no suffix appended.
+    Phase 4 (AI-407 §15.5): the operating skill no longer gets appended as a
+    CLI-call directive to the system prompt — it arrives as a <skill>
+    SystemMessage at session start (composed by ChatSession.compose_initial_messages,
+    Task 2.9). build_system_prompt now just returns the base prompt:
+    `associate.prompt` if set (operator override), else DEFAULT_PROMPT.
     """
-    base = associate.get("prompt") or DEFAULT_PROMPT
-    skill_refs = associate.get("skills") or []
-    if not skill_refs:
-        return base
-    calls = "\n".join(f"  execute('indemn skill get {ref}')" for ref in skill_refs)
-    suffix = OPERATING_SKILL_SECTION.format(
-        plural="s" if len(skill_refs) > 1 else "",
-        calls=calls,
-    )
-    return base + suffix
+    return associate.get("prompt") or DEFAULT_PROMPT
 
 
 def build_agent(

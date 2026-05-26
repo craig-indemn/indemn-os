@@ -25,7 +25,12 @@ from harness.agent import build_agent
 from harness.cron_runner import run_cron_skill
 from harness_common.cli import CLIError, indemn
 from harness.trace_helpers import serialize_messages, serialize_run_tree, derive_child_runs, aggregate_tokens
+from harness_common.thread_id import derive_checkpointer_thread_id
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.mongodb import MongoDBSaver
+from motor.motor_asyncio import AsyncIOMotorClient
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from indemn_os.types import AgentExecutionInput, AgentExecutionResult
 from temporalio import activity
@@ -37,6 +42,53 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 TASK_QUEUE = f"runtime-{RUNTIME_ID}"
+
+# AI-407 §15.4: Phase-4 MongoDBSaver checkpointer for async harness.
+# Adapted from chat-deepagents' lifespan-init pattern; async-deepagents uses
+# Temporal worker (no Starlette lifespan event), so we lazy-init on first use
+# with a False-sentinel for "tried and failed — degraded to MemorySaver fallback".
+# Mirrors voice harness Task 2.16 (an asyncio.Lock there guards concurrent room
+# dispatches; here Temporal activities are concurrent in the same event loop,
+# but the worst case is duplicate MotorClient construction on first race — not
+# catastrophic. Keep simple per playbook spec.)
+_checkpointer = None
+
+
+async def _get_or_init_checkpointer():
+    """Return the module-level MongoDBSaver, lazily initialized.
+
+    Returns None if MONGODB_URI is absent or the ping fails — caller falls
+    back to MemorySaver so the activity doesn't block on missing infra
+    (mirrors chat-deepagents degradation pattern).
+    """
+    global _checkpointer
+    # `False` sentinel = "tried + failed; don't keep retrying within process lifetime"
+    if _checkpointer is False:
+        return None
+    if _checkpointer is not None:
+        return _checkpointer
+    mongodb_uri = os.environ.get("MONGODB_URI", "")
+    if not mongodb_uri:
+        log.warning(
+            "MONGODB_URI not set — async checkpointer disabled "
+            "(falling back to MemorySaver; no human-in-the-loop pause/resume)"
+        )
+        _checkpointer = False
+        return None
+    try:
+        motor_client = AsyncIOMotorClient(mongodb_uri)
+        await motor_client.admin.command("ping")
+        _checkpointer = MongoDBSaver(
+            motor_client.delegate, db_name="indemn_os_checkpoints"
+        )
+        log.info("Async MongoDB checkpointer initialized")
+        return _checkpointer
+    except Exception as e:
+        log.warning(
+            "MongoDB checkpointer unavailable: %s — degraded to MemorySaver", e
+        )
+        _checkpointer = False
+        return None
 
 
 def _merge_llm_config(runtime: dict, associate: dict, deployment: dict | None) -> dict:
@@ -109,10 +161,21 @@ def _format_entity_xml(data: dict, entity_type: str) -> str:
     return "\n".join(lines)
 
 
-def _build_context_with_skills(entity_data: dict, entity_type: str, associate: dict) -> str:
-    """Build the full initial context: skills + entity, formatted as XML sections."""
-    parts = ["<context>"]
+def _build_skill_section_xml(associate: dict) -> str:
+    """Build the skill section XML for the Phase-4 <skill> SystemMessage.
 
+    AI-407 §15.5: replaces the Phase-3 user-message `<skill>` block with a
+    dedicated SystemMessage composed by compose_initial_messages. This helper
+    fetches the associate's operating skill(s) and emits per-skill blocks
+    `<skill name="X">...content...</skill>` joined by blank lines. The caller
+    (compose_initial_messages) wraps the result in an outer <skill>...</skill>
+    when constructing the SystemMessage so the agent's DEFAULT_PROMPT
+    "<skill> SystemMessage" reference is satisfied.
+
+    Returns empty string when associate has no skills (multi-skill operating
+    set; cron_runner mode skips this path entirely).
+    """
+    parts: list[str] = []
     skill_refs = associate.get("skills") or []
     for ref in skill_refs:
         try:
@@ -124,10 +187,78 @@ def _build_context_with_skills(entity_data: dict, entity_type: str, associate: d
             parts.append("")
         except CLIError as e:
             log.warning("Failed to load skill %s: %s", ref, e)
+    return "\n".join(parts).rstrip()
 
-    parts.append(_format_entity_xml(entity_data, entity_type))
-    parts.append("</context>")
-    return "\n".join(parts)
+
+def compose_initial_messages(skill_content: str, entity_xml: str) -> list:
+    """Compose the initial agent input messages for a single async invocation.
+
+    Phase 4 (AI-407 §15.5): the operating skill is a SystemMessage; the entity
+    context is the HumanMessage. Mirrors real-time harness composition (chat,
+    voice). The agent's DEFAULT_PROMPT references "<skill> SystemMessage" —
+    this function produces it.
+    """
+    return [
+        SystemMessage(content=f"<skill>\n{skill_content}\n</skill>"),
+        HumanMessage(content=entity_xml),
+    ]
+
+
+def build_runnable_config(input, associate: dict, runtime_id) -> dict:
+    """Compose the LangChain RunnableConfig per AI-407 §13.5 (async harness).
+
+    Two-part contract from §13.2:
+      - LangSmith `metadata.thread_id` = correlation_id (UI grouping by lineage —
+        async cascades show as one thread, real-time sessions show as one thread,
+        cross-channel chains show as one thread).
+      - LangGraph `configurable.thread_id` = derive_checkpointer_thread_id(ctx)
+        (checkpointer persistence key — per-message isolation for cascades, or
+        per-Interaction continuity for handoff cases).
+
+    Field-name adapter: AgentExecutionInput uses `entity_type` / `entity_id`
+    (the §13 work_context's `target_entity_type` / `target_entity_id`).
+    """
+    from types import SimpleNamespace
+
+    work_ctx = SimpleNamespace(
+        is_real_time_session=False,  # async harness — by definition
+        interaction_id=None,
+        target_entity_type=input.entity_type,
+        target_entity_id=input.entity_id,
+        message_id=input.message_id,
+    )
+    checkpointer_thread_id = derive_checkpointer_thread_id(work_ctx)
+
+    associate_name = associate.get("name")
+    associate_id = associate.get("_id") or input.associate_id
+
+    return {
+        "configurable": {"thread_id": str(checkpointer_thread_id)},
+        "metadata": {
+            "thread_id": input.correlation_id,  # LangSmith UI grouping
+            "correlation_id": input.correlation_id,
+            "message_id": str(input.message_id),
+            "interaction_id": (
+                str(input.entity_id)
+                if input.entity_type == "Interaction"
+                else None
+            ),
+            "associate_id": str(associate_id),
+            "associate_name": associate_name,
+            "entity_type": input.entity_type,
+            "entity_id": str(input.entity_id),
+            "runtime_id": str(runtime_id),
+        },
+        "tags": [
+            f"associate:{associate_name or 'unknown'}",
+            "channel:async",
+            f"runtime:{runtime_id}",
+        ],
+        "run_name": (
+            f"{associate_name or 'agent'} → {input.entity_type} "
+            f"{str(input.entity_id)[:8]}"
+        ),
+    }
 
 
 def _load_message_context(entity_type: str, entity_id: str, associate: dict) -> dict:
@@ -644,9 +775,17 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
         # build_system_prompt directive — no filesystem SKILL.md writes here.
         activity_id = f"act-{input.message_id}"
 
+        # AI-407 §15.4: MongoDBSaver checkpointer (durable async state for
+        # human-in-the-loop pause/resume). Falls back to MemorySaver if
+        # MongoDB unavailable so the activity never blocks on missing infra.
+        checkpointer = await _get_or_init_checkpointer()
+        if checkpointer is None:
+            checkpointer = MemorySaver()
+
         agent = build_agent(
             associate=associate,
             llm_config=llm_config,
+            checkpointer=checkpointer,
             activity_id=activity_id,
         )
 
@@ -667,39 +806,26 @@ async def process_with_associate(input: AgentExecutionInput) -> AgentExecutionRe
                 _heartbeat_with_status_check("agent_running")
             )
 
-            context_str = _build_context_with_skills(context, input.entity_type, associate)
+            # AI-407 Phase 4: compose <skill> as SystemMessage + entity as HumanMessage
+            # (replaces the Phase 3 single-HumanMessage with <context><skill>...</context>
+            # composition via _build_context_with_skills). The agent's Phase-4
+            # DEFAULT_PROMPT references "<skill> SystemMessage" + "<entity> reference".
+            skill_xml = _build_skill_section_xml(associate)
+            entity_xml = _format_entity_xml(context, input.entity_type)
+            initial_messages = compose_initial_messages(skill_xml, entity_xml)
+
+            # AI-407 §13.5: build_runnable_config encapsulates the thread_id rule
+            # (configurable = derived per §13.3; metadata.thread_id = correlation_id)
+            # plus all LangSmith metadata. Per-invocation overrides (run_id,
+            # recursion_limit, callbacks) are added on top.
+            runnable_config = build_runnable_config(input, associate, runtime_id)
+            runnable_config["run_id"] = _langsmith_run_id
+            runnable_config["recursion_limit"] = 200
+            runnable_config["callbacks"] = [_run_collector]
 
             result = await agent.ainvoke(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": f"Process this work:\n\n{context_str}",
-                        }
-                    ],
-                },
-                config={
-                    "run_id": _langsmith_run_id,
-                    "recursion_limit": 200,
-                    "callbacks": [_run_collector],
-                    "configurable": {"thread_id": str(input.message_id)},
-                    "metadata": {
-                        "associate_id": str(input.associate_id),
-                        "associate_name": associate.get("name"),
-                        "message_id": str(input.message_id),
-                        "entity_type": input.entity_type,
-                        "entity_id": str(input.entity_id),
-                        "runtime_id": str(runtime_id),
-                        "correlation_id": input.correlation_id,
-                        "thread_id": input.correlation_id,
-                    },
-                    "tags": [
-                        f"associate:{associate.get('name', 'unknown')}",
-                        f"entity_type:{input.entity_type}",
-                        f"runtime:{RUNTIME_ID}",
-                    ],
-                    "run_name": f"{associate.get('name', 'agent')} → {input.entity_type} {str(input.entity_id)[:8]}",
-                },
+                {"messages": initial_messages},
+                config=runnable_config,
             )
         finally:
             if heartbeat_task:

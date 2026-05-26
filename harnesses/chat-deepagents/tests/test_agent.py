@@ -1,17 +1,16 @@
-"""Unit tests for chat-deepagents agent system-prompt construction.
+"""Unit tests for chat-deepagents agent system-prompt construction (Phase 4).
 
-Mirrors `harnesses/async-deepagents/tests/test_agent.py`. Pins the contract
-that `build_system_prompt(associate)`:
-- returns DEFAULT_PROMPT when associate has no custom prompt and no skills
-- honors `associate.prompt` as the base when set (operator override)
-- appends the OPERATING_SKILL_SECTION suffix when `associate.skills` is non-empty,
-  with one `execute('indemn skill get <ref>')` line per skill
-- pluralizes the section header for multi-skill associates
-- omits the suffix entirely for empty/missing skills lists
+UPDATED for AI-407 Phase 4 (§15.5):
+  - DEFAULT_PROMPT is the §15.5 chat locked text (SystemMessage skill framing)
+  - OPERATING_SKILL_SECTION REMOVED — operating skill arrives as <skill>
+    SystemMessage at session start, composed by ChatSession.compose_initial_messages
+    in Task 2.9, persisted via MongoDB checkpointer
+  - build_system_prompt simplifies to: associate.prompt override OR DEFAULT_PROMPT.
+    No per-skill suffix appending.
 
-The agent reads its operating + entity skills at runtime via the CLI per the
-prompt's procedure — no filesystem SKILL.md writes. These tests pin the shape
-of the directive that drives that behavior.
+The Phase-4-specific shape pins (SystemMessage references, deployment_context,
+"Read your <skill>" framing) live in test_phase4_prompt.py — this file pins
+the smaller build_system_prompt contract (prompt resolution).
 """
 
 import sys
@@ -21,9 +20,7 @@ from unittest.mock import MagicMock
 # Make the harness package importable as `agent`.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Stub deepagents + langchain + harness_common — agent.py imports them at module
-# load time, but the functions under test (`build_system_prompt`) are pure string
-# manipulation. Mock the deps so the test runs without the harness's runtime venv.
+# Stub deepagents + langchain + harness_common.
 for mod in [
     "deepagents",
     "harness_common",
@@ -33,48 +30,39 @@ for mod in [
 ]:
     sys.modules.setdefault(mod, MagicMock())
 
-from agent import (  # noqa: E402
-    DEFAULT_PROMPT,
-    OPERATING_SKILL_SECTION,
-    build_system_prompt,
-)
+from agent import DEFAULT_PROMPT, build_system_prompt  # noqa: E402
 
 
 def test_no_skills_returns_default_prompt():
+    """No associate.prompt, no skills → DEFAULT_PROMPT verbatim."""
     associate = {"name": "OS Assistant"}
     assert build_system_prompt(associate) == DEFAULT_PROMPT
 
 
 def test_empty_skills_list_returns_default_prompt():
+    """Phase 4: empty skills list is a no-op (was no-op in Phase 3 too)."""
     associate = {"name": "OS Assistant", "skills": []}
     assert build_system_prompt(associate) == DEFAULT_PROMPT
 
 
-def test_single_skill_appends_suffix_with_call():
+def test_skills_list_does_NOT_append_suffix():
+    """Phase 4: build_system_prompt no longer appends per-skill execute() lines.
+
+    Operating skill arrives as a <skill> SystemMessage at session start
+    (Task 2.9). The system_prompt only contains DEFAULT_PROMPT (or the operator's
+    override). This pins the Phase-3 → Phase-4 behavior change.
+    """
     associate = {"name": "Voice OS Assistant", "skills": ["log-touchpoint"]}
     result = build_system_prompt(associate)
 
-    assert result.startswith(DEFAULT_PROMPT)
-    assert "## Your Operating Skill\n" in result  # singular header
-    assert "## Your Operating Skills\n" not in result
-    assert "execute('indemn skill get log-touchpoint')" in result
-    assert "operating instructions" in result.lower()
-
-
-def test_multiple_skills_pluralized_with_all_calls():
-    associate = {
-        "name": "Multi Skiller",
-        "skills": ["log-touchpoint", "draft-email", "summarize-customer"],
-    }
-    result = build_system_prompt(associate)
-
-    assert "## Your Operating Skills\n" in result  # plural header
-    assert "execute('indemn skill get log-touchpoint')" in result
-    assert "execute('indemn skill get draft-email')" in result
-    assert "execute('indemn skill get summarize-customer')" in result
+    # System prompt IS the default — no skill-section suffix
+    assert result == DEFAULT_PROMPT
+    # Specifically: no per-skill execute() directives in the system prompt
+    assert "execute('indemn skill get log-touchpoint')" not in result
 
 
 def test_custom_associate_prompt_honored_as_base():
+    """Operator override via associate.prompt still works (Phase 3 + Phase 4)."""
     custom = "You are a custom assistant. Be specific."
     associate = {
         "name": "Custom",
@@ -83,29 +71,14 @@ def test_custom_associate_prompt_honored_as_base():
     }
     result = build_system_prompt(associate)
 
-    assert result.startswith(custom)
-    # Custom prompt replaces DEFAULT_PROMPT — DEFAULT shouldn't be present
-    assert "You are the Indemn OS Assistant." not in result
-    # Suffix is still appended
-    assert "execute('indemn skill get custom-skill')" in result
+    # Custom prompt is returned verbatim
+    assert result == custom
+    # Phase 4: skills list does NOT append anything
+    assert "execute('indemn skill get custom-skill')" not in result
 
 
 def test_custom_prompt_no_skills_returns_just_custom():
+    """Custom prompt, no skills — return custom verbatim."""
     custom = "You are a custom assistant."
     associate = {"name": "Custom", "prompt": custom}
     assert build_system_prompt(associate) == custom
-
-
-def test_default_prompt_has_ordered_procedure():
-    """DEFAULT_PROMPT must direct: load skills → load entity skills → plan via todo → execute."""
-    assert "1. Load your operating skill" in DEFAULT_PROMPT
-    assert "2. Load entity skill" in DEFAULT_PROMPT
-    assert "3. Use the todo tool to plan" in DEFAULT_PROMPT
-    assert "4. Execute" in DEFAULT_PROMPT
-    # Scratch is allowed; entity data through CLI only
-    assert "write_file is fine for intermediate scratch" in DEFAULT_PROMPT
-
-
-def test_operating_skill_section_says_take_precedence():
-    """Suffix must instruct the agent to follow loaded skill rules over generic guidance."""
-    assert "take precedence" in OPERATING_SKILL_SECTION

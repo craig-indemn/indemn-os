@@ -38,6 +38,7 @@ import threading
 from harness.session import VoiceSession
 from harness_common.cli import indemn
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop
+from langgraph.checkpoint.mongodb import MongoDBSaver
 from livekit import agents
 from livekit.agents import (
     AgentSession,
@@ -50,12 +51,72 @@ from livekit.plugins import (
     deepgram,
     silero,
 )
+from motor.motor_asyncio import AsyncIOMotorClient
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 log = logging.getLogger("voice-deepagents")
+
+
+# AI-407 Task 2.16: MongoDB checkpointer for voice — real-time sessions
+# accumulate state across turns; resume across reconnects (Task 2.35)
+# loads prior state via interaction_id thread (§13.3).
+#
+# Why module-level lazy init + asyncio.Lock (vs chat's Starlette lifespan):
+# LiveKit Agents (`agents.cli.run_app(WorkerOptions(...))`) owns its own
+# event loop and dispatches per-room jobs into it. There's no Starlette
+# app to attach a lifespan to. Module-level cache + asyncio.Lock makes
+# init safe under concurrent room dispatches.
+#
+# The cache uses three states: None (not yet attempted), MongoDBSaver
+# instance (initialized successfully), False (tried + failed; don't retry).
+_checkpointer = None
+_checkpointer_init_lock: asyncio.Lock | None = None
+
+
+async def _get_or_init_checkpointer():
+    """Lazy MongoDBSaver init. Returns None if MONGODB_URI is absent or
+    unreachable — voice falls back to per-turn in-memory state (no resume),
+    matching today's degraded behavior.
+
+    Mirrors chat-deepagents/main.py:_init_checkpointer_at_startup but without
+    the Starlette lifespan dependency (LiveKit Agents owns the event loop
+    and dispatches per-room jobs into it; no lifespan hook available).
+    """
+    global _checkpointer, _checkpointer_init_lock
+    # Lock created lazily so module-import doesn't need an event loop
+    if _checkpointer_init_lock is None:
+        _checkpointer_init_lock = asyncio.Lock()
+    async with _checkpointer_init_lock:
+        # `False` sentinel = "tried + failed; don't keep retrying"
+        if _checkpointer is False:
+            return None
+        if _checkpointer is not None:
+            return _checkpointer
+        mongodb_uri = os.environ.get("MONGODB_URI", "")
+        if not mongodb_uri:
+            log.warning(
+                "MONGODB_URI not set — voice checkpointer disabled (no resume)"
+            )
+            _checkpointer = False
+            return None
+        try:
+            motor_client = AsyncIOMotorClient(mongodb_uri)
+            await motor_client.admin.command("ping")  # verify reachable
+            _checkpointer = MongoDBSaver(
+                motor_client.delegate, db_name="indemn_os_checkpoints"
+            )
+            log.info("Voice MongoDB checkpointer initialized")
+            return _checkpointer
+        except Exception as e:
+            log.warning(
+                "Voice MongoDB checkpointer unavailable: %s — degraded mode",
+                e,
+            )
+            _checkpointer = False
+            return None
 
 
 def _setup_gcp_credentials() -> None:
@@ -87,46 +148,91 @@ def _setup_gcp_credentials() -> None:
     log.info("GCP credentials written to %s", sa_path)
 
 
-# Sole-tenant: one associate per voice runtime. The associate id comes from
-# env so the harness image stays generic and the OS routes voice calls to
-# whichever actor owns this Runtime instance. Async + chat use the same
-# convention (the async harness reads associate from message; the chat
-# harness reads from the WebSocket connect message; voice reads from env).
-def _voice_associate_id() -> str:
-    aid = os.environ.get("VOICE_ASSOCIATE_ID", "")
-    if not aid:
-        # Fallback for local dev — harness still boots but greets that
-        # the associate isn't configured. Real deployments set this.
-        log.warning("VOICE_ASSOCIATE_ID not set — voice will be unconfigured")
-    return aid
+def prewarm(proc) -> None:
+    """Per AI-407 §11.5: eagerly import the deepagents stack so the first
+    room dispatch doesn't pay cold-start cost (~500-1500ms on first turn).
+
+    Called once per LiveKit JobProcess at startup, BEFORE entrypoint
+    fires. The proc argument is the LiveKit JobProcess — we don't need
+    it; the import side-effect is the warmup.
+
+    Loads:
+    - deepagents (drags in langchain, langgraph, anthropic SDK, etc.)
+    - langchain_google_vertexai (the Gemini provider — heavy gRPC stack)
+    - The harness's own session + LLM adapter modules so the per-room
+      `from harness.session import VoiceSession` import in entrypoint
+      is cached.
+
+    Side-effect: subsequent room dispatches see warm caches — first-turn
+    latency drops by the amortized startup cost across N rooms.
+
+    Safe by design: idempotent (Python imports cache by module name);
+    no I/O; no network calls. Errors are logged + swallowed — pre-warm
+    failure shouldn't crash the worker (entrypoint will redo the
+    imports on its own if needed).
+    """
+    log.info("Pre-warming voice worker (eager imports)")
+    try:
+        import deepagents  # noqa: F401 — load langchain/langgraph
+        import langchain_google_vertexai  # noqa: F401 — Gemini gRPC stack
+        from harness.llm_adapter import DeepagentsLLM  # noqa: F401
+        from harness.session import VoiceSession  # noqa: F401
+        log.info("Voice worker pre-warmed")
+    except Exception as e:
+        # Pre-warm failure is non-fatal — entrypoint will retry the
+        # imports on first dispatch. Log loudly so the gap is visible
+        # in Railway logs + OTEL spans.
+        log.warning("Pre-warm failed (continuing without): %s", e)
 
 
 async def entrypoint(ctx: JobContext) -> None:
     """LiveKit per-room job entrypoint.
 
-    Called once per room a user joins. Constructs a VoiceSession (which
-    creates Interaction + Attention + builds the deepagents agent), then
-    plugs the deepagents-backed LLM into a LiveKit AgentSession with
-    Deepgram STT + Cartesia TTS + Silero VAD. Joins the room, greets the
-    user, runs the voice loop until the room closes.
+    Called once per room a user joins. Per AI-407 §10.3.2: the voice frontdoor
+    creates the Interaction + LiveKit room (with metadata) at /sessions time;
+    the worker reads deployment_id + dynamic_params + interaction_id +
+    correlation_id from room.metadata, loads the Deployment to derive the
+    associate, opens Attention, builds the deepagents agent, then plugs the
+    deepagents-backed LLM into a LiveKit AgentSession with Deepgram STT +
+    Cartesia TTS + Silero VAD. Joins the room, greets the user, runs the
+    voice loop until the room closes.
     """
     log.info("Job started: room=%s", ctx.room.name)
 
-    associate_id = _voice_associate_id()
+    # AI-407 §10.3.2: parse the frontdoor-supplied context out of the
+    # AgentDispatch metadata (ctx.job.metadata). The frontdoor sets the
+    # SAME JSON payload on both room.metadata AND dispatch metadata, but
+    # ctx.room.metadata is only populated after ctx.connect() syncs room
+    # state from the LiveKit server — by then it's too late to short-circuit
+    # an invalid session. ctx.job.metadata arrives with the dispatch and is
+    # readable immediately. NO auth tokens here (the dispatch metadata is
+    # also visible to participants per LiveKit protocol; worker auths via
+    # its own INDEMN_SERVICE_TOKEN env var).
+    try:
+        meta = VoiceSession.parse_room_metadata(ctx.job)
+    except ValueError as e:
+        log.error("Cannot start voice session: %s", e)
+        return
+
     auth_token = os.environ.get("INDEMN_SERVICE_TOKEN", "")
 
-    # OS-side session lifecycle: load config, create Interaction + Attention,
-    # build the deepagents agent, wrap it in DeepagentsLLM.
+    # OS-side session lifecycle: load Deployment (derive associate from it),
+    # load Runtime + LLM config, attach to existing Interaction (already
+    # created by frontdoor), open Attention, build agent, wrap in DeepagentsLLM.
+    # MongoDB checkpointer — keyed by interaction_id per §13.3. Lazy init at
+    # first call (module-level cache shared across rooms). Returns None if
+    # MONGODB_URI is unset or Mongo is unreachable (degraded mode — no resume).
+    checkpointer = await _get_or_init_checkpointer()
+
     voice_session = VoiceSession(
-        associate_id=associate_id,
+        deployment_id=meta["deployment_id"],
+        interaction_id=meta["interaction_id"],
+        dynamic_params=meta["dynamic_params"],
+        correlation_id=meta["correlation_id"],
         auth_token=auth_token,
-        # Checkpointer is per-runtime concern; voice uses the in-memory
-        # default for now. MongoDB checkpointer can be wired later
-        # alongside chat-deepagents (commit `7281b83` follow-up).
-        checkpointer=None,
+        checkpointer=checkpointer,
     )
-    if associate_id:
-        await voice_session.start()
+    await voice_session.start()
 
     # STT — Deepgram, matching voice-livekit (Indemn's customer voice product).
     stt_instance = deepgram.STT(
@@ -174,12 +280,17 @@ async def entrypoint(ctx: JobContext) -> None:
 
     await agent_session.start(room=ctx.room, agent=bare_agent)
 
-    # Greet the user. The deepagents agent will load its skill on the
-    # first user turn — this opener just confirms the line is live.
-    await agent_session.say(
-        "Hi, this is your Indemn OS assistant. What can I help you with?",
-        allow_interruptions=False,
+    # Greet the user via TTS (literal text from Deployment.greeting — not an
+    # LLM call). After playback completes, persist the greeting as an AIMessage
+    # to the agent's checkpointer state so resumed sessions don't re-greet
+    # (AI-407 §17.2.22). Fall back to a generic greeting if Deployment.greeting
+    # is unset (defensive — Deployment is operator-configured).
+    greeting = (
+        voice_session.greeting
+        or "Hi, this is your Indemn OS assistant. What can I help you with?"
     )
+    await agent_session.say(greeting, allow_interruptions=False)
+    await voice_session.persist_greeting_to_state(greeting)
 
     # Hold the entrypoint open until the room disconnects. AgentSession
     # runs the voice loop in the background; we just need to wait.
@@ -259,6 +370,7 @@ if __name__ == "__main__":
     agents.cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
             agent_name=agent_name,
         )
     )

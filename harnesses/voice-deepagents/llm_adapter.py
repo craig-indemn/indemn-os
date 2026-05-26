@@ -95,17 +95,40 @@ def _livekit_chat_ctx_to_langchain(chat_ctx: ChatContext) -> list:
     return messages
 
 
+def _format_event(event: dict) -> str:
+    """Render an entity-change event as one bulleted line for the agent.
+
+    Format: `- {event_type} id={entity_id} company={X} actor={Y} summary={Z}`
+
+    Per AI-407 Task 2.21: voice uses a structured per-event line (vs chat's
+    semicolon-joined one-line summary) to surface more context for the
+    voice agent's mid-conversation awareness — company / actor / summary
+    fields help the agent connect the event to the conversation in
+    progress without making an extra CLI call to look up details.
+    """
+    parts = [event.get("event_type", "?")]
+    if "entity_id" in event:
+        parts.append(f"id={event['entity_id']}")
+    for key in ("company", "actor", "summary"):
+        if key in event:
+            parts.append(f"{key}={event[key]}")
+    return "- " + " ".join(parts)
+
+
 def _drain_event_queue(event_queue: list | None) -> str | None:
     """Drain pending entity-change events from the events-stream queue.
 
-    Returns a one-line system message summarizing the events (suitable for
-    prepending to the agent's input messages), or None if the queue is empty.
+    Returns a <entity_events>...</entity_events>-wrapped SystemMessage content
+    string suitable for prepending to the agent's input messages, or None
+    if the queue is empty.
 
-    Mirrors the chat-deepagents pattern in `ChatSession.handle_message`:
-    on each user turn, drain queued events and inject them as a system
-    message so the agent has mid-conversation awareness of state changes
-    (a supervisor updated the Interaction, a related Touchpoint arrived,
-    a related Email got classified, etc.).
+    Per AI-407 Task 2.21: voice uses the `<entity_events>` XML wrapper to
+    align with `<skill>` + `<deployment_context>` SystemMessage conventions
+    so the agent's DEFAULT_PROMPT can guide it uniformly: "read your
+    SystemMessages before responding."
+
+    Mirrors chat-deepagents' `handle_message` drain semantics (same mid-
+    conversation awareness pattern) with voice-specific format choices.
 
     Mutates the queue: pops everything currently in it. Safe across
     concurrent appends from the events-stream subprocess thread because
@@ -115,13 +138,14 @@ def _drain_event_queue(event_queue: list | None) -> str | None:
         return None
     events = list(event_queue)
     event_queue.clear()
-    summaries = []
-    for ev in events:
-        entity_type = ev.get("entity_type", "unknown")
-        entity_id = ev.get("entity_id", "unknown")
-        event_type = ev.get("event_type", "change")
-        summaries.append(f"{entity_type}/{entity_id}: {event_type}")
-    return "[System events since last turn: " + "; ".join(summaries) + "]"
+    event_lines = [_format_event(e) for e in events]
+    event_summary = "\n".join(event_lines)
+    return (
+        "<entity_events>\n"
+        "The following entity changes happened since the last turn:\n"
+        f"{event_summary}\n"
+        "</entity_events>"
+    )
 
 
 def _extract_final_assistant_text(agent_result: dict) -> str:
@@ -168,6 +192,19 @@ class DeepagentsLLMStream(LLMStream):
             log.warning("DeepagentsLLMStream._run: no messages in chat_ctx; skipping")
             return
 
+        # AI-407 Phase 4: prepend initial <skill> + <deployment_context>
+        # SystemMessages on FIRST turn (set by VoiceSession.start() in Task 2.17;
+        # consumed + cleared here). Persists in checkpointer state via
+        # add_messages reducer.
+        initial_msgs = getattr(self._llm, "_initial_systemmessages", None)
+        if initial_msgs:
+            messages = list(initial_msgs) + messages
+            self._llm._initial_systemmessages = None
+            log.info(
+                "DeepagentsLLM: prepended %d initial SystemMessages",
+                len(initial_msgs),
+            )
+
         # Mid-conversation awareness: drain entity-change events that arrived
         # while the agent was idle and prepend them as a SystemMessage so the
         # agent knows the world has moved while the user was talking.
@@ -183,58 +220,102 @@ class DeepagentsLLMStream(LLMStream):
             type(messages[-1]).__name__,
         )
 
-        # Build RunnableConfig with checkpointer thread_id + LangSmith metadata.
-        # Mirrors `harnesses/async-deepagents/main.py` so traces appear under
-        # the same `indemn-os-associates` LangSmith project, queryable by
-        # associate_id / entity_id / runtime_id (per CLAUDE.md § 8 debugging
-        # recipe). Voice's `entity_type` is always "Interaction" and the
-        # entity_id is the Interaction.id (== thread_id here).
-        associate_name = associate.get("name") or "Voice Agent"
-        config: dict = {}
-        if thread_id:
-            config["configurable"] = {"thread_id": thread_id}
-        config["metadata"] = {
-            "associate_id": str(associate.get("_id", "")),
-            "associate_name": associate_name,
-            "entity_type": "Interaction",
-            "entity_id": str(thread_id) if thread_id else "",
-            "runtime_id": str(runtime_id) if runtime_id else "",
-        }
-        config["tags"] = [
-            f"associate:{associate_name}",
-            "entity_type:Interaction",
-            f"runtime:{runtime_id}" if runtime_id else "runtime:unknown",
-            "channel:voice",
-        ]
-        config["run_name"] = (
-            f"{associate_name} → Interaction {str(thread_id)[:8] if thread_id else '?'}"
-        )
+        # AI-407 §13.5 voice: build RunnableConfig via VoiceSession.build_runnable_config
+        # — configurable.thread_id = interaction_id (state across turns);
+        # metadata.thread_id = correlation_id (LangSmith UI grouping); full
+        # §13 metadata block + tags + run_name. Replaces the inline config
+        # build that was missing metadata.thread_id = correlation_id (§13.5
+        # called out this gap explicitly).
+        correlation_id = getattr(self._llm, "_correlation_id", None)
+        deployment_id = getattr(self._llm, "_deployment_id", None)
+        if thread_id and correlation_id:
+            # Local import to avoid circular: session.py imports llm_adapter
+            from harness.session import VoiceSession
 
+            config = VoiceSession.build_runnable_config(
+                interaction_id=thread_id,
+                correlation_id=correlation_id,
+                associate=associate,
+                runtime_id=str(runtime_id) if runtime_id else "",
+                deployment_id=deployment_id,
+            )
+        else:
+            # Local-dev fallback (no correlation_id / interaction_id wired in) —
+            # preserve minimal LangSmith trace metadata
+            associate_name = associate.get("name") or "Voice Agent"
+            config = {"metadata": {"associate_name": associate_name}}
+            if thread_id:
+                config["configurable"] = {"thread_id": thread_id}
+
+        # AI-407 §11.4: tap agent.astream_events for token-level TTS streaming.
+        # Replaces agent.ainvoke (wait-for-full-result + emit one ChatChunk).
+        # TTS starts synthesizing as soon as the first chunk arrives — biggest
+        # single voice latency win per §11.4.
+        #
+        # Filter strategy: emit ChatChunks only for on_chat_model_stream events
+        # with non-empty text content AND no tool_call_chunks. Skips:
+        # - on_tool_start/end + on_chain_start/end (no assistant tokens)
+        # - on_chat_model_start/end (lifecycle markers)
+        # - chunks with tool_call_chunks (those are tool call args, not user-
+        #   spoken text — TTS'ing them would speak JSON aloud)
+        # - empty-content chunks (Gemini emits these between tool-call setups)
+        chunk_count = 0
         try:
-            result = await agent.ainvoke({"messages": messages}, config=config)
+            async for event in agent.astream_events(
+                {"messages": messages}, config=config, version="v2"
+            ):
+                if event.get("event") != "on_chat_model_stream":
+                    continue
+                model_chunk = event.get("data", {}).get("chunk")
+                if model_chunk is None:
+                    continue
+                # Emit text content if present, even when tool_call_chunks are
+                # also in the chunk — some models emit "I'll look that up..."
+                # in the SAME chunk as the tool call. The text should still
+                # reach TTS. Only skip when content is empty (pure tool call).
+                text = getattr(model_chunk, "content", "") or ""
+                if isinstance(text, list):
+                    # Multi-part content — extract text parts only
+                    text = " ".join(
+                        str(p.get("text", "")) if isinstance(p, dict) else str(p)
+                        for p in text
+                    ).strip()
+                if not text:
+                    continue
+
+                self._event_ch.send_nowait(
+                    ChatChunk(
+                        id=f"deepagents-{chunk_count}",
+                        delta=ChoiceDelta(role="assistant", content=text),
+                    )
+                )
+                chunk_count += 1
         except Exception as e:
-            log.exception("DeepagentsLLM agent.ainvoke failed: %s", e)
+            log.exception("DeepagentsLLM agent.astream_events failed: %s", e)
             raise
 
-        text = _extract_final_assistant_text(result)
-        if not text:
+        # Fallback: if the agent ran but never emitted text (Gemini sometimes
+        # produces tool-only responses with empty content — observed in voice
+        # smoke against Sales Assistant), emit a brief acknowledgement so the
+        # user hears SOMETHING. Silence breaks the voice loop — the user
+        # interrupts, the agent gets cancelled mid-tool-call, no progress.
+        if chunk_count == 0:
+            fallback = "One moment."
             log.warning(
-                "DeepagentsLLM: agent returned no final assistant text "
-                "(result keys: %s)",
-                list(result.keys()) if isinstance(result, dict) else "?",
+                "DeepagentsLLM: agent emitted 0 text chunks; falling back to %r",
+                fallback,
             )
-            return
+            self._event_ch.send_nowait(
+                ChatChunk(
+                    id="deepagents-fallback",
+                    delta=ChoiceDelta(role="assistant", content=fallback),
+                )
+            )
+            chunk_count = 1
 
-        log.info("DeepagentsLLM final assistant text: %d chars", len(text))
-
-        # Emit the text as a single ChatChunk. Sentence-boundary chunking
-        # would let TTS start sooner; for v1 we keep it simple — TTS will
-        # see one chunk and start synthesizing immediately.
-        chunk = ChatChunk(
-            id=f"deepagents-{id(result)}",
-            delta=ChoiceDelta(role="assistant", content=text),
+        log.info(
+            "DeepagentsLLM emitted %d streaming ChatChunks", chunk_count
         )
-        self._event_ch.send_nowait(chunk)
 
 
 class DeepagentsLLM(LLM):
@@ -253,9 +334,15 @@ class DeepagentsLLM(LLM):
         event_queue: list | None = None,
         associate: dict | None = None,
         runtime_id: str | None = None,
+        correlation_id: str | None = None,
+        deployment_id: str | None = None,
+        initial_systemmessages: list | None = None,
     ) -> None:
         super().__init__()
         self._agent = agent
+        # thread_id retained for back-compat naming (existing tests pass it);
+        # semantically it's the interaction_id per AI-407 §13.3 (voice is a
+        # real-time session → checkpointer key = interaction_id).
         self._thread_id = thread_id
         # event_queue is shared with VoiceSession._run_events_stream — appended
         # by the events-stream subprocess reader thread, drained here on each
@@ -263,10 +350,19 @@ class DeepagentsLLM(LLM):
         self._event_queue = event_queue
         # associate + runtime_id power LangSmith metadata + tags so voice
         # traces appear in the indemn-os-associates project queryable by
-        # associate_id / entity_id / runtime_id (CLAUDE.md § 8). Both
-        # optional — falls back to bare-minimum config if missing.
+        # associate_id / entity_id / runtime_id (CLAUDE.md § 8).
         self._associate = associate
         self._runtime_id = runtime_id
+        # AI-407 Phase 4 additions:
+        # - correlation_id: §13.5 voice — metadata.thread_id (LangSmith UI
+        #   grouping; cascade lineage). Distinct from thread_id (configurable
+        #   checkpointer key per §13.2).
+        # - deployment_id: §13.5 metadata field (cross-pivot search).
+        # - initial_systemmessages: composed by VoiceSession.start() (Task 2.17);
+        #   prepended to messages on the first agent.ainvoke() call.
+        self._correlation_id = correlation_id
+        self._deployment_id = deployment_id
+        self._initial_systemmessages = initial_systemmessages
 
     @property
     def model(self) -> str:

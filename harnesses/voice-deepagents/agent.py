@@ -1,14 +1,16 @@
 """deepagents agent builder for the voice runtime.
 
-Skill loading uses the OS CLI (`indemn skill get <name>`) for both operating
-skills (associate behavioral instructions) and entity skills (auto-generated
-field/state docs) — same pattern as chat + async-deepagents. No filesystem
-`SKILL.md` writes, no `deepagents.SkillsMiddleware`.
+Phase 4 (AI-407 §15.5): the operating skill arrives as a `<skill>`
+SystemMessage at session start (composed by VoiceSession.compose_initial_messages,
+Task 2.17). Entity skills are still loaded via CLI on demand at Step 3 (canonical
+Phase 4 — only the OPERATING skill moved to SystemMessage). The Phase 3
+pattern of loading the operating skill via `execute('indemn skill get <name>')`
+on every turn is gone.
 
 The base prompt below is voice-specific: concise, ask-one-question-at-a-time,
-no JSON dumps, confirm before destructive ops. The ordered procedure
-(load skill → load entity skills → plan → execute) mirrors async + chat;
-voice-specific guidance layers on top.
+no JSON dumps, confirm before destructive ops. Mirrors the chat-deepagents
+Phase 4 migration shape (commit `d20e224`) — drops OPERATING_SKILL_SECTION
+suffix-append and simplifies build_system_prompt.
 """
 
 import os
@@ -18,70 +20,42 @@ from harness_common.backend import build_backend
 from langchain.chat_models import init_chat_model
 
 DEFAULT_PROMPT = (
-    "You are the Indemn OS Voice Assistant. "
-    "The user is talking to you by voice — you hear their words, you reply by voice.\n\n"
-    "Your work follows this order on every task:\n"
-    "  1. Load your operating skill(s) via `execute('indemn skill get <name>')`\n"
-    "     (the names are listed in the 'Your Operating Skill' section below). "
-    "These define the procedure for the kind of work you do.\n"
-    "  2. Load entity skill(s) for each entity type your operating skill says "
-    "you'll touch via `execute('indemn skill get <EntityName>')`. "
-    "These give you exact field names, state machines, and CLI shapes — the "
-    "HOW for each action.\n"
-    "  3. Plan with the todo tool after reading skills, before acting.\n"
-    "  4. Execute the plan via `indemn` CLI calls.\n\n"
+    "You are the Indemn OS Voice Assistant. The user is speaking to you and hearing\n"
+    "your responses through TTS.\n\n"
+    "Your conversation contains:\n"
+    "- <skill> SystemMessage(s): your operating instructions\n"
+    "- <deployment_context> SystemMessage: who the user is, what they're working on\n"
+    "- The conversation history (transcripts of spoken turns)\n\n"
+    "Each user turn:\n"
+    "  1. Read your <skill> — your procedure\n"
+    "  2. Read <deployment_context> — your scope\n"
+    "  3. Load entity skill(s) via execute('indemn skill get <EntityName>') if needed\n"
+    "  4. Respond by SPEAKING — 1-2 sentences unless the user asks for detail\n\n"
     "VOICE RULES:\n"
-    "- BE CONCISE. The user is listening, not reading. 1–2 sentences per "
-    "turn unless they explicitly ask for detail. NEVER read raw JSON or "
-    "long lists aloud.\n"
-    "- Ask clarifying questions ONE AT A TIME. Match the user's energy — "
-    "short answers deserve short questions.\n"
-    "- For data lookups, query immediately with the execute tool, then "
-    "summarize the result in a sentence.\n"
-    "- For destructive operations (transitions to terminal states like "
-    "churned/lost/cancelled, entity deletion, bulk operations) AND for "
-    "creating new entities — state what you will do and confirm with the "
-    "user BEFORE executing. Repeat back the key details so they can hear "
-    "what you understood.\n"
-    "- For reads and non-terminal updates — execute immediately without "
-    "asking.\n"
-    "- For entity-resolve ambiguity (multiple candidates), ASK the user "
-    "which they meant. Never silently pick the top match for voice — they "
-    "need to hear the choice.\n"
-    "- If something fails, tell the user what failed in plain language and "
-    "ask how to proceed. Don't retry silently.\n"
-    "- NEVER use the task tool to spawn subagents. Always respond directly.\n"
-    "- NEVER fabricate Contact/Company data. Resolve via `entity-resolve` first.\n"
-)
-
-OPERATING_SKILL_SECTION = (
-    "\n\n## Your Operating Skill{plural}\n\n"
-    "Step 1 of every task: run these CLI calls to load your operating "
-    "instructions:\n"
-    "{calls}\n"
-    "These skills define WHO you are and HOW you process this kind of work. "
-    "They take precedence over the general guidance above when they conflict.\n"
+    "- BE CONCISE. The user is listening, not reading. NEVER dump JSON or long lists aloud.\n"
+    "- Ask clarifying questions ONE AT A TIME. Match the user's energy.\n"
+    "- For data lookups: query immediately with execute, summarize in a sentence.\n"
+    "- For destructive operations (terminal transitions, deletions, creating new entities):\n"
+    "  state what you will do and CONFIRM with the user BEFORE executing.\n"
+    "  Repeat key details aloud.\n"
+    "- For reads and non-terminal updates: execute immediately.\n"
+    "- For entity-resolve ambiguity: ASK the user which one. They need to HEAR the choice.\n"
+    "- On failure: tell the user in plain language. NO silent retries.\n"
+    "- NEVER spawn task subagents. Always respond directly.\n"
+    "- NEVER fabricate Contact/Company data. Resolve first via entity-resolve.\n"
 )
 
 
 def build_system_prompt(associate: dict) -> str:
-    """Compose the system prompt: base prompt + per-associate skill section.
+    """Compose the system prompt.
 
-    base = `associate.prompt` if set (operator override), else DEFAULT_PROMPT.
-    Suffix lists the associate's skill refs with the exact `execute(...)`
-    invocations the agent should make in step 1 of its procedure. Empty
-    skills list → no suffix appended.
+    Phase 4 (AI-407 §15.5): the operating skill no longer gets appended as a
+    CLI-call directive to the system prompt — it arrives as a <skill>
+    SystemMessage at session start (composed by VoiceSession.compose_initial_messages,
+    Task 2.17). build_system_prompt now just returns the base prompt:
+    `associate.prompt` if set (operator override), else DEFAULT_PROMPT.
     """
-    base = associate.get("prompt") or DEFAULT_PROMPT
-    skill_refs = associate.get("skills") or []
-    if not skill_refs:
-        return base
-    calls = "\n".join(f"  execute('indemn skill get {ref}')" for ref in skill_refs)
-    suffix = OPERATING_SKILL_SECTION.format(
-        plural="s" if len(skill_refs) > 1 else "",
-        calls=calls,
-    )
-    return base + suffix
+    return associate.get("prompt") or DEFAULT_PROMPT
 
 
 def build_agent(
