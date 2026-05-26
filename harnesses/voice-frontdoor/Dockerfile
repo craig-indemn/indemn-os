@@ -11,16 +11,11 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uv
 
-# Copy harness_common (shared between voice + chat + async) + the frontdoor package
-COPY harnesses/_base/harness_common /app/harness_common_src
 COPY harnesses/voice-frontdoor/pyproject.toml /app/pyproject.toml
 COPY harnesses/voice-frontdoor/harness /app/harness
 
 # Install deps via uv (no editable; production image)
 RUN uv pip install --system --no-cache .
-
-# Install harness_common from the local copy
-RUN pip install --no-cache-dir /app/harness_common_src
 
 EXPOSE 8080
 
