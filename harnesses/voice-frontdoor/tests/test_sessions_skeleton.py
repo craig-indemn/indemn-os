@@ -49,14 +49,11 @@ def test_sessions_get_not_allowed(client):
     assert response.status_code == 405
 
 
-def test_sessions_skeleton_returns_501(client, valid_jwt):
-    """Once body parse + Deployment load + Origin + JWT (Task 2.28) all
-    pass, the skeleton's downstream-not-implemented branch returns 501.
-
-    Updated with Task 2.28: supplies a valid JWT so the chain reaches
-    501 instead of stopping at 401. Subsequent tasks (2.29 status check,
-    2.30 schema validation, etc.) will require this test to provide
-    additional state on the deployment fixture."""
+def test_sessions_happy_path_returns_200(client, valid_jwt):
+    """Once Task 2.34 wired the full chain end-to-end, the skeleton's
+    happy path returns 200 with the canonical §10.3.1 4-key shape.
+    Renamed from `_returns_501` — the placeholder is gone; the success
+    response is the contract."""
     token = valid_jwt("act_test")
     with patch(
         "harness.sessions._load_deployment",
@@ -70,4 +67,10 @@ def test_sessions_skeleton_returns_501(client, valid_jwt):
                 "Authorization": f"Bearer {token}",
             },
         )
-    assert response.status_code == 501
+    assert response.status_code == 200
+    assert set(response.json().keys()) == {
+        "room_name",
+        "livekit_url",
+        "livekit_token",
+        "interaction_id",
+    }

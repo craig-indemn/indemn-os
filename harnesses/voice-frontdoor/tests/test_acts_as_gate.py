@@ -144,21 +144,32 @@ class TestActsAsGate:
         self, client, jwt_for_actor
     ):
         """JWT IS source of truth. When dynamic_params.actor_id matches
-        JWT.sub, the surfaced effective_actor_id must equal JWT.sub
-        (not the supplied value, even though they're identical). This
-        pins the semantic that code review can verify in one line:
-        `effective_actor_id = authenticated_actor_id`, never derived
-        from dynamic_params.
+        JWT.sub, the effective_actor_id passed to _create_interaction
+        must equal JWT.sub — never derived from dynamic_params, even
+        when they're identical. Pins the semantic that code review can
+        verify in one line: `effective_actor_id = authenticated_actor_id`.
 
-        The placeholder 501 response includes effective_actor_id for
-        verification; Task 2.34's 200 response shape will surface it
-        too (via Interaction.created_by being the JWT's actor)."""
+        Verified via the _create_interaction call args (Task 2.34's
+        200 success shape doesn't surface effective_actor_id; the
+        Interaction record's created_by carries it server-side)."""
         token = jwt_for_actor("act_alice")
         deployment = _stub_deployment_session_actor()
+        captured = []
+
+        async def _capture(deployment, effective_actor_id, dynamic_params):
+            captured.append(effective_actor_id)
+            return {
+                "_id": "int_test",
+                "correlation_id": "cor_test",
+                "channel_type": "voice",
+            }
 
         with patch(
             "harness.sessions._load_deployment",
             new=AsyncMock(return_value=deployment),
+        ), patch(
+            "harness.sessions._create_interaction",
+            new=_capture,
         ):
             response = client.post(
                 "/sessions",
@@ -172,10 +183,9 @@ class TestActsAsGate:
                 },
             )
 
-        # Past the gate. The 501 placeholder surfaces effective_actor_id.
         assert response.status_code != 403
-        body = response.json()
-        assert body.get("effective_actor_id") == "act_alice"
+        # effective_actor_id was JWT.sub, not the supplied value
+        assert captured == ["act_alice"]
 
     def test_associate_self_effective_actor_is_associate_id(
         self, client, jwt_for_actor
@@ -187,10 +197,22 @@ class TestActsAsGate:
         effective_actor_id = Deployment.associate_id."""
         token = jwt_for_actor("anon_visitor_xyz")
         deployment = _stub_deployment_associate_self()
+        captured = []
+
+        async def _capture(deployment, effective_actor_id, dynamic_params):
+            captured.append(effective_actor_id)
+            return {
+                "_id": "int_test",
+                "correlation_id": "cor_test",
+                "channel_type": "voice",
+            }
 
         with patch(
             "harness.sessions._load_deployment",
             new=AsyncMock(return_value=deployment),
+        ), patch(
+            "harness.sessions._create_interaction",
+            new=_capture,
         ):
             response = client.post(
                 "/sessions",
@@ -208,8 +230,7 @@ class TestActsAsGate:
             )
 
         assert response.status_code != 403
-        body = response.json()
-        assert body.get("effective_actor_id") == "act_public_assistant"
+        assert captured == ["act_public_assistant"]
 
     def test_associate_self_ignores_supplied_actor_id(
         self, client, jwt_for_actor
@@ -237,10 +258,22 @@ class TestActsAsGate:
                 },
             },
         }
+        captured = []
+
+        async def _capture(deployment, effective_actor_id, dynamic_params):
+            captured.append(effective_actor_id)
+            return {
+                "_id": "int_test",
+                "correlation_id": "cor_test",
+                "channel_type": "voice",
+            }
 
         with patch(
             "harness.sessions._load_deployment",
             new=AsyncMock(return_value=deployment),
+        ), patch(
+            "harness.sessions._create_interaction",
+            new=_capture,
         ):
             response = client.post(
                 "/sessions",
@@ -255,6 +288,5 @@ class TestActsAsGate:
             )
 
         assert response.status_code != 403
-        body = response.json()
         # NOT the supplied value, NOT the JWT.sub — the associate's id.
-        assert body.get("effective_actor_id") == "act_public_assistant"
+        assert captured == ["act_public_assistant"]

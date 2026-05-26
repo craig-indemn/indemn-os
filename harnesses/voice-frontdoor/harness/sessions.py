@@ -279,6 +279,27 @@ async def _create_lk_room_and_dispatch(
     }
 
 
+async def _mark_interaction_failed(interaction_id: str, reason: str) -> None:
+    """Best-effort cleanup: transition the orphaned Interaction to a
+    failed state when LiveKit dispatch fails after Interaction creation
+    succeeded. Without this, we'd leak Interactions stuck at
+    status=active whose rooms never spawned, polluting analytics +
+    confusing the resume flow.
+
+    Best-effort by design: a failure here is logged but does NOT change
+    the 500 response shape — the client already knows the session
+    failed; the Interaction record is bookkeeping.
+    """
+    api_url = os.environ.get("INDEMN_API_URL", "http://localhost:8000")
+    service_token = os.environ.get("INDEMN_SERVICE_TOKEN", "")
+    url = f"{api_url.rstrip('/')}/api/interactions/{interaction_id}/transition"
+    payload = {"to": "failed", "reason": reason[:500]}
+    headers = {"Authorization": f"Bearer {service_token}"}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+    resp.raise_for_status()
+
+
 async def _create_interaction(
     deployment: dict,
     effective_actor_id: str,
@@ -536,46 +557,83 @@ async def create_session(request: Request) -> JSONResponse:
         # caller is authenticated; the JWT's actor_id is irrelevant.
         effective_actor_id = str(deployment.get("associate_id"))
 
-    # Step 9: Create Interaction record per §10.3.1 step 10.
-    # The Interaction is the durable session anchor — the worker reads
-    # it on dispatch (Tasks 2.15/2.33), entity writes during the session
-    # carry the correlation_id (per §13), the SDK/UI references the
-    # interaction_id for resume (Task 2.35).
-    interaction = await _create_interaction(
-        deployment=deployment,
-        effective_actor_id=effective_actor_id,
-        dynamic_params=dynamic_params,
-    )
+    # Steps 9-10: Interaction creation + LiveKit dispatch are wrapped in
+    # try/except per §10.3.1 status-500 contract. request_id is logged
+    # server-side with the full traceback so operators can grep.
+    # `stage` lets the SDK + ops classify the failure mode immediately
+    # without traceback access.
+    request_id = str(uuid.uuid4())
+
+    try:
+        interaction = await _create_interaction(
+            deployment=deployment,
+            effective_actor_id=effective_actor_id,
+            dynamic_params=dynamic_params,
+        )
+    except Exception:
+        log.exception(
+            "Interaction creation failed (request_id=%s, deployment=%s)",
+            request_id,
+            deployment_id,
+        )
+        return JSONResponse(
+            {
+                "error": "internal",
+                "request_id": request_id,
+                "stage": "interaction",
+            },
+            status_code=500,
+        )
+
     interaction_id = interaction["_id"]
     correlation_id = interaction["correlation_id"]
 
-    # Step 10: Create LiveKit room + AgentDispatch + mint participant
-    # token per §10.3.1 step 10. The handoff to the worker happens via
-    # room.metadata (the worker reads deployment_id from there — Gap A
-    # resolution per §10.6: NO credentials in metadata).
-    lk_result = await _create_lk_room_and_dispatch(
-        deployment_id=deployment_id,
-        interaction_id=interaction_id,
-        dynamic_params=dynamic_params,
-        correlation_id=correlation_id,
-    )
+    try:
+        lk_result = await _create_lk_room_and_dispatch(
+            deployment_id=deployment_id,
+            interaction_id=interaction_id,
+            dynamic_params=dynamic_params,
+            correlation_id=correlation_id,
+        )
+    except Exception as e:
+        log.exception(
+            "LiveKit dispatch failed (request_id=%s, deployment=%s, "
+            "interaction=%s)",
+            request_id,
+            deployment_id,
+            interaction_id,
+        )
+        # Best-effort cleanup: don't leak orphaned `active` Interactions
+        # whose room never spawned. Cleanup failure is logged but does
+        # NOT change the 500 response shape.
+        try:
+            await _mark_interaction_failed(
+                interaction_id, reason=f"LiveKit dispatch failed: {e}"
+            )
+        except Exception:
+            log.exception(
+                "Cleanup of orphaned Interaction %s failed (request_id=%s)",
+                interaction_id,
+                request_id,
+            )
+        return JSONResponse(
+            {
+                "error": "internal",
+                "request_id": request_id,
+                "stage": "livekit",
+            },
+            status_code=500,
+        )
 
-    # Task 2.34 will flip 501 → 200 with the canonical success shape.
-    # Until then, return 501 carrying everything the SDK + worker need
-    # (so Task 2.32.5's handoff integration test can read the room name
-    # / metadata / token from this response).
+    # Success — §10.3.1 contract, exactly 4 fields. No leaked internals
+    # (authenticated_actor_id / effective_actor_id / correlation_id /
+    # validation_warnings stay server-side; the SDK has what it needs).
     return JSONResponse(
         {
-            "error": "not_implemented",
-            "deployment_id": deployment_id,
-            "interaction_id": interaction_id,
-            "correlation_id": correlation_id,
-            "authenticated_actor_id": authenticated_actor_id,
-            "effective_actor_id": effective_actor_id,
-            "validation_warnings": validation_warnings,
             "room_name": lk_result["room_name"],
             "livekit_url": lk_result["livekit_url"],
             "livekit_token": lk_result["livekit_token"],
+            "interaction_id": interaction_id,
         },
-        status_code=501,
+        status_code=200,
     )

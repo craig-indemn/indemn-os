@@ -115,9 +115,12 @@ class TestInteractionCreation:
     def test_response_surfaces_interaction_id(
         self, client, jwt_for_actor
     ):
-        """The 501 placeholder (Task 2.34 will flip to 200) MUST carry
-        interaction_id so the SDK + worker can both reference the same
-        Interaction record."""
+        """The 200 success response carries interaction_id so the SDK +
+        worker can both reference the same Interaction record (the
+        worker reads it from room.metadata; the SDK persists it for
+        the resume flow). correlation_id stays server-side per Task
+        2.34's 4-key shape — the Interaction record carries it, and
+        the worker reads it from room.metadata."""
         token = jwt_for_actor("act_alice")
         deployment = _stub_deployment_session_actor()
         interaction = _interaction_response(
@@ -144,9 +147,9 @@ class TestInteractionCreation:
                 },
             )
 
+        assert response.status_code == 200
         body = response.json()
         assert body.get("interaction_id") == "int_specific_xyz"
-        assert body.get("correlation_id") == "cor_specific_abc"
 
     def test_associate_self_interaction_created_by_is_associate_id(
         self, client, jwt_for_actor
