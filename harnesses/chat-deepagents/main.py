@@ -103,6 +103,37 @@ def get_checkpointer():
 _sessions: dict[int, ChatSession] = {}
 
 
+async def _start_deployment_session(
+    *,
+    websocket: WebSocket,
+    deployment_id: str,
+    dynamic_params: dict,
+    auth_token: str,
+    connect_msg: dict,
+):
+    """Start a Deployment-driven chat session (AI-408 §15.3).
+
+    Full implementation lands in Task 3.2 (Deployment load + status check),
+    Task 3.3 (Origin allowlist), Task 3.4 (JWT validation), Task 3.5 (acts_as
+    gate), Task 3.6 (parameter_schema validation), Task 3.7 (deployment_context
+    SystemMessage with sanitized dynamic_params).
+
+    Task 3.1 ships only the dispatch wiring + this stub so the call-site is
+    testable. The stub returns None + closes the websocket with a clear
+    "not yet implemented" error so the routing branch is exercised end-to-end
+    without leaking a half-built deployment flow.
+    """
+    await websocket.send_json(
+        {
+            "type": "error",
+            "content": "Deployment-driven sessions not yet implemented (AI-408 Tasks 3.2-3.7)",
+            "code": "not_implemented",
+        }
+    )
+    await websocket.close(code=4501)
+    return None
+
+
 async def websocket_handler(websocket: WebSocket):
     """Handle one WebSocket connection — one ChatSession per connection."""
     await websocket.accept()
@@ -117,27 +148,60 @@ async def websocket_handler(websocket: WebSocket):
             await websocket.close()
             return
 
+        # AI-408 Task 3.1: accept deployment_id + dynamic_params additively.
+        # When deployment_id is set, take the Deployment-driven path. Otherwise
+        # the legacy associate_id-only path runs (current OS Base UI flow).
+        deployment_id = connect_msg.get("deployment_id")
         associate_id = connect_msg.get("associate_id", "")
         auth_token = connect_msg.get("auth_token", os.environ.get("INDEMN_SERVICE_TOKEN", ""))
         interaction_id = connect_msg.get("interaction_id")
+        dynamic_params = connect_msg.get("dynamic_params") or {}
 
-        if not associate_id:
-            await websocket.send_json({"type": "error", "content": "associate_id required"})
+        if not isinstance(dynamic_params, dict):
+            await websocket.send_json(
+                {"type": "error", "content": "dynamic_params must be a JSON object"}
+            )
             await websocket.close()
             return
 
-        # Create session with conversation persistence (initialized at startup)
-        session = ChatSession(
-            websocket=websocket,
-            associate_id=associate_id,
-            auth_token=auth_token,
-            checkpointer=get_checkpointer(),
-            interaction_id=interaction_id,
-        )
-        _sessions[id(websocket)] = session
+        if not deployment_id and not associate_id:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "content": (
+                        "Either deployment_id or associate_id required "
+                        "in connect message"
+                    ),
+                }
+            )
+            await websocket.close()
+            return
 
-        # Initialize session (load config, create Interaction + Attention)
-        await session.start()
+        if deployment_id:
+            # New Deployment-driven path — full chain (Deployment load + Origin
+            # + JWT + acts_as + parameter_schema + deployment_context) shipped
+            # in Tasks 3.2-3.7.
+            session = await _start_deployment_session(
+                websocket=websocket,
+                deployment_id=deployment_id,
+                dynamic_params=dynamic_params,
+                auth_token=auth_token,
+                connect_msg=connect_msg,
+            )
+            if session is None:
+                return  # _start_deployment_session sent its own error + close
+        else:
+            # Legacy associate_id-only path — current OS Base UI flow.
+            session = ChatSession(
+                websocket=websocket,
+                associate_id=associate_id,
+                auth_token=auth_token,
+                checkpointer=get_checkpointer(),
+                interaction_id=interaction_id,
+            )
+            await session.start()
+
+        _sessions[id(websocket)] = session
         await websocket.send_json({"type": "connected", "interaction_id": session.interaction_id})
 
         # Message loop
