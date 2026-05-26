@@ -171,7 +171,13 @@ def expired_jwt(_test_private_key):
 def valid_deployment():
     """Deployment with acts_as=session_actor + parameter_schema requiring
     actor_id. Exercises the JWT-validation path (Task 2.28 + 2.31).
-    Includes allowed_origins so Origin check passes."""
+    Includes allowed_origins so Origin check passes.
+
+    parameter_schema enumerates BOTH dynamic (actor_id, current_route)
+    AND static (role, tenant) fields per §5.4 — `properties` is the union
+    of everything in <deployment_context>. additionalProperties: false
+    requires the schema to be exhaustive over the merged set.
+    """
     return {
         "_id": "dep_valid",
         "name": "Valid Test Deployment",
@@ -190,9 +196,12 @@ def valid_deployment():
                     "pattern": "^[0-9a-zA-Z_]+$",
                 },
                 "current_route": {"type": "string"},
+                "role": {"type": "string", "enum": ["sales", "support"]},
+                "tenant": {"type": "string"},
             },
             "additionalProperties": False,
         },
+        "parameter_schema_validation_mode": "strict",
         "static_parameters": {"role": "sales", "tenant": "indemn-internal"},
         "greeting": "Hi, this is your test assistant.",
         "resumption_config": {"ttl_seconds": 86400, "kill_on_resume": True},

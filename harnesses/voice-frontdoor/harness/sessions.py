@@ -41,7 +41,9 @@ import logging
 import os
 
 import httpx
+import jsonschema
 import jwt as pyjwt
+from jsonschema.validators import Draft202012Validator
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -114,6 +116,59 @@ async def _load_deployment(deployment_id: str) -> dict:
         raise DeploymentNotFound(deployment_id)
     resp.raise_for_status()
     return resp.json()
+
+
+def _validate_parameters(
+    deployment: dict, dynamic_params: dict
+) -> tuple[dict, list[str]]:
+    """Validate dynamic_params against Deployment.parameter_schema per §5.4.
+
+    Validation is on the MERGED static+dynamic set (per §5.4 "the schema
+    describes the union"). Returns (merged_context, validation_warnings):
+    - merged_context: static_parameters + dynamic_params (dynamic wins on
+      key collision)
+    - validation_warnings: list of jsonschema error messages, empty if
+      validation passed
+
+    Caller decides what to do with non-empty warnings based on
+    `Deployment.parameter_schema_validation_mode` (`strict` → 400;
+    `forgiving` → log + proceed).
+
+    Raises jsonschema.SchemaError if the schema itself is malformed —
+    caller catches + returns 400.
+    """
+    static_parameters = deployment.get("static_parameters") or {}
+    merged = {**static_parameters, **(dynamic_params or {})}
+
+    schema = deployment.get("parameter_schema")
+    if not schema:
+        # No schema = no validation per §5.2 (parameter_schema is optional
+        # on Deployments with no dynamic params).
+        return merged, []
+
+    # Check the schema itself is valid before using it. Cheap defense in
+    # depth — kernel save_tracked validates this at Deployment-creation
+    # time (Task 1.9 + Track 13e), but legacy records or out-of-band
+    # writes could land malformed schemas; we'd rather 400 here than 500.
+    Draft202012Validator.check_schema(schema)
+
+    validator = Draft202012Validator(schema)
+    errors = sorted(validator.iter_errors(merged), key=lambda e: e.path)
+    warnings = [_format_jsonschema_error(e) for e in errors]
+    return merged, warnings
+
+
+def _format_jsonschema_error(error: jsonschema.ValidationError) -> str:
+    """Render a single ValidationError as `<path>: <message>` so the SDK
+    can show the user which field failed. Includes the absolute path
+    when present (e.g., `actor_id: 'has-hyphens' does not match pattern ...`)
+    and falls back to the message alone for top-level errors (e.g.,
+    `'actor_id' is a required property`).
+    """
+    if error.absolute_path:
+        path = ".".join(str(p) for p in error.absolute_path)
+        return f"{path}: {error.message}"
+    return error.message
 
 
 def _origin_allowed(origin: str | None, allowed_origins: list[str]) -> bool:
@@ -242,14 +297,64 @@ async def create_session(request: Request) -> JSONResponse:
             status_code=409,
         )
 
-    # Subsequent validation chain to be filled in Tasks 2.30–2.36.
-    # Until then, return 501 (parsing + origin + JWT + status passed but
-    # parameter_schema/acts_as/etc not wired).
+    # Step 7: dynamic_params validation per §10.3.1 step 6 + §5.4.
+    # Validate the MERGED static+dynamic set against parameter_schema
+    # (JSON Schema Draft 2020-12). Strict mode (default for session_actor)
+    # rejects with 400; forgiving mode (default for associate_self) logs +
+    # proceeds with warnings attached to the 200 response (Task 2.34).
+    dynamic_params = body.get("dynamic_params") or {}
+    if not isinstance(dynamic_params, dict):
+        return _validation_error(
+            "Field 'dynamic_params' must be a JSON object"
+        )
+    try:
+        merged_context, validation_warnings = _validate_parameters(
+            deployment, dynamic_params
+        )
+    except jsonschema.SchemaError as e:
+        # Malformed parameter_schema on the Deployment record itself.
+        # Save-time validation (Task 1.9 + Track 13e) should prevent
+        # this, but legacy records or out-of-band writes could land bad
+        # schemas. Surface as 400 with the schema-error path rather than
+        # 500-crashing.
+        log.warning(
+            "Deployment %s has malformed parameter_schema: %s",
+            deployment_id,
+            e,
+        )
+        return _validation_error(
+            f"Deployment parameter_schema is invalid: {e.message}"
+        )
+
+    validation_mode = (
+        deployment.get("parameter_schema_validation_mode") or "strict"
+    )
+    if validation_warnings:
+        if validation_mode == "strict":
+            log.info(
+                "Rejecting session for deployment %s (strict schema "
+                "validation failed: %s)",
+                deployment_id,
+                validation_warnings,
+            )
+            return _validation_error("; ".join(validation_warnings))
+        # forgiving — log + proceed; warnings surfaced in Task 2.34's
+        # success response shape
+        log.info(
+            "Forgiving-mode validation warnings on deployment %s: %s",
+            deployment_id,
+            validation_warnings,
+        )
+
+    # Subsequent validation chain to be filled in Tasks 2.31–2.36.
+    # Until then, return 501 (parsing + origin + JWT + status + params
+    # passed but acts_as/Interaction/LiveKit not wired).
     return JSONResponse(
         {
             "error": "not_implemented",
             "deployment_id": deployment_id,
             "authenticated_actor_id": authenticated_actor_id,
+            "validation_warnings": validation_warnings,
         },
         status_code=501,
     )
