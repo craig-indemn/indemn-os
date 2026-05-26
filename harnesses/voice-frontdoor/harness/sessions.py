@@ -172,6 +172,113 @@ def _format_jsonschema_error(error: jsonschema.ValidationError) -> str:
     return error.message
 
 
+async def _create_lk_room_and_dispatch(
+    deployment_id: str,
+    interaction_id: str,
+    dynamic_params: dict,
+    correlation_id: str,
+    *,
+    agent_name: str = "voice-deepagents",
+) -> dict:
+    """Create the LiveKit room + dispatch the worker + mint participant token.
+
+    Per §10.3.1:
+    - Room name: `dep-{deployment_id}-int-{interaction_id}` (deterministic
+      so the worker can derive interaction_id from the room name as a
+      backup if metadata is corrupted; also makes resume + kill-prior
+      mechanics in Task 2.35 simple).
+    - Room metadata: JSON-serialized `{deployment_id, interaction_id,
+      dynamic_params, correlation_id}`. **No credentials.** Per §10.6 +
+      §10.7 — room metadata is visible to every participant per
+      LiveKit's protocol; tokens or service secrets here would leak.
+    - empty_timeout=1800 (30 min) auto-closes the room if no
+      participants connect.
+    - max-duration 4hr (design §10.3.1) — NOT enforced at the SDK level
+      because livekit-api v1.x CreateRoomRequest has no max_duration
+      field (verified via `[f.name for f in CreateRoomRequest.DESCRIPTOR
+      .fields]`). Operational eviction or worker-level wall-clock check
+      is the v1 mechanism; reassess when SDK adds the field.
+    - max_participants=2 (one user + the agent worker).
+    - AgentDispatch via `agent_dispatch.create_dispatch(...)` —
+      `create_dispatch` is the SDK method name (NOT `create_agent_dispatch`
+      as some docs read; verified against installed
+      `livekit.api.agent_dispatch_service.AgentDispatchService`).
+    - Participant token: short-lived JWT scoped to this room with
+      room_join + can_publish + can_subscribe grants. Returned to the
+      SDK so the browser's LiveKit client can join.
+
+    Returns: dict with `room_name`, `livekit_url`, `livekit_token`.
+
+    Caller wraps in try/except for §10.3.1 step-10 error handling — a
+    LiveKit transport failure is a 500-with-request_id (Task 2.34) so
+    the SDK + operator can grep logs.
+    """
+    # Lazy import — LiveKit SDK is heavy + adds boot time; only load
+    # when the helper is actually invoked (most tests stub the helper).
+    from livekit.api import LiveKitAPI, AccessToken, VideoGrants
+    from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
+    from livekit.protocol.room import CreateRoomRequest
+
+    room_name = f"dep-{deployment_id}-int-{interaction_id}"
+    room_metadata = {
+        "deployment_id": str(deployment_id),
+        "interaction_id": str(interaction_id),
+        "dynamic_params": dynamic_params,
+        "correlation_id": correlation_id,
+    }
+    room_metadata_json = json.dumps(room_metadata)
+
+    livekit_url = os.environ["LIVEKIT_URL"]
+    livekit_api = LiveKitAPI(
+        url=livekit_url,
+        api_key=os.environ["LIVEKIT_API_KEY"],
+        api_secret=os.environ["LIVEKIT_API_SECRET"],
+    )
+    try:
+        await livekit_api.room.create_room(
+            CreateRoomRequest(
+                name=room_name,
+                empty_timeout=1800,  # 30 min — auto-close idle rooms
+                max_participants=2,  # user + agent
+                metadata=room_metadata_json,
+            )
+        )
+        await livekit_api.agent_dispatch.create_dispatch(
+            CreateAgentDispatchRequest(
+                agent_name=agent_name,
+                room=room_name,
+                metadata=room_metadata_json,
+            )
+        )
+    finally:
+        # LiveKitAPI holds an aiohttp session; close it explicitly to
+        # avoid the noisy "Unclosed client session" warnings in logs.
+        aclose = getattr(livekit_api, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+    token = (
+        AccessToken(
+            os.environ["LIVEKIT_API_KEY"],
+            os.environ["LIVEKIT_API_SECRET"],
+        )
+        .with_identity(f"user-{interaction_id}")
+        .with_grants(
+            VideoGrants(
+                room=room_name,
+                room_join=True,
+                can_publish=True,
+                can_subscribe=True,
+            )
+        )
+    )
+    return {
+        "room_name": room_name,
+        "livekit_url": livekit_url,
+        "livekit_token": token.to_jwt(),
+    }
+
+
 async def _create_interaction(
     deployment: dict,
     effective_actor_id: str,
@@ -442,9 +549,21 @@ async def create_session(request: Request) -> JSONResponse:
     interaction_id = interaction["_id"]
     correlation_id = interaction["correlation_id"]
 
-    # Subsequent validation chain to be filled in Tasks 2.33–2.36.
-    # Until then, return 501 (parsing + origin + JWT + status + params +
-    # acts_as + Interaction passed but LiveKit not wired).
+    # Step 10: Create LiveKit room + AgentDispatch + mint participant
+    # token per §10.3.1 step 10. The handoff to the worker happens via
+    # room.metadata (the worker reads deployment_id from there — Gap A
+    # resolution per §10.6: NO credentials in metadata).
+    lk_result = await _create_lk_room_and_dispatch(
+        deployment_id=deployment_id,
+        interaction_id=interaction_id,
+        dynamic_params=dynamic_params,
+        correlation_id=correlation_id,
+    )
+
+    # Task 2.34 will flip 501 → 200 with the canonical success shape.
+    # Until then, return 501 carrying everything the SDK + worker need
+    # (so Task 2.32.5's handoff integration test can read the room name
+    # / metadata / token from this response).
     return JSONResponse(
         {
             "error": "not_implemented",
@@ -454,6 +573,9 @@ async def create_session(request: Request) -> JSONResponse:
             "authenticated_actor_id": authenticated_actor_id,
             "effective_actor_id": effective_actor_id,
             "validation_warnings": validation_warnings,
+            "room_name": lk_result["room_name"],
+            "livekit_url": lk_result["livekit_url"],
+            "livekit_token": lk_result["livekit_token"],
         },
         status_code=501,
     )

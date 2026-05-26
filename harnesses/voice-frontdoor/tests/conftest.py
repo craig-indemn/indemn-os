@@ -136,6 +136,36 @@ def _stub_create_interaction(monkeypatch):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _stub_create_lk_room_and_dispatch(monkeypatch):
+    """Autouse: replace `harness.sessions._create_lk_room_and_dispatch`
+    with an AsyncMock returning a default LiveKit payload so tests that
+    exercise the validation chain past Interaction creation don't try
+    to actually call LiveKit.
+
+    Default return mirrors the §10.3.1 room-name format
+    `dep-{deployment_id}-int-{interaction_id}` using the autouse
+    Interaction's id `int_autouse` and a generic deployment id. Tests
+    that need a different room name or want to verify call args
+    override via per-test patch.
+    """
+    from unittest.mock import AsyncMock
+
+    try:
+        monkeypatch.setattr(
+            "harness.sessions._create_lk_room_and_dispatch",
+            AsyncMock(
+                return_value={
+                    "room_name": "dep-autouse-int-int_autouse",
+                    "livekit_url": "wss://livekit.test",
+                    "livekit_token": "test_participant_token_jwt",
+                }
+            ),
+        )
+    except (ModuleNotFoundError, AttributeError):
+        pass
+
+
 # ----------------------------------------------------------------------------
 # JWT factories
 # ----------------------------------------------------------------------------
