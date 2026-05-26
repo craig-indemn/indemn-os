@@ -127,7 +127,14 @@ async def _load_deployment(deployment_id: str) -> dict:
     if resp.status_code == 404:
         raise DeploymentNotFound(deployment_id)
     resp.raise_for_status()
-    return resp.json()
+    body = resp.json()
+    # /public's 200 only fires for active deployments (the route checks status
+    # before returning; non-active → 409). Surface `status: "active"` so the
+    # downstream status check in create_session (Task 2.29) reads a concrete
+    # value rather than None. Tests stub _load_deployment directly and pass
+    # their own status field, so this synthesis only fires in production.
+    body.setdefault("status", "active")
+    return body
 
 
 def _validate_parameters(
