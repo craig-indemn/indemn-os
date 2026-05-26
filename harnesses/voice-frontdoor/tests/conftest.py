@@ -137,6 +137,27 @@ def _stub_create_interaction(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_rate_limiter(monkeypatch):
+    """Autouse: replace the module-level `_rate_limiter` with a fresh
+    instance per test. The sliding-window state accumulates across
+    requests by design; in tests that means N tests sharing the same
+    IP / actor / deployment would trip the limit on test ~N+1.
+
+    Per-test fresh state isolates each test cleanly. Tests that need
+    to verify the limit itself fires (test_rate_limit.py) override
+    with their own tight-limit RateLimiter via per-test patch.
+    """
+    try:
+        from harness.rate_limit import RateLimiter
+
+        monkeypatch.setattr(
+            "harness.sessions._rate_limiter", RateLimiter()
+        )
+    except (ModuleNotFoundError, AttributeError):
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _stub_kill_prior_room(monkeypatch):
     """Autouse: replace `harness.sessions._kill_prior_room` with a
     no-op AsyncMock so resume-flow tests don't try to call real

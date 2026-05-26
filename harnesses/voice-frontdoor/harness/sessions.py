@@ -51,8 +51,17 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from harness import jwt_auth
+from harness.rate_limit import RateLimiter
 
 log = logging.getLogger(__name__)
+
+
+# Module-level singleton — survives request scope so the sliding-window
+# state accumulates across requests. Per §10.7: per-IP / per-actor /
+# per-Deployment limits. Defaults sized for an internal-team sales
+# surface; switch to Redis-backed limiter when the frontdoor scales
+# beyond one container.
+_rate_limiter = RateLimiter()
 
 
 class DeploymentNotFound(Exception):
@@ -688,6 +697,37 @@ async def create_session(request: Request) -> JSONResponse:
         effective_actor_id = str(deployment.get("associate_id"))
 
     request_id = str(uuid.uuid4())
+
+    # Step 8: Rate-limit per §10.3.1 step 9 + §10.7 row "Replay of
+    # session creation". MUST fire BEFORE Interaction creation +
+    # LiveKit room creation (whether fresh OR resume) — otherwise an
+    # attacker exhausts LiveKit room slots + writes Interaction
+    # audit-trail records before being throttled.
+    client_ip = request.client.host if request.client else "unknown"
+    rl_result = _rate_limiter.check_with_retry(
+        ip=client_ip,
+        actor=effective_actor_id,
+        deployment=deployment_id,
+    )
+    if not rl_result["allowed"]:
+        log.info(
+            "Rate-limited /sessions request — scope=%s, ip=%s, "
+            "actor=%s, deployment=%s",
+            rl_result["scope"],
+            client_ip,
+            effective_actor_id,
+            deployment_id,
+        )
+        retry_after = rl_result["retry_after_seconds"]
+        return JSONResponse(
+            {
+                "error": "rate_limited",
+                "retry_after_seconds": retry_after,
+                "scope": rl_result["scope"],
+            },
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
 
     # Step 8.5: Resume branch per §10.3.1 step 8 + §12.4 step 12.
     # If `resume_interaction_id` is present, load the prior Interaction
