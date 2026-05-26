@@ -102,6 +102,40 @@ def _stub_jwt_public_key(_test_public_key, monkeypatch):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _stub_create_interaction(monkeypatch):
+    """Autouse: replace `harness.sessions._create_interaction` with an
+    AsyncMock returning a default Interaction shape so tests that
+    exercise the validation chain past the acts_as gate don't try to
+    POST to a real OS API.
+
+    Tests that need to verify _create_interaction's call args or supply
+    a specific return shape override this in their own `with patch(...)`
+    block — the per-test patch wins over the autouse default. The
+    autouse only fires when sessions.py is importable + the symbol
+    exists, so it's idempotent across the pre-Task-2.32 → Task-2.32
+    transition.
+    """
+    from unittest.mock import AsyncMock
+
+    try:
+        monkeypatch.setattr(
+            "harness.sessions._create_interaction",
+            AsyncMock(
+                return_value={
+                    "_id": "int_autouse",
+                    "channel_type": "voice",
+                    "correlation_id": "cor_autouse",
+                    "deployment_id": "dep_test",
+                    "created_by": "act_test",
+                    "status": "active",
+                }
+            ),
+        )
+    except (ModuleNotFoundError, AttributeError):
+        pass
+
+
 # ----------------------------------------------------------------------------
 # JWT factories
 # ----------------------------------------------------------------------------

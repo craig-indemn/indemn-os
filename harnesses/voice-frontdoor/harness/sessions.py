@@ -39,6 +39,7 @@ return 500 with request_id per §10.3.1 status table.
 import json
 import logging
 import os
+import uuid
 
 import httpx
 import jsonschema
@@ -169,6 +170,52 @@ def _format_jsonschema_error(error: jsonschema.ValidationError) -> str:
         path = ".".join(str(p) for p in error.absolute_path)
         return f"{path}: {error.message}"
     return error.message
+
+
+async def _create_interaction(
+    deployment: dict,
+    effective_actor_id: str,
+    dynamic_params: dict,
+) -> dict:
+    """Create the Interaction record via the OS API.
+
+    POST {INDEMN_API_URL}/api/interactions/ with the frontdoor's
+    INDEMN_SERVICE_TOKEN. Per §10.3.1 + §13:
+    - `channel_type = "voice"` (always for this frontdoor)
+    - `correlation_id` is freshly minted here — the lineage tracker
+      propagated by the worker to every CLI subprocess (via env var per
+      §13.7) and to every entity write the agent makes during the
+      session.
+    - `created_by = effective_actor_id` — the Task 2.31 acts_as gate's
+      output. For session_actor it's the JWT.sub; for associate_self
+      it's the Associate's own id.
+    - `dynamic_params` stored RAW — sanitization (§10.7 layer-c) applies
+      only to the <deployment_context> SystemMessage path; the
+      Interaction record is for forensics. Downstream consumers (UI,
+      analytics) MUST treat dynamic_params values as untrusted input.
+
+    Returns the API's response body (dict containing `_id`,
+    `correlation_id`, etc.). Raises httpx.HTTPError on transport
+    failures + raise_for_status() converts 4xx/5xx into exceptions —
+    callers catch + surface as 500 in the /sessions response per §10.3.1.
+    """
+    correlation_id = str(uuid.uuid4())
+    api_url = os.environ.get("INDEMN_API_URL", "http://localhost:8000")
+    service_token = os.environ.get("INDEMN_SERVICE_TOKEN", "")
+    url = f"{api_url.rstrip('/')}/api/interactions/"
+    payload = {
+        "channel_type": "voice",
+        "deployment_id": str(deployment.get("_id")),
+        "correlation_id": correlation_id,
+        "created_by": effective_actor_id,
+        "status": "active",
+        "dynamic_params": dynamic_params,
+    }
+    headers = {"Authorization": f"Bearer {service_token}"}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def _origin_allowed(origin: str | None, allowed_origins: list[str]) -> bool:
@@ -382,13 +429,28 @@ async def create_session(request: Request) -> JSONResponse:
         # caller is authenticated; the JWT's actor_id is irrelevant.
         effective_actor_id = str(deployment.get("associate_id"))
 
-    # Subsequent validation chain to be filled in Tasks 2.32–2.36.
+    # Step 9: Create Interaction record per §10.3.1 step 10.
+    # The Interaction is the durable session anchor — the worker reads
+    # it on dispatch (Tasks 2.15/2.33), entity writes during the session
+    # carry the correlation_id (per §13), the SDK/UI references the
+    # interaction_id for resume (Task 2.35).
+    interaction = await _create_interaction(
+        deployment=deployment,
+        effective_actor_id=effective_actor_id,
+        dynamic_params=dynamic_params,
+    )
+    interaction_id = interaction["_id"]
+    correlation_id = interaction["correlation_id"]
+
+    # Subsequent validation chain to be filled in Tasks 2.33–2.36.
     # Until then, return 501 (parsing + origin + JWT + status + params +
-    # acts_as passed but Interaction/LiveKit not wired).
+    # acts_as + Interaction passed but LiveKit not wired).
     return JSONResponse(
         {
             "error": "not_implemented",
             "deployment_id": deployment_id,
+            "interaction_id": interaction_id,
+            "correlation_id": correlation_id,
             "authenticated_actor_id": authenticated_actor_id,
             "effective_actor_id": effective_actor_id,
             "validation_warnings": validation_warnings,
