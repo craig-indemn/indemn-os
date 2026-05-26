@@ -41,8 +41,11 @@ import logging
 import os
 
 import httpx
+import jwt as pyjwt
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+from harness import jwt_auth
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +77,20 @@ def _not_found(resource: str) -> JSONResponse:
     """404 response per §10.3.1 error table."""
     return JSONResponse(
         {"error": "not_found", "resource": resource}, status_code=404
+    )
+
+
+def _unauthorized(reason: str) -> JSONResponse:
+    """401 response per §10.3.1 error table.
+
+    `reason` is one of: missing, invalid, expired (per §10.3.1). The
+    finer-grained `wrong_audience` / `wrong_issuer` are folded into
+    `invalid` because pyjwt's audience / issuer errors are subclasses of
+    PyJWTError and a leaking token is a leaking token — the SDK's only
+    actionable response is "re-mint a token" either way.
+    """
+    return JSONResponse(
+        {"error": "unauthorized", "reason": reason}, status_code=401
     )
 
 
@@ -185,9 +202,38 @@ async def create_session(request: Request) -> JSONResponse:
         )
         return _forbidden("origin_not_allowed")
 
-    # Subsequent validation chain to be filled in Tasks 2.28–2.36.
-    # Until then, return 501 (parsing + origin passed but JWT/etc not wired).
+    # Step 5: JWT validation per §10.3.1 step 3 + §10.6
+    # Authorization: Bearer <token>; RS256 with public key from AWS Secrets
+    # (`indemn/dev/shared/jwt-public-key`). Required claims: sub, org_id,
+    # exp, iss == "indemn-os", aud contains "runtime-voice-frontdoor".
+    # 60s clock-skew tolerance.
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return _unauthorized("missing")
+    token = auth_header[len("Bearer "):]
+    try:
+        claims = jwt_auth.verify_jwt(token)
+    except pyjwt.ExpiredSignatureError:
+        return _unauthorized("expired")
+    except pyjwt.PyJWTError as e:
+        log.info("Rejecting session (JWT validation failed: %s)", e)
+        return _unauthorized("invalid")
+
+    authenticated_actor_id = claims["sub"]
+    log.debug(
+        "JWT validated for actor %s on deployment %s",
+        authenticated_actor_id,
+        deployment_id,
+    )
+
+    # Subsequent validation chain to be filled in Tasks 2.29–2.36.
+    # Until then, return 501 (parsing + origin + JWT passed but
+    # status/parameter_schema/acts_as/etc not wired).
     return JSONResponse(
-        {"error": "not_implemented", "deployment_id": deployment_id},
+        {
+            "error": "not_implemented",
+            "deployment_id": deployment_id,
+            "authenticated_actor_id": authenticated_actor_id,
+        },
         status_code=501,
     )

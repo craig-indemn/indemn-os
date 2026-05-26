@@ -78,6 +78,30 @@ def _test_public_key(_test_rsa_keypair):
     return _test_rsa_keypair[1]
 
 
+@pytest.fixture(autouse=True)
+def _stub_jwt_public_key(_test_public_key, monkeypatch):
+    """Autouse: replace `harness.jwt_auth._get_public_key` with a function
+    returning the session-scoped test public key.
+
+    Avoids the AWS Secrets Manager call during tests + pairs the verifier
+    with the test private key so JWTs minted by `valid_jwt` / `expired_jwt`
+    factories validate correctly. lru_cache on _get_public_key is bypassed
+    because monkeypatch replaces the bound function entirely.
+
+    Idempotent if harness.jwt_auth hasn't been imported yet — try/except
+    keeps the fixture safe in the brief window before Task 2.28 lands.
+    """
+    try:
+        monkeypatch.setattr(
+            "harness.jwt_auth._get_public_key",
+            lambda: _test_public_key,
+        )
+    except (ModuleNotFoundError, AttributeError):
+        # jwt_auth module / symbol not present — tests that don't need it
+        # still run; tests that do will fail loudly when verify_jwt is hit.
+        pass
+
+
 # ----------------------------------------------------------------------------
 # JWT factories
 # ----------------------------------------------------------------------------
