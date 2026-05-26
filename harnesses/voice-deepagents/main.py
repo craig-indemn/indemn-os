@@ -148,6 +148,43 @@ def _setup_gcp_credentials() -> None:
     log.info("GCP credentials written to %s", sa_path)
 
 
+def prewarm(proc) -> None:
+    """Per AI-407 §11.5: eagerly import the deepagents stack so the first
+    room dispatch doesn't pay cold-start cost (~500-1500ms on first turn).
+
+    Called once per LiveKit JobProcess at startup, BEFORE entrypoint
+    fires. The proc argument is the LiveKit JobProcess — we don't need
+    it; the import side-effect is the warmup.
+
+    Loads:
+    - deepagents (drags in langchain, langgraph, anthropic SDK, etc.)
+    - langchain_google_vertexai (the Gemini provider — heavy gRPC stack)
+    - The harness's own session + LLM adapter modules so the per-room
+      `from harness.session import VoiceSession` import in entrypoint
+      is cached.
+
+    Side-effect: subsequent room dispatches see warm caches — first-turn
+    latency drops by the amortized startup cost across N rooms.
+
+    Safe by design: idempotent (Python imports cache by module name);
+    no I/O; no network calls. Errors are logged + swallowed — pre-warm
+    failure shouldn't crash the worker (entrypoint will redo the
+    imports on its own if needed).
+    """
+    log.info("Pre-warming voice worker (eager imports)")
+    try:
+        import deepagents  # noqa: F401 — load langchain/langgraph
+        import langchain_google_vertexai  # noqa: F401 — Gemini gRPC stack
+        from harness.llm_adapter import DeepagentsLLM  # noqa: F401
+        from harness.session import VoiceSession  # noqa: F401
+        log.info("Voice worker pre-warmed")
+    except Exception as e:
+        # Pre-warm failure is non-fatal — entrypoint will retry the
+        # imports on first dispatch. Log loudly so the gap is visible
+        # in Railway logs + OTEL spans.
+        log.warning("Pre-warm failed (continuing without): %s", e)
+
+
 async def entrypoint(ctx: JobContext) -> None:
     """LiveKit per-room job entrypoint.
 
@@ -327,6 +364,7 @@ if __name__ == "__main__":
     agents.cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
             agent_name=agent_name,
         )
     )
