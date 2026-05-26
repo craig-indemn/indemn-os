@@ -39,7 +39,9 @@ return 500 with request_id per §10.3.1 status table.
 import json
 import logging
 import os
+import time
 import uuid
+from datetime import datetime, timezone
 
 import httpx
 import jsonschema
@@ -277,6 +279,134 @@ async def _create_lk_room_and_dispatch(
         "livekit_url": livekit_url,
         "livekit_token": token.to_jwt(),
     }
+
+
+class InteractionNotFound(Exception):
+    """Raised by _load_interaction when the OS API returns 404."""
+
+    def __init__(self, interaction_id: str):
+        super().__init__(f"Interaction not found: {interaction_id}")
+        self.interaction_id = interaction_id
+
+
+async def _load_interaction(interaction_id: str) -> dict:
+    """Load an Interaction record via the OS API (for resume flow).
+
+    GET {INDEMN_API_URL}/api/interactions/{id} with INDEMN_SERVICE_TOKEN.
+    Raises InteractionNotFound on 404; raises httpx.HTTPError on other
+    failures (caller wraps with try/except).
+    """
+    api_url = os.environ.get("INDEMN_API_URL", "http://localhost:8000")
+    service_token = os.environ.get("INDEMN_SERVICE_TOKEN", "")
+    url = f"{api_url.rstrip('/')}/api/interactions/{interaction_id}"
+    headers = {"Authorization": f"Bearer {service_token}"}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(url, headers=headers)
+    if resp.status_code == 404:
+        raise InteractionNotFound(interaction_id)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _interaction_age_seconds(interaction: dict) -> float:
+    """How many seconds ago was the Interaction created? Handles three
+    representations of created_at:
+    - datetime (Python object)
+    - ISO 8601 string (production API response format)
+    - Unix timestamp (float / int — common in test fixtures)
+
+    Returns a non-negative float (clamped to 0 if created_at is somehow
+    in the future).
+    """
+    created = interaction.get("created_at")
+    if created is None:
+        return float("inf")  # missing field — treat as expired
+    if isinstance(created, datetime):
+        epoch = created.replace(tzinfo=timezone.utc).timestamp() if created.tzinfo is None else created.timestamp()
+    elif isinstance(created, (int, float)):
+        epoch = float(created)
+    elif isinstance(created, str):
+        # ISO 8601 with optional trailing Z (Pydantic + Mongo serialize as ISO)
+        normalized = created.replace("Z", "+00:00") if created.endswith("Z") else created
+        epoch = datetime.fromisoformat(normalized).timestamp()
+    else:
+        return float("inf")
+    return max(0.0, time.time() - epoch)
+
+
+def _is_interaction_expired(interaction: dict, resumption_config: dict) -> bool:
+    """Per §12.4 step 12: an Interaction is past TTL if
+    `now - created_at > Deployment.resumption_config.ttl_seconds`.
+    Default ttl_seconds=86400 (24h) when the config omits the field.
+    """
+    ttl = (resumption_config or {}).get("ttl_seconds", 86400)
+    return _interaction_age_seconds(interaction) > ttl
+
+
+async def _kill_prior_room(interaction: dict) -> None:
+    """Disconnect any agent participant in the prior LiveKit room for
+    this Interaction (per §12.4 step 12 + kill_on_resume).
+
+    Room name is deterministic: `dep-{deployment_id}-int-{interaction_id}`.
+    If the room doesn't exist (prior worker already cleaned up via
+    Attention TTL), LiveKit returns NOT_FOUND — treat as success +
+    proceed with resume.
+
+    Best-effort: if the prior worker is mid-response, LiveKit's
+    disconnect signal may arrive after a TTS chunk; the new worker
+    still wins because the resume returns new connection creds and the
+    prior room is abandoned. Errors are logged + swallowed.
+    """
+    # Lazy import — LiveKit SDK is heavy; resume path only.
+    from livekit.api import LiveKitAPI
+    from livekit.protocol.room import (
+        ListParticipantsRequest,
+        RoomParticipantIdentity,
+    )
+
+    deployment_id = str(interaction.get("deployment_id"))
+    interaction_id = str(interaction.get("_id"))
+    room_name = f"dep-{deployment_id}-int-{interaction_id}"
+
+    livekit_api = LiveKitAPI(
+        url=os.environ["LIVEKIT_URL"],
+        api_key=os.environ["LIVEKIT_API_KEY"],
+        api_secret=os.environ["LIVEKIT_API_SECRET"],
+    )
+    try:
+        participants = await livekit_api.room.list_participants(
+            ListParticipantsRequest(room=room_name)
+        )
+        for p in participants.participants:
+            # Worker identity is `user-{interaction_id}` for the user
+            # token, and the agent's own identity (set by LiveKit
+            # Agents framework) starts with `voice-deepagents` or
+            # `agent-`. Kill only the agent participant.
+            if p.identity.startswith(("voice-deepagents", "agent-")):
+                await livekit_api.room.remove_participant(
+                    RoomParticipantIdentity(
+                        room=room_name, identity=p.identity
+                    )
+                )
+                log.info(
+                    "Disconnected prior agent %s from room %s",
+                    p.identity,
+                    room_name,
+                )
+    except Exception as e:
+        # Common case: room doesn't exist anymore (prior worker
+        # cleaned up); other transient LiveKit errors. Either way,
+        # resume proceeds — the new worker's checkpointer state will
+        # win on next state write.
+        log.warning(
+            "Could not kill prior room %s: %s — proceeding with resume",
+            room_name,
+            e,
+        )
+    finally:
+        aclose = getattr(livekit_api, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 async def _mark_interaction_failed(interaction_id: str, reason: str) -> None:
@@ -557,13 +687,133 @@ async def create_session(request: Request) -> JSONResponse:
         # caller is authenticated; the JWT's actor_id is irrelevant.
         effective_actor_id = str(deployment.get("associate_id"))
 
-    # Steps 9-10: Interaction creation + LiveKit dispatch are wrapped in
-    # try/except per §10.3.1 status-500 contract. request_id is logged
-    # server-side with the full traceback so operators can grep.
-    # `stage` lets the SDK + ops classify the failure mode immediately
-    # without traceback access.
     request_id = str(uuid.uuid4())
 
+    # Step 8.5: Resume branch per §10.3.1 step 8 + §12.4 step 12.
+    # If `resume_interaction_id` is present, load the prior Interaction
+    # + verify ownership + TTL + status, then optionally kill the prior
+    # worker before dispatching a new one with the SAME interaction_id.
+    # No new Interaction created on resume — the existing one carries
+    # forward.
+    resume_interaction_id = body.get("resume_interaction_id")
+    if resume_interaction_id:
+        try:
+            interaction = await _load_interaction(resume_interaction_id)
+        except InteractionNotFound:
+            return _not_found("interaction")
+        except Exception:
+            log.exception(
+                "Failed to load resume Interaction %s (request_id=%s)",
+                resume_interaction_id,
+                request_id,
+            )
+            return JSONResponse(
+                {
+                    "error": "internal",
+                    "request_id": request_id,
+                    "stage": "resume_load",
+                },
+                status_code=500,
+            )
+
+        # Resumption hijacking prevention per §10.7 — only the original
+        # caller can resume. Compare to the JWT's actor (NOT the
+        # supplied actor_id; the acts_as gate's load-bearing invariant
+        # holds here too).
+        if interaction.get("created_by") != authenticated_actor_id:
+            log.warning(
+                "Resumption hijacking attempt rejected — "
+                "JWT.sub=%r, interaction.created_by=%r, interaction=%s",
+                authenticated_actor_id,
+                interaction.get("created_by"),
+                resume_interaction_id,
+            )
+            return _forbidden("actor_mismatch")
+
+        # TTL check per §12.4: now - created_at > ttl_seconds → 410
+        resumption_config = deployment.get("resumption_config") or {}
+        if _is_interaction_expired(interaction, resumption_config):
+            log.info(
+                "Resume rejected — Interaction %s past TTL %ss",
+                resume_interaction_id,
+                resumption_config.get("ttl_seconds", 86400),
+            )
+            return JSONResponse(
+                {"error": "resume_expired"}, status_code=410
+            )
+
+        # Status check — closed/archived Interactions are permanently
+        # terminal and not resumable
+        if interaction.get("status") in ("closed", "archived"):
+            log.info(
+                "Resume rejected — Interaction %s is terminal (status=%s)",
+                resume_interaction_id,
+                interaction.get("status"),
+            )
+            return JSONResponse(
+                {
+                    "error": "resume_expired",
+                    "reason": "closed",
+                },
+                status_code=410,
+            )
+
+        # Kill prior worker if kill_on_resume=true (default per §12.4)
+        if resumption_config.get("kill_on_resume", True):
+            try:
+                await _kill_prior_room(interaction)
+            except Exception:
+                # _kill_prior_room is itself best-effort + already
+                # logs; this extra try/except defends against
+                # importpath-style failures that would crash the resume.
+                log.exception(
+                    "kill_prior_room failed (request_id=%s, "
+                    "interaction=%s) — proceeding with resume anyway",
+                    request_id,
+                    resume_interaction_id,
+                )
+
+        # Dispatch new LiveKit room + worker with SAME interaction_id
+        interaction_id = interaction["_id"]
+        correlation_id = interaction["correlation_id"]
+        try:
+            lk_result = await _create_lk_room_and_dispatch(
+                deployment_id=deployment_id,
+                interaction_id=interaction_id,
+                dynamic_params=dynamic_params,
+                correlation_id=correlation_id,
+            )
+        except Exception:
+            log.exception(
+                "LiveKit dispatch failed on resume "
+                "(request_id=%s, interaction=%s)",
+                request_id,
+                resume_interaction_id,
+            )
+            # No Interaction cleanup on resume — the original
+            # Interaction was already alive; resume just opens a new
+            # room. Failure here leaves Interaction in its prior state.
+            return JSONResponse(
+                {
+                    "error": "internal",
+                    "request_id": request_id,
+                    "stage": "livekit",
+                },
+                status_code=500,
+            )
+
+        return JSONResponse(
+            {
+                "room_name": lk_result["room_name"],
+                "livekit_url": lk_result["livekit_url"],
+                "livekit_token": lk_result["livekit_token"],
+                "interaction_id": interaction_id,
+            },
+            status_code=200,
+        )
+
+    # Steps 9-10: fresh session — Interaction creation + LiveKit
+    # dispatch wrapped in try/except per §10.3.1 status-500 contract.
     try:
         interaction = await _create_interaction(
             deployment=deployment,

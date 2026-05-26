@@ -137,6 +137,26 @@ def _stub_create_interaction(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stub_kill_prior_room(monkeypatch):
+    """Autouse: replace `harness.sessions._kill_prior_room` with a
+    no-op AsyncMock so resume-flow tests don't try to call real
+    LiveKit RoomService.list_participants / remove_participant.
+
+    Tests that need to verify _kill_prior_room was called (or NOT
+    called when kill_on_resume=false) override via per-test patch.
+    """
+    from unittest.mock import AsyncMock
+
+    try:
+        monkeypatch.setattr(
+            "harness.sessions._kill_prior_room",
+            AsyncMock(return_value=None),
+        )
+    except (ModuleNotFoundError, AttributeError):
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _stub_create_lk_room_and_dispatch(monkeypatch):
     """Autouse: replace `harness.sessions._create_lk_room_and_dispatch`
     with an AsyncMock returning a default LiveKit payload so tests that
