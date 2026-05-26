@@ -269,9 +269,10 @@ class DeepagentsLLMStream(LLMStream):
                 model_chunk = event.get("data", {}).get("chunk")
                 if model_chunk is None:
                     continue
-                tool_call_chunks = getattr(model_chunk, "tool_call_chunks", []) or []
-                if tool_call_chunks:
-                    continue
+                # Emit text content if present, even when tool_call_chunks are
+                # also in the chunk — some models emit "I'll look that up..."
+                # in the SAME chunk as the tool call. The text should still
+                # reach TTS. Only skip when content is empty (pure tool call).
                 text = getattr(model_chunk, "content", "") or ""
                 if isinstance(text, list):
                     # Multi-part content — extract text parts only
@@ -292,6 +293,25 @@ class DeepagentsLLMStream(LLMStream):
         except Exception as e:
             log.exception("DeepagentsLLM agent.astream_events failed: %s", e)
             raise
+
+        # Fallback: if the agent ran but never emitted text (Gemini sometimes
+        # produces tool-only responses with empty content — observed in voice
+        # smoke against Sales Assistant), emit a brief acknowledgement so the
+        # user hears SOMETHING. Silence breaks the voice loop — the user
+        # interrupts, the agent gets cancelled mid-tool-call, no progress.
+        if chunk_count == 0:
+            fallback = "One moment."
+            log.warning(
+                "DeepagentsLLM: agent emitted 0 text chunks; falling back to %r",
+                fallback,
+            )
+            self._event_ch.send_nowait(
+                ChatChunk(
+                    id="deepagents-fallback",
+                    delta=ChoiceDelta(role="assistant", content=fallback),
+                )
+            )
+            chunk_count = 1
 
         log.info(
             "DeepagentsLLM emitted %d streaming ChatChunks", chunk_count
