@@ -101,6 +101,23 @@ def verify_jwt(token: str) -> dict:
             algorithms=["HS256"],
             leeway=JWT_LEEWAY_SECONDS,
         )
+        # AI-407 pre-merge security fix: enforce `purpose` claim.
+        # The OS kernel issues MULTIPLE token kinds signed with the same
+        # JWT_SIGNING_KEY (kernel/auth/jwt.py): access tokens (NO purpose
+        # claim), partial MFA-challenge tokens (purpose="mfa_challenge",
+        # 5-min lifetime), magic-link tokens (purpose=<caller-supplied>,
+        # 4-hr lifetime). Without a purpose gate, /sessions would accept
+        # a leaked magic-link token as a LiveKit session credential —
+        # narrow exploit but real surface. Accept only:
+        #   - None (canonical access tokens, the OS-current shape)
+        #   - "session" / "access" (forward-compatible if OS adds explicit
+        #      purpose claims to access tokens later)
+        # Reject every other purpose explicitly.
+        purpose = claims.get("purpose")
+        if purpose is not None and purpose not in ("session", "access"):
+            raise pyjwt.InvalidTokenError(
+                f"Token purpose '{purpose}' not valid for /sessions"
+            )
         # Normalize: OS uses `actor_id`; design uses `sub`. Surface both.
         if "actor_id" in claims and "sub" not in claims:
             claims["sub"] = claims["actor_id"]

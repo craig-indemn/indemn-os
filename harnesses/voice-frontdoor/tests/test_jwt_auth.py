@@ -241,3 +241,127 @@ class TestJWTAuth:
             )
         assert response_90s.status_code == 401
         assert response_90s.json()["reason"] == "expired"
+
+
+class TestJWTHS256PurposeClaim:
+    """AI-407 pre-merge security: HS256 path must reject non-session tokens.
+
+    The OS kernel (kernel/auth/jwt.py) signs THREE distinct token kinds
+    with the SAME `JWT_SIGNING_KEY`:
+    - access tokens (create_access_token) — NO `purpose` claim
+    - partial MFA-challenge tokens (create_partial_token) — `purpose="mfa_challenge"`
+    - magic-link tokens (generate_magic_link_token) — `purpose=<varies>`
+
+    Without a purpose gate at the frontdoor's HS256 path, a leaked
+    magic-link or MFA-challenge token would be accepted by /sessions
+    as a valid LiveKit session credential. Realistic exploit is narrow
+    (those tokens are short-lived and narrowly scoped) but the
+    cross-token-kind reuse is a real surface — block it explicitly.
+
+    Allowed: no purpose claim (canonical access token), purpose="session",
+    purpose="access" (forward-compatible if the OS adds explicit claims later).
+
+    Rejected: every other purpose value.
+    """
+
+    def _hs256_token(self, *, purpose=None, key="test-shared-secret"):
+        """Mint an HS256 token with the OS claim shape; optional purpose."""
+        payload = {
+            "actor_id": "act_test",
+            "org_id": "org_test",
+            "roles": ["platform_admin"],
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+            "jti": f"test-{int(time.time())}",
+        }
+        if purpose is not None:
+            payload["purpose"] = purpose
+        return pyjwt.encode(payload, key, algorithm="HS256")
+
+    @pytest.fixture
+    def hs256_env(self, monkeypatch):
+        """Flip frontdoor JWT_ALGORITHM to HS256 + set the shared secret."""
+        monkeypatch.setenv("JWT_ALGORITHM", "HS256")
+        monkeypatch.setenv("JWT_SIGNING_KEY", "test-shared-secret")
+
+    def test_access_token_no_purpose_accepted(
+        self, client, valid_deployment, hs256_env
+    ):
+        """Canonical OS access token (no purpose claim) → JWT passes."""
+        token = self._hs256_token(purpose=None)
+        with patch(
+            "harness.sessions._load_deployment",
+            new=AsyncMock(return_value=_stub_deployment(valid_deployment["_id"])),
+        ):
+            response = _post_sessions(
+                client,
+                valid_deployment["_id"],
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        # NOT 401 with reason invalid/wrong_purpose — downstream checks
+        # may fail (acts_as etc.) but JWT verification itself passed.
+        if response.status_code == 401:
+            assert response.json().get("reason") != "invalid"
+
+    def test_session_purpose_accepted(
+        self, client, valid_deployment, hs256_env
+    ):
+        """Explicit purpose='session' accepted (forward-compat)."""
+        token = self._hs256_token(purpose="session")
+        with patch(
+            "harness.sessions._load_deployment",
+            new=AsyncMock(return_value=_stub_deployment(valid_deployment["_id"])),
+        ):
+            response = _post_sessions(
+                client,
+                valid_deployment["_id"],
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if response.status_code == 401:
+            assert response.json().get("reason") != "invalid"
+
+    def test_access_purpose_accepted(
+        self, client, valid_deployment, hs256_env
+    ):
+        """Explicit purpose='access' accepted (forward-compat)."""
+        token = self._hs256_token(purpose="access")
+        with patch(
+            "harness.sessions._load_deployment",
+            new=AsyncMock(return_value=_stub_deployment(valid_deployment["_id"])),
+        ):
+            response = _post_sessions(
+                client,
+                valid_deployment["_id"],
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if response.status_code == 401:
+            assert response.json().get("reason") != "invalid"
+
+    @pytest.mark.parametrize(
+        "rejected_purpose",
+        ["mfa_challenge", "password_reset", "email_verify", "magic_link"],
+    )
+    def test_non_session_purpose_rejected(
+        self, client, valid_deployment, hs256_env, rejected_purpose
+    ):
+        """MFA-challenge, magic-link, and any other non-session purpose
+        must be rejected at /sessions even if signed correctly.
+
+        Parametrized across the known non-session purposes the OS issues
+        + a couple of speculative magic-link purpose values. Each maps to
+        401 reason=invalid (purpose mismatch folds into the generic
+        invalid bucket; the SDK's only actionable response is 're-mint
+        a token' either way per the existing wrong_audience/issuer
+        precedent)."""
+        token = self._hs256_token(purpose=rejected_purpose)
+        with patch(
+            "harness.sessions._load_deployment",
+            new=AsyncMock(return_value=_stub_deployment(valid_deployment["_id"])),
+        ):
+            response = _post_sessions(
+                client,
+                valid_deployment["_id"],
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert response.status_code == 401
+        assert response.json().get("reason") == "invalid"
