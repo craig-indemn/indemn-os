@@ -16,4 +16,7 @@ dependencies = [
     "websockets>=13.0",
     "opentelemetry-distro>=0.48b0",
     "opentelemetry-exporter-otlp-proto-http>=1.25",
+    # AI-408 Task 3.4: JWT validation in connect (via harness_common.jwt_auth).
+    # [crypto] extra pulls cryptography for RS256 support.
+    "pyjwt[crypto]>=2.8",
 ]

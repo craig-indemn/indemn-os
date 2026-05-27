@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Unstub starlette per `test_connect_message_extension.py` rationale — main.py
@@ -40,6 +42,19 @@ if isinstance(sys.modules.get("harness_common.cli"), MagicMock):
 import harness_common.cli  # noqa: E402,F401  — real import
 
 import main as harness_main  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _stub_verify_jwt(monkeypatch):
+    """Task 3.4 added JWT validation BEFORE the status check. These tests
+    exercise Deployment-load + status check; auth flow is covered in
+    test_chat_jwt_validation.py. Default-stub verify_jwt so the JWT step
+    passes transparently. Individual tests can override by patching again."""
+    monkeypatch.setattr(
+        harness_main,
+        "_verify_jwt",
+        lambda token: {"sub": "act_test", "actor_id": "act_test"},
+    )
 
 
 def _run(coro):

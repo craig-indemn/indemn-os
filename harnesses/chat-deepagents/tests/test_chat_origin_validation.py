@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Same setup as test_deployment_session_start.py — unstub starlette + reload
@@ -30,6 +32,21 @@ if isinstance(sys.modules.get("harness_common.cli"), MagicMock):
 import harness_common.cli  # noqa: E402,F401
 
 import main as harness_main  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _stub_verify_jwt(monkeypatch):
+    """Task 3.4 added JWT validation in the chain. Origin tests want to
+    exercise the Origin gate specifically — stub JWT validation so it
+    doesn't reject test tokens before Origin failures surface (Origin runs
+    BEFORE JWT in the validation chain, but the "matches → continues"
+    happy-path test needs to reach status check + ChatSession construction
+    which is after JWT)."""
+    monkeypatch.setattr(
+        harness_main,
+        "_verify_jwt",
+        lambda token: {"sub": "act_test", "actor_id": "act_test"},
+    )
 
 
 def _run(coro):

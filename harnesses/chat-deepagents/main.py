@@ -20,14 +20,29 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+import jwt as pyjwt
 import uvicorn
 from harness.session import ChatSession
 from harness_common.cli import CLIError, indemn
+from harness_common.jwt_auth import verify_jwt as _verify_jwt_shared
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
+
+
+# AI-408 Task 3.4: audience pinned per surface. A JWT minted for voice
+# (audience="runtime-voice-frontdoor") MUST NOT validate against chat.
+# HS256 mode ignores this (OS doesn't set aud); RS256 mode enforces it.
+JWT_AUDIENCE = "runtime-chat"
+
+
+def _verify_jwt(token: str) -> dict:
+    """Chat wrapper around the shared `harness_common.jwt_auth.verify_jwt`
+    with the chat audience pinned. Wrapped so tests can patch a single
+    symbol on this module without reaching into harness_common."""
+    return _verify_jwt_shared(token, audience=JWT_AUDIENCE)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -197,7 +212,61 @@ async def _start_deployment_session(
         await websocket.close(code=1008)
         return None
 
-    # Step 3: Deployment status check per §5.7 state machine — only `active`
+    # Step 3: JWT validation per §10.6 + AI-407 pre-merge security fix.
+    # Inherits HS256 dual-mode + purpose-claim enforcement from the shared
+    # `harness_common.jwt_auth.verify_jwt`. WebSocket close 1008 ("Policy
+    # Violation" per RFC 6455) is the canonical analog of HTTP 401.
+    if not auth_token:
+        log.info("Rejecting session %s — auth_token missing", deployment_id)
+        await websocket.send_json(
+            {
+                "type": "error",
+                "content": "auth_token required for Deployment-driven sessions",
+                "code": "unauthorized",
+                "reason": "missing",
+            }
+        )
+        await websocket.close(code=1008)
+        return None
+    try:
+        claims = _verify_jwt(auth_token)
+    except pyjwt.ExpiredSignatureError:
+        log.info("Rejecting session %s — auth_token expired", deployment_id)
+        await websocket.send_json(
+            {
+                "type": "error",
+                "content": "auth_token expired",
+                "code": "unauthorized",
+                "reason": "expired",
+            }
+        )
+        await websocket.close(code=1008)
+        return None
+    except pyjwt.PyJWTError as e:
+        log.info(
+            "Rejecting session %s — JWT validation failed: %s", deployment_id, e
+        )
+        await websocket.send_json(
+            {
+                "type": "error",
+                "content": "auth_token invalid",
+                "code": "unauthorized",
+                "reason": "invalid",
+            }
+        )
+        await websocket.close(code=1008)
+        return None
+
+    # JWT.sub is the authenticated identity. Stashed for Task 3.5's acts_as
+    # gate: session_actor mode compares it to dynamic_params.actor_id.
+    authenticated_actor_id = claims["sub"]
+    log.debug(
+        "JWT validated for actor %s on deployment %s",
+        authenticated_actor_id,
+        deployment_id,
+    )
+
+    # Step 4: Deployment status check per §5.7 state machine — only `active`
     # accepts sessions. `configured` / `paused` / `archived` / `error` reject.
     status = deployment.get("status")
     if status != "active":
@@ -217,7 +286,6 @@ async def _start_deployment_session(
         await websocket.close(code=4009)
         return None
 
-    # TODO Task 3.4: JWT validation (HS256 + purpose-claim per AI-407)
     # TODO Task 3.5: acts_as security gate — JWT.sub vs supplied actor_id
     # TODO Task 3.6: parameter_schema validation of dynamic_params
 
