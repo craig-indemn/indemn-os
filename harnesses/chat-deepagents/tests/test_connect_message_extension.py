@@ -211,28 +211,11 @@ class TestConnectMessageExtension:
         assert "associate_id" in content
         ws.close.assert_called()
 
-    def test_dynamic_params_must_be_dict(self):
-        """dynamic_params present but not a JSON object → error + close
-        BEFORE dispatching to either path."""
-        connect_msg = {
-            "type": "connect",
-            "deployment_id": "dep_test",
-            "dynamic_params": "not-a-dict",
-            "auth_token": "tok",
-        }
-        ws = _build_mock_websocket(connect_msg)
-
-        with patch.object(
-            harness_main, "_start_deployment_session", new_callable=AsyncMock
-        ) as mock_dep, patch.object(harness_main, "ChatSession") as mock_cls:
-            _run(harness_main.websocket_handler(ws))
-
-        mock_dep.assert_not_called()
-        mock_cls.assert_not_called()
-        errors = [p for p in _send_payloads(ws) if p.get("type") == "error"]
-        assert len(errors) == 1
-        assert "dynamic_params" in errors[0]["content"]
-        ws.close.assert_called()
+    # NOTE: The early `if not isinstance(dynamic_params, dict)` check was
+    # removed in the post-review revert — Task 3.6's parameter_schema
+    # validation catches malformed types at the schema layer (deployment
+    # path), and the legacy path doesn't consume dynamic_params. Defense
+    # in depth at the connect-handler level was redundant + not in the plan.
 
     def test_dynamic_params_defaults_to_empty_dict(self):
         """dynamic_params omitted → defaults to {} forwarded to the

@@ -221,10 +221,13 @@ async def _start_deployment_session(
     # INDEMN_SERVICE_TOKEN (process env) carries read access; we don't pass
     # the connect-message auth_token here because the runtime needs to read
     # the Deployment regardless of which user is connecting.
+    # Sync call inside async function — matches the existing session.py.start()
+    # pattern (which does 3+ sequential indemn() calls the same way). The
+    # event-loop-blocking concern is real for chat (multi-session-per-process)
+    # and is tracked as a cross-cutting follow-up in os-learnings.md so the
+    # fix can land uniformly across legacy + deployment-driven paths.
     try:
-        deployment = await asyncio.to_thread(
-            indemn, "deployment", "get", deployment_id
-        )
+        deployment = indemn("deployment", "get", deployment_id)
     except CLIError as e:
         log.info(
             "Deployment not found or CLI error: %s (%s)", deployment_id, e
@@ -457,6 +460,10 @@ async def _start_deployment_session(
         dynamic_params=dynamic_params,
         effective_actor_id=effective_actor_id,
     )
+    # Register BEFORE start() — matches original (pre-AI-408) pattern so the
+    # `finally: _sessions.pop(...)` cleanup fires even when start() raises
+    # mid-way. Legacy path does the same just below.
+    _sessions[id(websocket)] = session
     await session.start()
     return session
 
@@ -484,13 +491,6 @@ async def websocket_handler(websocket: WebSocket):
         interaction_id = connect_msg.get("interaction_id")
         dynamic_params = connect_msg.get("dynamic_params") or {}
 
-        if not isinstance(dynamic_params, dict):
-            await websocket.send_json(
-                {"type": "error", "content": "dynamic_params must be a JSON object"}
-            )
-            await websocket.close()
-            return
-
         if not deployment_id and not associate_id:
             await websocket.send_json(
                 {
@@ -507,7 +507,9 @@ async def websocket_handler(websocket: WebSocket):
         if deployment_id:
             # New Deployment-driven path — full chain (Deployment load + Origin
             # + JWT + acts_as + parameter_schema + deployment_context) shipped
-            # in Tasks 3.2-3.7.
+            # in Tasks 3.2-3.7. _start_deployment_session registers the session
+            # in _sessions BEFORE calling session.start() (matches the legacy
+            # path's pre-AI-408 ordering — cleanup fires even if start raises).
             session = await _start_deployment_session(
                 websocket=websocket,
                 deployment_id=deployment_id,
@@ -526,9 +528,10 @@ async def websocket_handler(websocket: WebSocket):
                 checkpointer=get_checkpointer(),
                 interaction_id=interaction_id,
             )
+            # Register BEFORE start() — pre-AI-408 pattern preserved.
+            _sessions[id(websocket)] = session
             await session.start()
 
-        _sessions[id(websocket)] = session
         await websocket.send_json({"type": "connected", "interaction_id": session.interaction_id})
 
         # Message loop
