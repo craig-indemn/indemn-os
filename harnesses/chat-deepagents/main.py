@@ -356,8 +356,10 @@ async def _start_deployment_session(
     except jsonschema.SchemaError as e:
         # Malformed parameter_schema on the Deployment record itself.
         # Save-time validation should prevent this, but legacy records or
-        # out-of-band writes could land bad schemas; surface as a
-        # validation_error rather than crashing.
+        # out-of-band writes could land bad schemas. Distinct code
+        # `deployment_schema_invalid` (vs user-input `validation_error`)
+        # so the SDK can route this to the operator instead of retrying
+        # with different data — reviewer-suggested distinction R3.
         log.warning(
             "Deployment %s has malformed parameter_schema: %s",
             deployment_id,
@@ -369,7 +371,7 @@ async def _start_deployment_session(
                 "content": (
                     f"Deployment parameter_schema is invalid: {e.message}"
                 ),
-                "code": "validation_error",
+                "code": "deployment_schema_invalid",
             }
         )
         await websocket.close(code=1008)

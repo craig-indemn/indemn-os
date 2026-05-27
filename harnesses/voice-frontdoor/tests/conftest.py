@@ -79,6 +79,21 @@ def _test_public_key(_test_rsa_keypair):
 
 
 @pytest.fixture(autouse=True)
+def _force_rs256_for_legacy_tests(monkeypatch):
+    """The voice-frontdoor test suite was written against RS256 (the
+    original design path) — `valid_jwt` / `expired_jwt` fixtures mint
+    RS256 tokens, the autouse `_stub_jwt_public_key` stubs the RS256
+    public key. Post-AI-408 the shared module's JWT_ALGORITHM default
+    flipped from "RS256" → "HS256" to match OS-current reality + the
+    docstring (review punchlist P1). Pin RS256 in the test environment so
+    the existing 99-test suite continues exercising what it was designed
+    to exercise. Tests that specifically need HS256 (TestJWTHS256PurposeClaim)
+    override via their own monkeypatch.
+    """
+    monkeypatch.setenv("JWT_ALGORITHM", "RS256")
+
+
+@pytest.fixture(autouse=True)
 def _stub_jwt_public_key(_test_public_key, monkeypatch):
     """Autouse: replace `_get_public_key` with a function returning the
     session-scoped test public key — on BOTH `harness.jwt_auth` (the

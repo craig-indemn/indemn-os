@@ -306,6 +306,40 @@ class TestConnectedPayloadValidationWarnings:
         assert "validation_warnings" in connected[0]
         assert connected[0]["validation_warnings"] == []
 
+    def test_connected_payload_carries_exactly_three_keys(self):
+        """R1: pin the exact `connected` payload shape so a future task
+        can't accidentally leak internals (e.g., `effective_actor_id`,
+        `authenticated_actor_id`, `correlation_id`) by adding them to the
+        payload. Expected shape: {type, interaction_id, validation_warnings}."""
+        connect_msg = {
+            "type": "connect",
+            "associate_id": "act_legacy",
+            "auth_token": "tok",
+        }
+        ws = _build_mock_websocket(connect_msg)
+
+        chat_instance = MagicMock()
+        chat_instance.start = AsyncMock()
+        chat_instance.close = AsyncMock()
+        chat_instance.interaction_id = "int_legacy"
+        chat_instance.validation_warnings = []
+
+        with patch.object(
+            harness_main, "ChatSession", return_value=chat_instance
+        ), patch.object(
+            harness_main, "_start_deployment_session", new_callable=AsyncMock
+        ):
+            _run(harness_main.websocket_handler(ws))
+
+        connected = [p for p in _send_payloads(ws) if p.get("type") == "connected"]
+        assert len(connected) == 1
+        # EXACT key set — no leaked internals
+        assert set(connected[0].keys()) == {
+            "type",
+            "interaction_id",
+            "validation_warnings",
+        }
+
     def test_deployment_path_propagates_session_warnings(self):
         """Deployment-driven: warnings stashed on ChatSession by
         _start_deployment_session flow through to the connected payload."""

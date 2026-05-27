@@ -233,18 +233,20 @@ class TestRS256AudiencePinning:
 
 
 class TestAlgorithmDefault:
-    def test_unset_jwt_algorithm_defaults_to_rs256(
-        self, monkeypatch, _rsa_keypair
-    ):
-        """Per the design forward path — no env = RS256."""
+    def test_unset_jwt_algorithm_defaults_to_hs256(self, monkeypatch):
+        """Per OS-current reality — no env = HS256 (the kernel signs HS256
+        tokens today). Default flipped from "RS256" post-AI-408 Task 3.4
+        extraction (reviewer-caught docstring/code mismatch — P1 in the
+        review punchlist). Production deploys set the env var explicitly
+        so no operational impact; this closes the silent-AWS-Secrets-call
+        trap for any new caller who trusts the docstring."""
         monkeypatch.delenv("JWT_ALGORITHM", raising=False)
-        monkeypatch.setattr(
-            "harness_common.jwt_auth._get_public_key",
-            lambda: _rsa_keypair[1],
+        monkeypatch.setenv(
+            "JWT_SIGNING_KEY", "test-secret-key-32-bytes-or-more-long"
         )
-        token = _rs256_token(_rsa_keypair[0], aud=["runtime-chat"])
-        claims = verify_jwt(token, audience="runtime-chat")
-        assert claims["sub"] == "act_test"
+        token = _hs256_token(actor_id="act_alice")
+        claims = verify_jwt(token, audience="ignored-in-hs256-mode")
+        assert claims["sub"] == "act_alice"
 
 
 # -----------------------------------------------------------------------------

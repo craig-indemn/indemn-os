@@ -378,6 +378,35 @@ class TestComposedSystemMessage:
         assert "chat" in ctx_msg.content  # security layer (channel_kind)
         assert "Sales-Web" in ctx_msg.content  # security layer (deployment_name)
 
+    def test_composed_message_handles_colon_containing_values(self):
+        """R5: a static_parameter or dynamic_param value containing colons
+        (e.g., a URL like `https://x.com:8080`) must survive the
+        `f"  {k}: {v}"` formatting in `compose_initial_messages` without
+        ambiguity. The agent reading the line `  current_url: https://x.com:8080`
+        should be able to recover the full value. Cosmetic concern raised
+        by reviewer — pinned with this test."""
+        deployment_with_url = {
+            **_DEPLOYMENT_WITH_STATICS,
+            "static_parameters": {
+                "role": "sales",
+                "callback_url": "https://hooks.example.com:8443/path",
+            },
+        }
+        s = _make_session(
+            deployment=deployment_with_url,
+            dynamic_params={"current_route": "/proposals?id=1:2:3"},
+        )
+        ctx = s._build_deployment_context(_ASSOCIATE, deployment_with_url)
+        msgs = ChatSession.compose_initial_messages("skill", ctx)
+        ctx_msg = next(
+            m for m in msgs
+            if isinstance(m, SystemMessage) and "<deployment_context>" in m.content
+        )
+        # Full values preserved verbatim — colons within values do not
+        # truncate or shift parser intent
+        assert "https://hooks.example.com:8443/path" in ctx_msg.content
+        assert "/proposals?id=1:2:3" in ctx_msg.content
+
     def test_composed_message_carries_sanitized_dynamic(self):
         s = _make_session(
             deployment=_DEPLOYMENT_WITH_STATICS,

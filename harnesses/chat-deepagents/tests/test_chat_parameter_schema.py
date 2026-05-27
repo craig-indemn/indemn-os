@@ -376,9 +376,11 @@ class TestNoSchemaDeployment:
 
 
 class TestMalformedSchema:
-    def test_malformed_schema_rejected_as_validation_error(self):
+    def test_malformed_schema_rejected_as_deployment_schema_invalid(self):
         """A bad parameter_schema on the Deployment surfaces as
-        validation_error (with the SchemaError message) — not a 500 crash."""
+        `deployment_schema_invalid` (distinct from user-input
+        `validation_error`) so the SDK can route this to the operator
+        rather than retrying with different data. R3 from the code review."""
         bad_deployment = {
             **_STRICT_DEPLOYMENT,
             "_id": "dep_bad_schema",
@@ -390,7 +392,7 @@ class TestMalformedSchema:
         )
         assert result is None
         errors = [p for p in _send_payloads(ws) if p.get("type") == "error"]
-        assert errors[0]["code"] == "validation_error"
+        assert errors[0]["code"] == "deployment_schema_invalid"
         ws.close.assert_called_once_with(code=1008)
 
 
@@ -400,6 +402,29 @@ class TestMalformedSchema:
 
 
 class TestValidationOrder:
+    def test_status_check_runs_before_parameter_schema(self):
+        """R2: An inactive Deployment with otherwise-invalid params should
+        surface deployment_not_active (4009), NOT validation_error (1008).
+        The status check comes BEFORE parameter_schema in the chain so a
+        paused Deployment doesn't waste effort + doesn't leak schema
+        detail to callers who shouldn't even be talking to it."""
+        paused_dep_with_schema = {
+            **_STRICT_DEPLOYMENT,
+            "_id": "dep_paused_strict",
+            "status": "paused",
+        }
+        ws, mock_cls, result = _drive(
+            deployment=paused_dep_with_schema,
+            # Params would fail schema (no actor_id) — but status rejects first
+            dynamic_params={},
+        )
+        assert result is None
+        errors = [p for p in _send_payloads(ws) if p.get("type") == "error"]
+        assert len(errors) == 1
+        # 4009 + deployment_not_active, NOT 1008 + validation_error
+        assert errors[0]["code"] == "deployment_not_active"
+        ws.close.assert_called_once_with(code=4009)
+
     def test_malformed_actor_id_rejected_before_acts_as_check(self):
         """A wrong-type actor_id (int when schema says string) → validation
         rejects FIRST. acts_as gate never sees it. This matters because the

@@ -111,7 +111,14 @@ def verify_jwt(token: str, *, audience: str) -> dict:
     reason=expired / WS 1008 reason=expired) and fall back to PyJWTError
     for everything else (→ 401 reason=invalid / WS 1008 reason=invalid).
     """
-    algorithm = os.environ.get("JWT_ALGORITHM", "RS256")
+    # Default to HS256 — matches OS-current reality (the kernel signs HS256
+    # tokens today) + the docstring above. Reviewer-caught mismatch fixed
+    # post-AI-408 Task 3.4 extraction: pre-fix default was "RS256", which
+    # would silently route operators who DIDN'T set JWT_ALGORITHM to an
+    # AWS Secrets call → silent failure in environments where the docstring
+    # led them to expect HS256 fallthrough. Production deploys set the env
+    # var explicitly so no operational impact; this just closes the trap.
+    algorithm = os.environ.get("JWT_ALGORITHM", "HS256")
     if algorithm == "HS256":
         # OS-current path. Symmetric HMAC; no iss/aud (OS doesn't set them).
         key = os.environ["JWT_SIGNING_KEY"]

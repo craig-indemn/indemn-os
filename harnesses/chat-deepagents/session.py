@@ -54,10 +54,21 @@ class ChatSession:
         branch skips the env-setting.
 
         effective_actor_id reads from self.effective_actor_id (AI-408 Phase 3).
-        For the legacy associate_id-only path this still resolves to
-        self.associate_id (the __init__ default). For Deployment-driven
-        sessions Task 3.5 wires this to JWT.sub when acts_as=session_actor
-        or to Deployment.associate_id when acts_as=associate_self.
+        Two cases flow through this single attribute:
+        - **Legacy associate_id-only path:** ChatSession constructed without
+          the AI-408 kwargs; __init__'s `effective_actor_id or associate_id`
+          default makes self.effective_actor_id == self.associate_id, so
+          forensics attribution is unchanged from pre-AI-408 ("the chat
+          associate acted").
+        - **Deployment-driven (AI-408 Task 3.5):** _start_deployment_session
+          computes effective_actor_id from the acts_as gate — JWT.sub for
+          session_actor (the impersonated user), Deployment.associate_id
+          for associate_self (the agent acting as itself) — and passes it
+          to ChatSession.__init__.
+
+        The load-bearing invariant lives at _start_deployment_session's
+        `effective_actor_id = authenticated_actor_id` line + this attribute
+        read; neither reads from dynamic_params.
         """
         return indemn(
             *args,
@@ -231,8 +242,33 @@ class ChatSession:
             # may have no correlation_id — fall back to fresh UUID.
             try:
                 interaction = self._session_indemn("interaction", "get", self.interaction_id)
-                self.correlation_id = interaction.get("correlation_id") or str(uuid.uuid4())
+                recovered = interaction.get("correlation_id")
+                if recovered:
+                    self.correlation_id = recovered
+                else:
+                    # Pre-Phase-4 Interaction lacks correlation_id, OR a
+                    # Phase-4 Interaction that should have one is missing it
+                    # (suggests an AI-407 regression on the cascade-lineage
+                    # write path). Either way we mint a fresh UUID + log a
+                    # WARNING so this surfaces in monitoring instead of
+                    # silently dropping the resume's lineage attribution.
+                    log.warning(
+                        "Resume Interaction %s missing correlation_id; "
+                        "minting fresh UUID (lineage continuity lost)",
+                        self.interaction_id,
+                    )
+                    self.correlation_id = str(uuid.uuid4())
             except Exception:
+                # CLI failure / Interaction not found / etc. — log + fall
+                # through to fresh UUID so resume still proceeds with
+                # best-effort continuity. The session works; lineage may
+                # be reset.
+                log.warning(
+                    "Failed to recover correlation_id from resume "
+                    "Interaction %s; minting fresh UUID",
+                    self.interaction_id,
+                    exc_info=True,
+                )
                 self.correlation_id = str(uuid.uuid4())
         else:
             interaction = await create_interaction(
