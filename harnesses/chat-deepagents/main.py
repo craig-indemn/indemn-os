@@ -26,6 +26,7 @@ import uvicorn
 from harness.session import ChatSession
 from harness_common.cli import CLIError, indemn
 from harness_common.jwt_auth import verify_jwt as _verify_jwt_shared
+from harness_common.rate_limit import RateLimiter
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from jsonschema.validators import Draft202012Validator
 from starlette.applications import Starlette
@@ -38,6 +39,16 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 # (audience="runtime-voice-frontdoor") MUST NOT validate against chat.
 # HS256 mode ignores this (OS doesn't set aud); RS256 mode enforces it.
 JWT_AUDIENCE = "runtime-chat"
+
+
+# AI-408 Phase 3 PM1 hardening (post-review punchlist from code-reviewer):
+# voice-frontdoor enforces sliding-window rate limiting before resource
+# allocation; chat was missing the equivalent. Module-level singleton —
+# sliding-window state accumulates across requests by design. Per-process
+# (separate from voice-frontdoor's singleton — each surface has its own
+# throttle). Defaults match voice-frontdoor's RateLimiter defaults
+# (per-IP 10/min, per-actor 30/min, per-deployment 100/min).
+_rate_limiter = RateLimiter()
 
 
 def _verify_jwt(token: str) -> dict:
@@ -451,6 +462,46 @@ async def _start_deployment_session(
         # actor_id is ignored entirely. JWT only proved the caller is
         # authenticated; the JWT's actor_id is irrelevant.
         effective_actor_id = associate_id
+
+    # Step 7: Rate-limit per §10.7 row "Replay of session creation" (AI-408
+    # PM1 hardening — mirrors voice-frontdoor's Task 2.36). MUST fire BEFORE
+    # ChatSession construction (which creates Interaction + Attention +
+    # checkpointer state) — otherwise an attacker who passes Origin + has
+    # any valid JWT could exhaust runtime memory by opening unlimited
+    # WebSockets, each one allocating resources before being throttled.
+    # WebSocket close 1013 ("Try Again Later" per RFC 6455) is the canonical
+    # analog of HTTP 429.
+    client_ip = (
+        websocket.client.host if websocket.client else "unknown"
+    )
+    rl_result = _rate_limiter.check_with_retry(
+        ip=client_ip,
+        actor=effective_actor_id,
+        deployment=deployment_id,
+    )
+    if not rl_result["allowed"]:
+        log.info(
+            "Rate-limited chat connect — scope=%s, ip=%s, actor=%s, "
+            "deployment=%s",
+            rl_result["scope"],
+            client_ip,
+            effective_actor_id,
+            deployment_id,
+        )
+        await websocket.send_json(
+            {
+                "type": "error",
+                "content": (
+                    f"Rate limited (scope={rl_result['scope']}); retry after "
+                    f"{rl_result['retry_after_seconds']}s"
+                ),
+                "code": "rate_limited",
+                "scope": rl_result["scope"],
+                "retry_after_seconds": rl_result["retry_after_seconds"],
+            }
+        )
+        await websocket.close(code=1013)
+        return None
 
     session = ChatSession(
         websocket=websocket,
