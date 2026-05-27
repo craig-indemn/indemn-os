@@ -19,6 +19,7 @@ from harness_common.attention import attention_heartbeat_loop, close_attention, 
 from harness_common.cli import CLIError, indemn
 from harness_common.interaction import close_interaction, create_interaction
 from harness_common.runtime import RUNTIME_ID
+from harness_common.sanitize import sanitize_dynamic_params
 from harness_common.thread_id import derive_checkpointer_thread_id
 from langchain_core.messages import SystemMessage
 from starlette.websockets import WebSocket
@@ -318,16 +319,44 @@ class ChatSession:
         self, associate: dict, deployment: dict | None
     ) -> dict:
         """Build the deployment_context dict for the <deployment_context>
-        SystemMessage. Pre-AI-408 (current scope): no user-supplied
-        dynamic_params; context is operator-trusted (no sanitization needed).
-        AI-408 will add dynamic_params from the connect message + run them
-        through sanitize_dynamic_params (Task 2.0.5) before merging here.
+        SystemMessage (AI-408 Task 3.7).
+
+        Three layers, applied in order (later overrides earlier):
+
+        1. **Operator-trusted static_parameters** (lowest priority) — set on
+           the Deployment record by the operator. Trusted, no sanitization.
+
+        2. **User-supplied dynamic_params** (sanitized via
+           sanitize_dynamic_params per §10.7 layer-c — strips newlines /
+           HTML tags / caps length, defending against pseudo-SystemMessage
+           injection like `"\\n[NEW INSTRUCTION]..."`). Overrides static
+           for any operator-suppliable key (e.g., user-set `current_route`
+           overrides any operator-default).
+
+        3. **Security-determined fields** (highest priority — applied LAST
+           so user-supplied params can NEVER spoof them):
+           - `actor_id` = `self.effective_actor_id` (from Task 3.5's
+             acts_as gate: JWT.sub for session_actor, Deployment.associate_id
+             for associate_self). A dynamic_params.actor_id that named a
+             different user would be silently overridden here even if it
+             survived schema validation + the acts_as mismatch check.
+           - `channel_kind` = "chat" (the surface this session is on)
+           - `deployment_id` / `deployment_name` = from the Deployment record
+
+        Legacy (no deployment) path: skips layers 1+2, only security-
+        determined fields appear. effective_actor_id defaults to
+        associate_id in __init__, so behavior matches pre-AI-408.
         """
-        ctx = {
-            "actor_id": str(self.associate_id),
-            "actor_name": associate.get("name", "Assistant"),
-            "channel_kind": "chat",
-        }
+        ctx: dict = {}
+        if deployment:
+            # Layer 1: operator-trusted static params
+            ctx.update(deployment.get("static_parameters") or {})
+            # Layer 2: user-supplied dynamic params (sanitized — §10.7 layer-c)
+            ctx.update(sanitize_dynamic_params(self.dynamic_params or {}))
+        # Layer 3: security-determined fields (override anything user-supplied)
+        ctx["actor_id"] = str(self.effective_actor_id)
+        ctx["actor_name"] = associate.get("name", "Assistant")
+        ctx["channel_kind"] = "chat"
         if deployment:
             ctx["deployment_id"] = str(deployment.get("_id", ""))
             ctx["deployment_name"] = deployment.get("name", "")
