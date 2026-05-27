@@ -459,6 +459,7 @@ async def _start_deployment_session(
         deployment=deployment,
         dynamic_params=dynamic_params,
         effective_actor_id=effective_actor_id,
+        validation_warnings=validation_warnings,
     )
     # Register BEFORE start() — matches original (pre-AI-408) pattern so the
     # `finally: _sessions.pop(...)` cleanup fires even when start() raises
@@ -532,7 +533,17 @@ async def websocket_handler(websocket: WebSocket):
             _sessions[id(websocket)] = session
             await session.start()
 
-        await websocket.send_json({"type": "connected", "interaction_id": session.interaction_id})
+        # AI-408 Task 3.6 follow-up: surface forgiving-mode parameter_schema
+        # warnings to the client per plan §3.6. Always include the field
+        # (empty list when no warnings) so SDK consumers can iterate
+        # without null-checking. Legacy path's ChatSession defaults to [].
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "interaction_id": session.interaction_id,
+                "validation_warnings": session.validation_warnings,
+            }
+        )
 
         # Message loop
         while True:

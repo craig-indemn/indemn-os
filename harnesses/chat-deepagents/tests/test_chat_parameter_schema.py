@@ -312,6 +312,40 @@ class TestForgivingMode:
         assert errors == []
         mock_cls.assert_called_once()
 
+    def test_forgiving_mode_passes_warnings_to_chatsession(self):
+        """AI-408 Task 3.6 follow-up: forgiving-mode warnings are passed
+        to ChatSession via the `validation_warnings` kwarg, which the
+        websocket_handler then surfaces in the `connected` payload per
+        plan §3.6. This test pins the wiring _start_deployment_session →
+        ChatSession; test_connect_warnings_surface.py covers the
+        end-to-end surface through websocket_handler."""
+        ws, mock_cls, result = _drive(
+            deployment=_FORGIVING_DEPLOYMENT,
+            dynamic_params={
+                "actor_id": "act_alice",  # valid
+                "extra_field": "would_fail_strict",  # additionalProperties:false
+            },
+        )
+        assert result is not None
+        # ChatSession constructed with validation_warnings populated
+        kwargs = mock_cls.call_args.kwargs
+        assert "validation_warnings" in kwargs
+        warnings = kwargs["validation_warnings"]
+        assert len(warnings) >= 1
+        assert any("extra_field" in w for w in warnings)
+
+    def test_strict_mode_pass_yields_empty_warnings(self):
+        """Strict-mode-passing requests: ChatSession gets [] for
+        validation_warnings (no warnings to report). Keeps the stable
+        shape so SDKs can always iterate the field."""
+        ws, mock_cls, result = _drive(
+            deployment=_STRICT_DEPLOYMENT,
+            dynamic_params={"actor_id": "act_alice"},
+        )
+        assert result is not None
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs.get("validation_warnings") == []
+
     def test_valid_params_in_forgiving_mode_pass(self):
         """Smoke: forgiving + valid params → session constructed (no warnings)."""
         ws, mock_cls, result = _drive(

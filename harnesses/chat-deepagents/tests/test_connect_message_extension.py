@@ -270,3 +270,67 @@ class TestConnectMessageExtension:
 # that emitted `code: "not_implemented"` + close 4501. Task 3.2 (next commit
 # in this branch) replaces the stub with the real Deployment-load flow —
 # end-to-end coverage of that behavior moves to test_deployment_session_start.py.
+
+
+class TestConnectedPayloadValidationWarnings:
+    """AI-408 Task 3.6 follow-up: the connected payload always carries a
+    `validation_warnings: list[str]` field per plan §3.6. Empty list for
+    legacy (no deployment, no schema) + strict-mode-passing sessions;
+    populated for forgiving-mode sessions with warnings."""
+
+    def test_legacy_path_carries_empty_warnings_field(self):
+        """Legacy associate_id-only path: ChatSession default
+        validation_warnings = [] surfaces in the connected payload."""
+        connect_msg = {
+            "type": "connect",
+            "associate_id": "act_legacy",
+            "auth_token": "test-token",
+        }
+        ws = _build_mock_websocket(connect_msg)
+
+        chat_instance = MagicMock()
+        chat_instance.start = AsyncMock()
+        chat_instance.close = AsyncMock()
+        chat_instance.interaction_id = "int_legacy"
+        chat_instance.validation_warnings = []
+
+        with patch.object(
+            harness_main, "ChatSession", return_value=chat_instance
+        ), patch.object(
+            harness_main, "_start_deployment_session", new_callable=AsyncMock
+        ):
+            _run(harness_main.websocket_handler(ws))
+
+        connected = [p for p in _send_payloads(ws) if p.get("type") == "connected"]
+        assert len(connected) == 1
+        assert "validation_warnings" in connected[0]
+        assert connected[0]["validation_warnings"] == []
+
+    def test_deployment_path_propagates_session_warnings(self):
+        """Deployment-driven: warnings stashed on ChatSession by
+        _start_deployment_session flow through to the connected payload."""
+        connect_msg = {
+            "type": "connect",
+            "deployment_id": "dep_forgiving",
+            "auth_token": "tok",
+        }
+        ws = _build_mock_websocket(connect_msg)
+
+        dep_session = MagicMock(interaction_id="int_dep")
+        dep_session.close = AsyncMock()
+        dep_session.validation_warnings = [
+            "extra_field: Additional properties are not allowed",
+            "actor_id: 'has-hyphens' does not match pattern '^[A-Za-z0-9_]+$'",
+        ]
+
+        with patch.object(
+            harness_main,
+            "_start_deployment_session",
+            new_callable=AsyncMock,
+            return_value=dep_session,
+        ), patch.object(harness_main, "ChatSession"):
+            _run(harness_main.websocket_handler(ws))
+
+        connected = [p for p in _send_payloads(ws) if p.get("type") == "connected"]
+        assert len(connected) == 1
+        assert connected[0]["validation_warnings"] == dep_session.validation_warnings

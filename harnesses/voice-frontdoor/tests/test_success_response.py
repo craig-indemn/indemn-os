@@ -87,11 +87,12 @@ class TestSuccessResponse:
 
         assert response.status_code == 200
 
-    def test_response_shape_exactly_four_keys(self, client, jwt_for_actor):
-        """The success response carries EXACTLY 4 keys per §10.3.1 — no
-        leaked internal state (authenticated_actor_id, effective_actor_id,
-        correlation_id, validation_warnings). The SDK only needs what
-        LiveKit + the resume flow need."""
+    def test_response_shape_carries_five_keys(self, client, jwt_for_actor):
+        """The success response carries the §10.3.1 4 keys + validation_warnings
+        (added AI-408 Task 3.6 follow-up per plan §3.6). authenticated_actor_id,
+        effective_actor_id, correlation_id stay server-side. validation_warnings
+        defaults to [] for strict-mode-passing requests; populated by forgiving
+        mode for SDK debugging."""
         token = jwt_for_actor("act_alice")
         deployment = _stub_deployment_session_actor()
         with patch(
@@ -106,7 +107,49 @@ class TestSuccessResponse:
             "livekit_url",
             "livekit_token",
             "interaction_id",
+            "validation_warnings",
         }
+        # Strict-mode pass → empty list (no warnings to report)
+        assert body["validation_warnings"] == []
+
+    def test_forgiving_mode_surfaces_warnings_to_sdk(self, client, jwt_for_actor):
+        """AI-408 Task 3.6 follow-up: forgiving-mode validation warnings
+        surface to the SDK in the success response per plan §3.6. SDK devs
+        get actionable feedback ('your actor_id pattern is wrong') instead
+        of silent acceptance that breaks later when the operator flips to
+        strict."""
+        token = jwt_for_actor("act_alice")
+        deployment = {
+            **_stub_deployment_session_actor(),
+            "parameter_schema_validation_mode": "forgiving",
+        }
+        # acts_as=session_actor + matching JWT — get past the acts_as gate
+        with patch(
+            "harness.sessions._load_deployment",
+            new=AsyncMock(return_value=deployment),
+        ):
+            response = client.post(
+                "/sessions",
+                json={
+                    "deployment_id": deployment["_id"],
+                    "dynamic_params": {
+                        "actor_id": "act_alice",  # matches JWT.sub
+                        "extra_field": "would_fail_strict",  # additionalProperties:false
+                    },
+                },
+                headers={
+                    "Origin": "https://sales.indemn.ai",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+
+        # Forgiving mode → 200 (not 400), warnings surface
+        assert response.status_code == 200
+        body = response.json()
+        assert "validation_warnings" in body
+        assert len(body["validation_warnings"]) >= 1
+        # The warning text names the offending field
+        assert any("extra_field" in w for w in body["validation_warnings"])
 
     def test_response_carries_interaction_id_from_interaction_creation(
         self, client, jwt_for_actor

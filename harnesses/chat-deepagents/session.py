@@ -154,6 +154,7 @@ class ChatSession:
         deployment: dict | None = None,
         dynamic_params: dict | None = None,
         effective_actor_id: str | None = None,
+        validation_warnings: list[str] | None = None,
     ):
         self.ws = websocket
         self.associate_id = associate_id
@@ -187,6 +188,14 @@ class ChatSession:
         # Deployments. _session_indemn reads this attribute on every CLI
         # call (kept in sync with the AI-407 per-call kwarg path).
         self.effective_actor_id: str = effective_actor_id or associate_id
+        # AI-408 Task 3.6 follow-up: forgiving-mode parameter_schema warnings
+        # surfaced to the client in the `connected` payload (per plan §3.6:
+        # "If forgiving → continue with validation_warnings in the connected
+        # response"). Empty list when no warnings — kept as a stable field
+        # shape so SDKs can iterate without null-checking. Legacy (no
+        # deployment) path always passes [] since there's no schema to
+        # validate against.
+        self.validation_warnings: list[str] = validation_warnings or []
 
     async def start(self):
         """Initialize the session — load config, create Interaction + Attention, build agent."""

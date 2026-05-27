@@ -855,6 +855,7 @@ async def create_session(request: Request) -> JSONResponse:
                 "livekit_url": lk_result["livekit_url"],
                 "livekit_token": lk_result["livekit_token"],
                 "interaction_id": interaction_id,
+                "validation_warnings": validation_warnings,
             },
             status_code=200,
         )
@@ -922,15 +923,18 @@ async def create_session(request: Request) -> JSONResponse:
             status_code=500,
         )
 
-    # Success — §10.3.1 contract, exactly 4 fields. No leaked internals
-    # (authenticated_actor_id / effective_actor_id / correlation_id /
-    # validation_warnings stay server-side; the SDK has what it needs).
+    # Success — §10.3.1 contract. authenticated_actor_id /
+    # effective_actor_id / correlation_id stay server-side; validation_warnings
+    # surfaces to the SDK per plan §3.6 ("If forgiving → continue with
+    # validation_warnings in the connected response" — symmetric to chat's
+    # behavior after the AI-408 Task 3.6 follow-up).
     return JSONResponse(
         {
             "room_name": lk_result["room_name"],
             "livekit_url": lk_result["livekit_url"],
             "livekit_token": lk_result["livekit_token"],
             "interaction_id": interaction_id,
+            "validation_warnings": validation_warnings,
         },
         status_code=200,
     )
