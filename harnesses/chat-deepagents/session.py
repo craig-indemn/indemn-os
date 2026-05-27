@@ -19,6 +19,7 @@ from harness_common.attention import attention_heartbeat_loop, close_attention, 
 from harness_common.cli import CLIError, indemn
 from harness_common.interaction import close_interaction, create_interaction
 from harness_common.runtime import RUNTIME_ID
+from harness_common.sanitize import sanitize_dynamic_params
 from harness_common.thread_id import derive_checkpointer_thread_id
 from langchain_core.messages import SystemMessage
 from starlette.websockets import WebSocket
@@ -52,14 +53,27 @@ class ChatSession:
         safely pass None — the wrapper's `if correlation_id is not None`
         branch skips the env-setting.
 
-        effective_actor_id = self.associate_id (the chat associate's actor).
-        AI-408's session_actor Deployment flow will revisit this when chat
-        starts impersonating end-users.
+        effective_actor_id reads from self.effective_actor_id (AI-408 Phase 3).
+        Two cases flow through this single attribute:
+        - **Legacy associate_id-only path:** ChatSession constructed without
+          the AI-408 kwargs; __init__'s `effective_actor_id or associate_id`
+          default makes self.effective_actor_id == self.associate_id, so
+          forensics attribution is unchanged from pre-AI-408 ("the chat
+          associate acted").
+        - **Deployment-driven (AI-408 Task 3.5):** _start_deployment_session
+          computes effective_actor_id from the acts_as gate — JWT.sub for
+          session_actor (the impersonated user), Deployment.associate_id
+          for associate_self (the agent acting as itself) — and passes it
+          to ChatSession.__init__.
+
+        The load-bearing invariant lives at _start_deployment_session's
+        `effective_actor_id = authenticated_actor_id` line + this attribute
+        read; neither reads from dynamic_params.
         """
         return indemn(
             *args,
             correlation_id=self.correlation_id,
-            effective_actor_id=self.associate_id,
+            effective_actor_id=self.effective_actor_id,
         )
 
     @staticmethod
@@ -149,6 +163,10 @@ class ChatSession:
         auth_token: str,
         checkpointer=None,
         interaction_id=None,
+        deployment: dict | None = None,
+        dynamic_params: dict | None = None,
+        effective_actor_id: str | None = None,
+        validation_warnings: list[str] | None = None,
     ):
         self.ws = websocket
         self.associate_id = associate_id
@@ -168,6 +186,28 @@ class ChatSession:
         self.deployment_id: str | None = None
         self.associate: dict | None = None
         self._initial_systemmessages: list | None = None
+        # AI-408 Phase 3: Deployment-driven session shape. When `deployment`
+        # is None we're on the legacy associate_id-only path (current OS
+        # Base UI). When set, start() uses the supplied Deployment instead
+        # of the one referenced from associate.deployment_id; dynamic_params
+        # + effective_actor_id flow into build_runnable_config + the
+        # <deployment_context> SystemMessage (Task 3.7).
+        self.deployment: dict | None = deployment
+        self.dynamic_params: dict = dynamic_params or {}
+        # effective_actor_id is the identity attributed to entity writes
+        # this session makes. Defaults to associate_id (legacy + pre-Task-3.5
+        # state). Task 3.5 overrides this with JWT.sub for session_actor
+        # Deployments. _session_indemn reads this attribute on every CLI
+        # call (kept in sync with the AI-407 per-call kwarg path).
+        self.effective_actor_id: str = effective_actor_id or associate_id
+        # AI-408 Task 3.6 follow-up: forgiving-mode parameter_schema warnings
+        # surfaced to the client in the `connected` payload (per plan §3.6:
+        # "If forgiving → continue with validation_warnings in the connected
+        # response"). Empty list when no warnings — kept as a stable field
+        # shape so SDKs can iterate without null-checking. Legacy (no
+        # deployment) path always passes [] since there's no schema to
+        # validate against.
+        self.validation_warnings: list[str] = validation_warnings or []
 
     async def start(self):
         """Initialize the session — load config, create Interaction + Attention, build agent."""
@@ -202,8 +242,33 @@ class ChatSession:
             # may have no correlation_id — fall back to fresh UUID.
             try:
                 interaction = self._session_indemn("interaction", "get", self.interaction_id)
-                self.correlation_id = interaction.get("correlation_id") or str(uuid.uuid4())
+                recovered = interaction.get("correlation_id")
+                if recovered:
+                    self.correlation_id = recovered
+                else:
+                    # Pre-Phase-4 Interaction lacks correlation_id, OR a
+                    # Phase-4 Interaction that should have one is missing it
+                    # (suggests an AI-407 regression on the cascade-lineage
+                    # write path). Either way we mint a fresh UUID + log a
+                    # WARNING so this surfaces in monitoring instead of
+                    # silently dropping the resume's lineage attribution.
+                    log.warning(
+                        "Resume Interaction %s missing correlation_id; "
+                        "minting fresh UUID (lineage continuity lost)",
+                        self.interaction_id,
+                    )
+                    self.correlation_id = str(uuid.uuid4())
             except Exception:
+                # CLI failure / Interaction not found / etc. — log + fall
+                # through to fresh UUID so resume still proceeds with
+                # best-effort continuity. The session works; lineage may
+                # be reset.
+                log.warning(
+                    "Failed to recover correlation_id from resume "
+                    "Interaction %s; minting fresh UUID",
+                    self.interaction_id,
+                    exc_info=True,
+                )
                 self.correlation_id = str(uuid.uuid4())
         else:
             interaction = await create_interaction(
@@ -290,16 +355,44 @@ class ChatSession:
         self, associate: dict, deployment: dict | None
     ) -> dict:
         """Build the deployment_context dict for the <deployment_context>
-        SystemMessage. Pre-AI-408 (current scope): no user-supplied
-        dynamic_params; context is operator-trusted (no sanitization needed).
-        AI-408 will add dynamic_params from the connect message + run them
-        through sanitize_dynamic_params (Task 2.0.5) before merging here.
+        SystemMessage (AI-408 Task 3.7).
+
+        Three layers, applied in order (later overrides earlier):
+
+        1. **Operator-trusted static_parameters** (lowest priority) — set on
+           the Deployment record by the operator. Trusted, no sanitization.
+
+        2. **User-supplied dynamic_params** (sanitized via
+           sanitize_dynamic_params per §10.7 layer-c — strips newlines /
+           HTML tags / caps length, defending against pseudo-SystemMessage
+           injection like `"\\n[NEW INSTRUCTION]..."`). Overrides static
+           for any operator-suppliable key (e.g., user-set `current_route`
+           overrides any operator-default).
+
+        3. **Security-determined fields** (highest priority — applied LAST
+           so user-supplied params can NEVER spoof them):
+           - `actor_id` = `self.effective_actor_id` (from Task 3.5's
+             acts_as gate: JWT.sub for session_actor, Deployment.associate_id
+             for associate_self). A dynamic_params.actor_id that named a
+             different user would be silently overridden here even if it
+             survived schema validation + the acts_as mismatch check.
+           - `channel_kind` = "chat" (the surface this session is on)
+           - `deployment_id` / `deployment_name` = from the Deployment record
+
+        Legacy (no deployment) path: skips layers 1+2, only security-
+        determined fields appear. effective_actor_id defaults to
+        associate_id in __init__, so behavior matches pre-AI-408.
         """
-        ctx = {
-            "actor_id": str(self.associate_id),
-            "actor_name": associate.get("name", "Assistant"),
-            "channel_kind": "chat",
-        }
+        ctx: dict = {}
+        if deployment:
+            # Layer 1: operator-trusted static params
+            ctx.update(deployment.get("static_parameters") or {})
+            # Layer 2: user-supplied dynamic params (sanitized — §10.7 layer-c)
+            ctx.update(sanitize_dynamic_params(self.dynamic_params or {}))
+        # Layer 3: security-determined fields (override anything user-supplied)
+        ctx["actor_id"] = str(self.effective_actor_id)
+        ctx["actor_name"] = associate.get("name", "Assistant")
+        ctx["channel_kind"] = "chat"
         if deployment:
             ctx["deployment_id"] = str(deployment.get("_id", ""))
             ctx["deployment_name"] = deployment.get("name", "")

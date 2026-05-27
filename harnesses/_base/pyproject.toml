@@ -6,4 +6,8 @@ dependencies = [
     "opentelemetry-api>=1.25",
     "opentelemetry-sdk>=1.25",
     "opentelemetry-exporter-otlp>=1.25",
+    # jwt_auth.py (AI-408 extraction from voice-frontdoor) needs pyjwt.
+    # [crypto] extra pulls cryptography for RS256 support (test path + future
+    # production when OS-side RS256 lands).
+    "pyjwt[crypto]>=2.8",
 ]

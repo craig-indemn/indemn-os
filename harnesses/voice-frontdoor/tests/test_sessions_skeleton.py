@@ -68,9 +68,13 @@ def test_sessions_happy_path_returns_200(client, valid_jwt):
             },
         )
     assert response.status_code == 200
+    # AI-408 Task 3.6 follow-up: validation_warnings field added per plan §3.6.
+    # Empty list when no forgiving-mode warnings — kept as stable shape so
+    # SDKs can iterate without null-checking.
     assert set(response.json().keys()) == {
         "room_name",
         "livekit_url",
         "livekit_token",
         "interaction_id",
+        "validation_warnings",
     }

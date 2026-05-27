@@ -79,27 +79,49 @@ def _test_public_key(_test_rsa_keypair):
 
 
 @pytest.fixture(autouse=True)
-def _stub_jwt_public_key(_test_public_key, monkeypatch):
-    """Autouse: replace `harness.jwt_auth._get_public_key` with a function
-    returning the session-scoped test public key.
-
-    Avoids the AWS Secrets Manager call during tests + pairs the verifier
-    with the test private key so JWTs minted by `valid_jwt` / `expired_jwt`
-    factories validate correctly. lru_cache on _get_public_key is bypassed
-    because monkeypatch replaces the bound function entirely.
-
-    Idempotent if harness.jwt_auth hasn't been imported yet — try/except
-    keeps the fixture safe in the brief window before Task 2.28 lands.
+def _force_rs256_for_legacy_tests(monkeypatch):
+    """The voice-frontdoor test suite was written against RS256 (the
+    original design path) — `valid_jwt` / `expired_jwt` fixtures mint
+    RS256 tokens, the autouse `_stub_jwt_public_key` stubs the RS256
+    public key. Post-AI-408 the shared module's JWT_ALGORITHM default
+    flipped from "RS256" → "HS256" to match OS-current reality + the
+    docstring (review punchlist P1). Pin RS256 in the test environment so
+    the existing 99-test suite continues exercising what it was designed
+    to exercise. Tests that specifically need HS256 (TestJWTHS256PurposeClaim)
+    override via their own monkeypatch.
     """
-    try:
-        monkeypatch.setattr(
-            "harness.jwt_auth._get_public_key",
-            lambda: _test_public_key,
-        )
-    except (ModuleNotFoundError, AttributeError):
-        # jwt_auth module / symbol not present — tests that don't need it
-        # still run; tests that do will fail loudly when verify_jwt is hit.
-        pass
+    monkeypatch.setenv("JWT_ALGORITHM", "RS256")
+
+
+@pytest.fixture(autouse=True)
+def _stub_jwt_public_key(_test_public_key, monkeypatch):
+    """Autouse: replace `_get_public_key` with a function returning the
+    session-scoped test public key — on BOTH `harness.jwt_auth` (the
+    voice-frontdoor wrapper) AND `harness_common.jwt_auth` (the shared
+    impl extracted in AI-408).
+
+    Why both: after AI-408's jwt_auth extraction, the wrapper's
+    `verify_jwt` delegates to `harness_common.jwt_auth.verify_jwt`, which
+    looks up `_get_public_key` in the SHARED module's namespace at call
+    time — not the wrapper's local re-export. Patching only the wrapper
+    leaks the AWS Secrets Manager call through the shared path. Patching
+    both keeps the existing test surface working AND covers the shared
+    path that chat-deepagents will also use.
+
+    lru_cache on _get_public_key is bypassed because monkeypatch replaces
+    the bound function entirely. Idempotent if either module hasn't been
+    imported yet — try/except keeps the fixture safe across phases.
+    """
+    for target in (
+        "harness.jwt_auth._get_public_key",
+        "harness_common.jwt_auth._get_public_key",
+    ):
+        try:
+            monkeypatch.setattr(target, lambda: _test_public_key)
+        except (ModuleNotFoundError, AttributeError):
+            # Module / symbol not present yet — fixture stays safe; the
+            # specific test will fail loudly if it actually needs the patch.
+            pass
 
 
 @pytest.fixture(autouse=True)
