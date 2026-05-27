@@ -20,12 +20,14 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+import jsonschema
 import jwt as pyjwt
 import uvicorn
 from harness.session import ChatSession
 from harness_common.cli import CLIError, indemn
 from harness_common.jwt_auth import verify_jwt as _verify_jwt_shared
 from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
+from jsonschema.validators import Draft202012Validator
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
@@ -43,6 +45,57 @@ def _verify_jwt(token: str) -> dict:
     with the chat audience pinned. Wrapped so tests can patch a single
     symbol on this module without reaching into harness_common."""
     return _verify_jwt_shared(token, audience=JWT_AUDIENCE)
+
+
+def _format_jsonschema_error(error: jsonschema.ValidationError) -> str:
+    """Render a single ValidationError as `<path>: <message>` so the SDK
+    can show the user which field failed. Mirrors voice-frontdoor."""
+    if error.absolute_path:
+        path = ".".join(str(p) for p in error.absolute_path)
+        return f"{path}: {error.message}"
+    return error.message
+
+
+def _validate_parameters(
+    deployment: dict, dynamic_params: dict
+) -> tuple[dict, list[str]]:
+    """Validate dynamic_params against `Deployment.parameter_schema` per §5.4
+    (AI-408 Task 3.6 — mirrors voice-frontdoor's helper).
+
+    Validation is on the MERGED static + dynamic set (per §5.4: "the schema
+    describes the union"). Returns (merged_context, validation_warnings):
+    - merged_context: static_parameters + dynamic_params (dynamic wins on
+      key collision — operators expect this since dynamic is user-supplied
+      override of operator-configured defaults)
+    - validation_warnings: list of jsonschema error messages, empty if
+      validation passed
+
+    Caller decides what to do with non-empty warnings based on
+    `Deployment.parameter_schema_validation_mode` ("strict" → reject with
+    WS close; "forgiving" → log + proceed).
+
+    Raises jsonschema.SchemaError if the schema itself is malformed —
+    caller catches + returns the same error shape as a validation failure.
+    """
+    static_parameters = deployment.get("static_parameters") or {}
+    merged = {**static_parameters, **(dynamic_params or {})}
+
+    schema = deployment.get("parameter_schema")
+    if not schema:
+        # No schema = no validation per §5.2 (parameter_schema is optional
+        # on Deployments with no dynamic params).
+        return merged, []
+
+    # Check the schema itself is valid before using it. Cheap defense in
+    # depth — kernel save_tracked validates this at Deployment-creation
+    # time, but legacy records or out-of-band writes could land malformed
+    # schemas; we'd rather reject here than crash on a malformed validator.
+    Draft202012Validator.check_schema(schema)
+
+    validator = Draft202012Validator(schema)
+    errors = sorted(validator.iter_errors(merged), key=lambda e: e.path)
+    warnings = [_format_jsonschema_error(e) for e in errors]
+    return merged, warnings
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -286,7 +339,69 @@ async def _start_deployment_session(
         await websocket.close(code=4009)
         return None
 
-    # Step 5: acts_as security gate per §5.6 + §10.7 (Task 3.5).
+    # Step 5: parameter_schema validation per §5.4 + §10.3.1 (Task 3.6).
+    # Validates the MERGED static + dynamic param set against the Deployment's
+    # parameter_schema (JSON Schema Draft 2020-12). Strict mode rejects with
+    # WS close 1008 + validation_error; forgiving mode logs + proceeds. Runs
+    # BEFORE acts_as so a malformed actor_id type gets rejected as a
+    # validation error (operator-actionable) rather than silently passing
+    # through to the impersonation-mismatch check.
+    try:
+        _merged_context, validation_warnings = _validate_parameters(
+            deployment, dynamic_params
+        )
+    except jsonschema.SchemaError as e:
+        # Malformed parameter_schema on the Deployment record itself.
+        # Save-time validation should prevent this, but legacy records or
+        # out-of-band writes could land bad schemas; surface as a
+        # validation_error rather than crashing.
+        log.warning(
+            "Deployment %s has malformed parameter_schema: %s",
+            deployment_id,
+            e,
+        )
+        await websocket.send_json(
+            {
+                "type": "error",
+                "content": (
+                    f"Deployment parameter_schema is invalid: {e.message}"
+                ),
+                "code": "validation_error",
+            }
+        )
+        await websocket.close(code=1008)
+        return None
+
+    validation_mode = (
+        deployment.get("parameter_schema_validation_mode") or "strict"
+    )
+    if validation_warnings:
+        if validation_mode == "strict":
+            log.info(
+                "Rejecting session for deployment %s (strict schema "
+                "validation failed: %s)",
+                deployment_id,
+                validation_warnings,
+            )
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "content": "; ".join(validation_warnings),
+                    "code": "validation_error",
+                }
+            )
+            await websocket.close(code=1008)
+            return None
+        # forgiving — log + proceed. Warnings stay server-side (matches
+        # voice-frontdoor's behavior — success response shape is the
+        # canonical 4 keys, no warnings field).
+        log.info(
+            "Forgiving-mode validation warnings on deployment %s: %s",
+            deployment_id,
+            validation_warnings,
+        )
+
+    # Step 6: acts_as security gate per §5.6 + §10.7 (Task 3.5).
     # LOAD-BEARING — this is the gate that makes the session_actor capability
     # safe. JWT IS the source of truth for `effective_actor_id`;
     # dynamic_params.actor_id is consulted ONLY for the mismatch check.
@@ -331,8 +446,6 @@ async def _start_deployment_session(
         # actor_id is ignored entirely. JWT only proved the caller is
         # authenticated; the JWT's actor_id is irrelevant.
         effective_actor_id = associate_id
-
-    # TODO Task 3.6: parameter_schema validation of dynamic_params
 
     session = ChatSession(
         websocket=websocket,

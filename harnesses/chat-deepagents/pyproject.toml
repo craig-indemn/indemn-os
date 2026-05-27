@@ -19,4 +19,7 @@ dependencies = [
     # AI-408 Task 3.4: JWT validation in connect (via harness_common.jwt_auth).
     # [crypto] extra pulls cryptography for RS256 support.
     "pyjwt[crypto]>=2.8",
+    # AI-408 Task 3.6: parameter_schema validation against Deployment-supplied
+    # JSON Schema (Draft 2020-12 — same as voice-frontdoor).
+    "jsonschema>=4.20",
 ]
