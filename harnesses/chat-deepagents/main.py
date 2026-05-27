@@ -286,16 +286,53 @@ async def _start_deployment_session(
         await websocket.close(code=4009)
         return None
 
-    # TODO Task 3.5: acts_as security gate — JWT.sub vs supplied actor_id
-    # TODO Task 3.6: parameter_schema validation of dynamic_params
-
-    # Pre-Task-3.5 default: effective_actor_id = Deployment.associate_id
-    # (i.e., associate_self semantics — the agent acts as itself, the
-    # supplied dynamic_params.actor_id is irrelevant until the acts_as gate
-    # is wired in Task 3.5). The legacy associate_id-only path reaches
-    # ChatSession with this same defaulting via the existing __init__ logic.
+    # Step 5: acts_as security gate per §5.6 + §10.7 (Task 3.5).
+    # LOAD-BEARING — this is the gate that makes the session_actor capability
+    # safe. JWT IS the source of truth for `effective_actor_id`;
+    # dynamic_params.actor_id is consulted ONLY for the mismatch check.
+    # Inherited verbatim from voice-frontdoor's Task 2.31 contract — code
+    # review verifies by reading `effective_actor_id = authenticated_actor_id`.
     associate_id = str(deployment["associate_id"])
-    effective_actor_id = associate_id
+    acts_as = deployment.get("acts_as")
+    if acts_as == "session_actor":
+        supplied_actor_id = dynamic_params.get("actor_id")
+        # `is not None` (not truthy-check) — empty string / 0 / False still
+        # count as "supplied" and must match. Schema validation (Task 3.6)
+        # will catch most malformed cases; this is defense-in-depth.
+        if (
+            supplied_actor_id is not None
+            and supplied_actor_id != authenticated_actor_id
+        ):
+            log.warning(
+                "JWT impersonation attempt rejected — JWT.sub=%r, "
+                "supplied actor_id=%r, deployment=%s",
+                authenticated_actor_id,
+                supplied_actor_id,
+                deployment_id,
+            )
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "content": (
+                        "Supplied actor_id does not match authenticated JWT"
+                    ),
+                    "code": "actor_mismatch",
+                }
+            )
+            await websocket.close(code=1008)
+            return None
+        # Source of truth: JWT. Never the supplied value, even when they're
+        # identical — keeps the security invariant load-bearing in code, not
+        # just in comments.
+        effective_actor_id = authenticated_actor_id
+    else:
+        # `associate_self` (default for public surfaces / anonymous users) —
+        # the agent acts AS the associate with its own permissions. Supplied
+        # actor_id is ignored entirely. JWT only proved the caller is
+        # authenticated; the JWT's actor_id is irrelevant.
+        effective_actor_id = associate_id
+
+    # TODO Task 3.6: parameter_schema validation of dynamic_params
 
     session = ChatSession(
         websocket=websocket,
