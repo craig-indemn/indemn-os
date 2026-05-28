@@ -524,10 +524,18 @@ async def _start_deployment_session(
 
 async def websocket_handler(websocket: WebSocket):
     """Handle one WebSocket connection — one ChatSession per connection."""
-    await websocket.accept()
     session = None
 
     try:
+        # accept() inside the try block so a handshake failure (transport
+        # torn down before headers complete, ASGI server error) still hits
+        # the catch-all close-frame path below — pre-accept errors would
+        # otherwise leak as code 1006 abnormal closure with no signal to
+        # the SDK. The catch-all's inner try/except on close() handles the
+        # case where accept() itself failed (close on an un-accepted socket
+        # is a no-op or raises, both swallowed).
+        await websocket.accept()
+
         # First message must be connect with auth
         connect_msg = await asyncio.wait_for(websocket.receive_json(), timeout=30)
         if connect_msg.get("type") != "connect":
@@ -616,6 +624,30 @@ async def websocket_handler(websocket: WebSocket):
         log.warning("WebSocket connect timeout")
     except Exception as e:
         log.error("WebSocket error: %s", e, exc_info=True)
+        # AI-409 smoke fix: send a proper WS close frame so the SDK reads
+        # a clean failure (1011 internal_error per RFC 6455) instead of
+        # a 1006 abnormal closure. Catches any unexpected exception
+        # escaping the explicit handlers above — KeyError (missing env
+        # var), TypeError, AttributeError, etc. Best-effort: if the WS
+        # is already closed or the transport is dead, both calls no-op.
+        # Note: 1011 (server internal error), NOT 1008 (policy violation
+        # used elsewhere). RFC 6455 distinguishes server-side bugs (1011)
+        # from client-side policy rejections (1008) — preserving the
+        # divergence helps the SDK + operators triage.
+        try:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "content": "internal server error",
+                    "code": "internal_error",
+                }
+            )
+        except Exception:
+            pass
+        try:
+            await websocket.close(code=1011, reason="internal_error")
+        except Exception:
+            pass
     finally:
         if session:
             await session.close()
