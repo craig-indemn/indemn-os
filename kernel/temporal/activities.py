@@ -236,8 +236,103 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
 
         errors = []
         batch_processed = 0
+        malformed_deleted = 0
 
-        # Process batch within a MongoDB transaction
+        # ---------------- DELETE path (Stage A3 — D-C complete audit) ----------------
+        # Per Session-35 Decision D-C: every delete emits a ChangeRecord with
+        # pre-delete state snapshot. bulk_delete_tracked writes per-entity audit
+        # records (in-memory hash-chained, single insert_many) then deletes via
+        # single delete_many. Cascade nullification of inbound refs is per-entity
+        # (Stage A4 refactors `cascade_nullify_references` to emit cascade audit
+        # records via _emit_cascade_audit; in A3 cascade still uses the existing
+        # update_many shortcut path).
+        #
+        # NOTE per Session 35 R1 F9: there is no @router.delete route in
+        # registration.py. Single-entity deletes route through CLI → /api/{slug}/bulk
+        # → BulkExecuteWorkflow delete branch, so this path covers BOTH single
+        # and bulk delete cases.
+        if spec.operation == "delete":
+            if entities:
+                from kernel.entity.save import bulk_delete_tracked, cascade_nullify_references
+
+                for entity in entities:
+                    await cascade_nullify_references(
+                        spec.entity_type, entity.id, entity.org_id
+                    )
+                    activity.heartbeat(f"cascade: {entity.id}")
+
+                delete_result = await bulk_delete_tracked(entities, actor_id=None)
+                batch_processed = delete_result["succeeded"]
+
+            # Bug #37 follow-on: cleanup pass for malformed rows. Entities that
+            # failed Pydantic validation aren't in `entities` (skip_invalid=True
+            # above). For DELETE, find their matched _ids in this batch's offset
+            # window and delete_many them directly. Audit chain skipped (can't
+            # compute changes from a doc that doesn't validate; accept the lossy
+            # audit for the cleanup case).
+            if typed_filter is not None:
+                coll = entity_cls.get_motor_collection()
+                matched_ids_cursor = (
+                    coll.find(typed_filter, {"_id": 1})
+                    .skip(offset)
+                    .limit(spec.batch_size)
+                )
+                matched_ids = [doc["_id"] for doc in await matched_ids_cursor.to_list(length=None)]
+                valid_ids = {e.id for e in entities}
+                bad_ids = [_id for _id in matched_ids if _id not in valid_ids]
+                if bad_ids:
+                    result = await coll.delete_many({"_id": {"$in": bad_ids}})
+                    malformed_deleted = result.deleted_count
+                    for bad_id in bad_ids:
+                        logger.warning(
+                            "Bug #37 cleanup: bulk-delete removed malformed %s _id=%s "
+                            "(audit chain skipped — entity failed Pydantic validation)",
+                            spec.entity_type,
+                            bad_id,
+                        )
+
+            total_count = offset + len(entities) + malformed_deleted
+            done = (len(entities) + malformed_deleted) < spec.batch_size
+
+            return {
+                "done": done,
+                "batch_processed": batch_processed + malformed_deleted,
+                "total_count": total_count,
+                "errors": errors,
+            }
+
+        # ---------------- UPDATE path (Stage A5 — D4 + D24 audit completion) ----------------
+        # Per Session-35 D4: D-A audit scope expands to cover bulk-update path.
+        # The prior update_one shortcut is removed; bulk updates now route through
+        # bulk_update_tracked which emits per-entity ChangeRecord via in-memory
+        # hash chain (D24: same audit shape for create + update + delete + cascade;
+        # mirror bulk_save_tracked lines 312-337).
+        # Watch events remain silent for bulk updates (D4's scope is audit-only;
+        # event emission is orthogonal to audit completeness and not pinned in D1-D26).
+        if spec.operation == "update":
+            if entities and spec.sets:
+                from kernel.entity.save import bulk_update_tracked
+
+                update_result = await bulk_update_tracked(
+                    entities,
+                    spec.sets,
+                    method="bulk_update",
+                    method_metadata={"bulk_operation_id": activity.info().workflow_id},
+                )
+                batch_processed = update_result["succeeded"]
+
+            total_count = offset + len(entities)
+            done = len(entities) < spec.batch_size
+
+            return {
+                "done": done,
+                "batch_processed": batch_processed,
+                "total_count": total_count,
+                "errors": errors,
+            }
+
+        # ---------------- Non-delete-non-update path: per-entity transaction-wrapped loop ----------------
+        # transition / method / create — atomic per batch via MongoDB transaction.
         from kernel.db import get_client
 
         mongo_client = get_client()
@@ -264,29 +359,10 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
                                         "bulk_operation_id": activity.info().workflow_id,
                                     },
                                 )
-                        elif spec.operation == "update":
-                            if spec.sets:
-                                for field, value in spec.sets.items():
-                                    setattr(entity, field, value)
-                                # Silent update — bypasses save_tracked() to avoid event emission
-                                await entity.get_motor_collection().update_one(
-                                    {"_id": entity.id},
-                                    {"$set": spec.sets, "$inc": {"version": 1}},
-                                    session=session,
-                                )
                         elif spec.operation == "create":
                             org = ObjectId(spec.org_id) if spec.org_id else current_org_id.get()
                             new_entity = entity_cls(org_id=org, **entity)
                             await new_entity.save_tracked(method="bulk_create")
-                        elif spec.operation == "delete":
-                            from kernel.entity.save import cascade_nullify_references
-
-                            await cascade_nullify_references(
-                                spec.entity_type, entity.id, entity.org_id
-                            )
-                            await entity.get_motor_collection().delete_one(
-                                {"_id": entity.id}, session=session
-                            )
 
                         batch_processed += 1
 
@@ -308,45 +384,12 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
 
                     activity.heartbeat(f"batch progress: {batch_processed}")
 
-                # Bug #37 follow-on: cleanup pass for malformed rows.
-                # `entities` reflects only Pydantic-valid rows (skip_invalid=True
-                # above). For DELETE, the operator's filter may have targeted
-                # malformed rows for removal — they were silently skipped
-                # by the entity load. Find any matched _ids in this batch's
-                # offset window that aren't in `entities`, then delete_many
-                # them via direct motor (no audit chain — can't compute
-                # changes from a doc that doesn't validate; accept the lossy
-                # audit for the cleanup case).
-                malformed_deleted = 0
-                if spec.operation == "delete" and typed_filter is not None:
-                    coll = entity_cls.get_motor_collection()
-                    matched_ids_cursor = (
-                        coll.find(typed_filter, {"_id": 1})
-                        .skip(offset)
-                        .limit(spec.batch_size)
-                    )
-                    matched_ids = [doc["_id"] for doc in await matched_ids_cursor.to_list(length=None)]
-                    valid_ids = {e.id for e in entities}
-                    bad_ids = [_id for _id in matched_ids if _id not in valid_ids]
-                    if bad_ids:
-                        result = await coll.delete_many(
-                            {"_id": {"$in": bad_ids}}, session=session
-                        )
-                        malformed_deleted = result.deleted_count
-                        for bad_id in bad_ids:
-                            logger.warning(
-                                "Bug #37 cleanup: bulk-delete removed malformed %s _id=%s "
-                                "(audit chain skipped — entity failed Pydantic validation)",
-                                spec.entity_type,
-                                bad_id,
-                            )
-
-        total_count = offset + len(entities) + malformed_deleted
-        done = (len(entities) + malformed_deleted) < spec.batch_size
+        total_count = offset + len(entities)
+        done = len(entities) < spec.batch_size
 
         return {
             "done": done,
-            "batch_processed": batch_processed + malformed_deleted,
+            "batch_processed": batch_processed,
             "total_count": total_count,
             "errors": errors,
         }

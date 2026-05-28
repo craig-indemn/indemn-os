@@ -143,6 +143,16 @@ ALL entity saves go through `save_tracked()`. One MongoDB transaction:
 
 **Bulk creation path**: `bulk_save_tracked(entities, actor_id, method=...)` in `kernel/entity/save.py` — same audit + watch contracts, optimized for batch inserts. Uses `insert_many(ordered=False)` + in-memory hash-chained change records + batched watch evaluation. Preserves partial failure (some succeed even if others hit unique constraints). Used by `fetch_new` for adapter ingestion. Use this instead of looping `save_tracked()` when creating multiple entities at once.
 
+**Complete audit trail (Stage A — Session 36)**: the changes collection is now a complete append-only audit trail of every state mutation. Create records emit one FieldChange per set field. Delete records carry pre-delete state snapshot. Cascade nullifies write per-affected-entity audit records. Bulk-update audit emission via `bulk_update_tracked()`. **Heartbeat carveout**: `_is_heartbeat_only()` short-circuits Attention + Runtime entities when only `last_heartbeat` / `expires_at` / `instances` change — fast-path skips the audit record. Documented exception, not a gap.
+
+**Delete + cascade paths**:
+- `delete_tracked(entity, actor_id=None, session=None)` — writes ChangeRecord(change_type=delete) with pre-delete state snapshot, then `delete_one`. Audit BEFORE delete for crash safety.
+- `bulk_delete_tracked(entities, actor_id=None)` — mirrors `bulk_save_tracked` shape: in-memory hash-chained audits + single insert_many + single delete_many.
+- `_emit_cascade_audit(...)` — per-affected-entity cascade_nullify ChangeRecord; accepts `fields_changed: list[FieldChange]` for polymorphic pair atomicity. Used by `cascade_nullify_references`.
+- `bulk_update_tracked(entities, sets, ...)` — per-entity audit on bulk updates; replaces the prior `BulkExecuteWorkflow` UPDATE silent-bypass. Audit-only; watch events still silent for bulk updates.
+
+**Audit-completeness boundary** (`kernel/changes/boundary.py`): `get_audit_completeness_boundary()` returns the timestamp at which the audit trail became complete (`min(timestamp)` across create records with non-empty `changes`). Cached per process. Stage C eval reconstruction uses this to skip pre-boundary entities. `indemn audit completeness-boundary` shows the value.
+
 ## Authentication
 
 ```bash

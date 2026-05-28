@@ -614,13 +614,22 @@ sequenceDiagram
 
 ### Step-by-Step Detail
 
-**Step 0 -- Heartbeat bypass**: If the entity is an `Attention` or `Runtime` and the only changed fields are heartbeat-related (`last_heartbeat`, `expires_at`, `instances`), the save takes a fast path that skips audit logging and watch evaluation. This prevents heartbeat noise from flooding the changes collection and triggering cascades. The entity is updated directly via Motor.
+**Step 0 -- Heartbeat bypass (D8 carveout)**: If the entity is an `Attention` or `Runtime` and the only changed fields are heartbeat-related (`last_heartbeat`, `expires_at`, `instances`), the save takes a fast path that skips audit logging and watch evaluation. This prevents heartbeat noise from flooding the changes collection and triggering cascades. The entity is updated directly via Motor.
+
+Per Session-35 Decision D8 (consolidated plan Stage A): the heartbeat carveout is an **explicit, documented exception** to the "complete append-only audit trail" guarantee that Stage A otherwise establishes. Stage C eval reconstruction (sub-piece 12) does NOT see heartbeat-only updates in the changes collection — but heartbeat fields are not load-bearing for evaluation correctness, so this is fine. The carveout is documented here so future readers understand why some Attention / Runtime state churn doesn't appear in audit queries.
 
 **Step 1 -- Computed field evaluation**: `evaluate_computed_fields()` reads each computed field's `source_field` value and applies the mapping. Computed values are set on the entity before the write, so they are stored alongside the source fields.
 
 **Step 2 -- Flexible data validation**: If the entity has a `data` dict field and flexible data configuration, `validate_flexible_data()` resolves the JSON Schema and validates. Validation errors abort the save.
 
-**Step 3 -- Change detection**: `_compute_changes()` compares the current entity state against `_loaded_state` (captured when the entity was loaded from MongoDB). It produces a list of `{field, old_value, new_value}` dicts. Fields like `_id`, `version`, and `updated_at` are excluded from change detection.
+**Step 3 -- Change detection**: `_compute_changes(entity, is_new)` produces a list of `{field, old_value, new_value}` dicts.
+
+- **On update** (`is_new=False`): diffs current entity state against `_loaded_state` (captured at load time). Emits FieldChange for each field whose value changed.
+- **On create** (`is_new=True`): emits FieldChange for every set field with a non-None value. Per Session-35 Decision D1: NO default-omission — fields with default values still get FieldChange entries (`old_value=None, new_value=<value>`). Storage cost ~2x accepted for audit completeness; this is the substrate Stage C eval reconstruction (sub-piece 12) needs to rebuild entity state at trace.end_time.
+
+Fields like `_id`, `id`, `revision_id`, `version`, and `updated_at` are excluded from change detection in both paths (kernel-managed metadata, not domain state).
+
+For polymorphic field pairs (e.g., `Touchpoint.source_entity_id` + `source_entity_type`), both FieldChanges naturally end up in the same create-record (one ChangeRecord per create per D1; both halves captured together — atomic at the record level per D9).
 
 **Step 4 -- Selective emission decision**: `_should_emit()` determines if this save should evaluate watches and create messages. See section 8 for the full rules.
 
@@ -642,6 +651,26 @@ After the transaction commits:
 - `_loaded_state` is updated so the next `_compute_changes()` compares against the committed state
 - If the entity is a `Role`, the watch cache is invalidated (because watches live on roles, and the cached watches may be stale)
 - The list of created messages is returned for optimistic dispatch (the API layer fires async dispatch tasks)
+
+### Complete Audit Trail (Stage A — Session 36)
+
+Per Session-35 consolidated plan Stage A (Decisions D1, D4, D5, D8, D9, D24, D-C): the kernel changes collection is a **complete append-only audit trail of every state mutation** with one documented carveout (heartbeats, D8). The visible symptoms surfaced at Session 34 P3 — live-state eval gave wrong answers, dangling refs accumulated silently — were rooted in the audit trail being only partial (empty `changes` arrays on create, no audit on delete, no audit on cascade). Stage A closes these gaps.
+
+**Sibling save-path functions in `kernel/entity/save.py`:**
+
+| Function | Use case | Audit shape |
+|---|---|---|
+| `save_tracked_impl(entity, actor_id, ...)` | Single-entity create or update — the ONE save path | Per-field FieldChange on create (D1) + per-field diff on update; one ChangeRecord per save |
+| `bulk_save_tracked(entities, actor_id, method=...)` | Batch create — `fetch_new` ingestion | Per-entity per-field FieldChange; in-memory hash chain; single insert_many for audit + single insert_many for entities |
+| `delete_tracked(entity, actor_id=None, session=None)` | Single-entity delete with pre-delete state snapshot | One ChangeRecord(change_type=delete) with FieldChange per non-None field (old_value=current, new_value=None); audit BEFORE entity delete for crash safety |
+| `bulk_delete_tracked(entities, actor_id=None)` | Batch delete | Per-entity audit with in-memory hash chain; single insert_many for audit + single delete_many for entities |
+| `bulk_update_tracked(entities, sets, ...)` | Batch update via `BulkExecuteWorkflow` UPDATE branch | Per-entity audit with in-memory hash chain; single insert_many for audit + single update_many for entities. **Watch events stay silent** for bulk updates — D4 expanded audit scope, not event scope. |
+| `_emit_cascade_audit(... fields_changed: list[FieldChange] ...)` | One cascade_nullify audit record per affected entity | `change_type=cascade_nullify`, `method=relationship_target_deleted`, `method_metadata={deleted_entity_type, deleted_entity_id, affected_field_names}`. List signature supports D9 polymorphic pair atomicity (one record holds both id-field + type-field FieldChanges). |
+| `cascade_nullify_references(entity_type, entity_id, org_id)` | Walk all entity definitions; for each scalar relationship_target pointing at the deleted entity, emit `_emit_cascade_audit` per affected entity then nullify the field | Per-affected-entity audit (no more `update_many` shortcut) |
+
+**Stage B (sub-piece 13) extends** `cascade_nullify_references` for list-typed + polymorphic refs (`$pull` for list elements; both halves cleared together for polymorphic pairs per D9 atomicity). Write-time relationship-integrity validation also lands in Stage B.
+
+**Audit-completeness boundary (D2)** — `kernel/changes/boundary.py::get_audit_completeness_boundary()`: returns `min(timestamp)` across create-type ChangeRecords with non-empty `changes`. Cached per process. Pre-Stage-A-A2-deploy returns `None`; post-deploy returns the timestamp at which complete audit became live. Stage C eval reconstruction (sub-piece 12 D18 + D-J) uses this to gate which entities are eligible for as-of-trace-time evaluation vs which are skipped entirely. CLI: `indemn audit completeness-boundary`.
 
 ---
 

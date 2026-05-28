@@ -736,6 +736,27 @@ async def audit_verify(
     return {"chain_valid": True, "records_checked": len(records)}
 
 
+@admin_router.get("/api/_platform/audit/completeness-boundary")
+async def audit_completeness_boundary(actor=Depends(get_current_actor)):
+    """Return the audit-completeness boundary timestamp (Session-35 D2).
+
+    Boundary = `min(timestamp)` across ChangeRecords where `change_type=create`
+    and `changes` is non-empty. Cached per kernel process; first call queries,
+    subsequent calls return the cached value.
+
+    Stage C eval reconstruction (sub-piece 12) uses this boundary to gate which
+    entities are eligible for as-of-trace-time evaluation vs which are skipped
+    entirely (per D18 + D19).
+    """
+    from kernel.changes.boundary import get_audit_completeness_boundary
+
+    boundary = await get_audit_completeness_boundary()
+    return {
+        "boundary": boundary.isoformat() if boundary else None,
+        "pre_stage_a": boundary is None,
+    }
+
+
 # --- Platform Upgrade ---
 
 

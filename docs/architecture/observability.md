@@ -37,6 +37,8 @@ When a cascade is triggered by an entity change, the `correlation_id` propagates
 
 The changes collection is the definitive record of what happened to every entity in the system. It is written inside the `save_tracked()` transaction, making it atomically consistent with the entity state.
 
+Per Session-36 Stage A (consolidated plan Decisions D1, D4, D5, D8, D-C): the collection is now a **complete append-only audit trail of every state mutation** — create records emit per-field FieldChange (D1); delete records carry pre-delete state snapshots via `delete_tracked` / `bulk_delete_tracked` (D-C); cascade nullifies emit per-affected-entity audit records via `_emit_cascade_audit` (D5 + D9 polymorphic atomicity); bulk-update audit emission via `bulk_update_tracked` (D4 + D24). The one documented carveout is the heartbeat fast-path on Attention + Runtime entities (D8). See `entity-framework.md` § 7 "Complete Audit Trail (Stage A)" for the full save-path sibling table.
+
 ### Record Structure
 
 ```json
@@ -528,6 +530,7 @@ The three stores serve different query patterns. Here is how to choose:
 | "How many messages is this role processing?" | Message Log | `indemn queue stats --role <role>` |
 | "Why did this request take 30 seconds?" | OTEL Traces | Grafana Cloud UI, search by trace ID |
 | "Is the hash chain intact?" | Changes | `indemn audit verify` |
+| "When did the complete audit trail begin?" | Changes (Stage A boundary) | `indemn audit completeness-boundary` |
 | "What rules fired on this change?" | Changes | `indemn trace entity` (rule_evaluation embedded in change record) |
 | "Are integrations healthy?" | Integration entities + OTEL | `indemn integration health` |
 
@@ -539,6 +542,8 @@ The three stores serve different query patterns. Here is how to choose:
 |------|----------------|
 | `kernel/changes/collection.py` | `write_change_record()` -- writes change records inside `save_tracked()` transaction |
 | `kernel/changes/hash_chain.py` | `compute_hash()`, `get_previous_hash()` -- SHA-256 hash chain computation |
+| `kernel/changes/boundary.py` | `get_audit_completeness_boundary()` -- Stage A complete-audit-trail boundary (D2), cached per process |
+| `kernel/entity/save.py` | `save_tracked_impl`, `bulk_save_tracked`, `delete_tracked`, `bulk_delete_tracked`, `bulk_update_tracked`, `_emit_cascade_audit`, `cascade_nullify_references` -- Stage A complete audit trail save paths |
 | `kernel/message/schema.py` | `MessageLog(Document)` -- completed message storage |
 | `kernel/observability/tracing.py` | `init_tracing()`, `create_span()` -- OTEL instrumentation |
 | `kernel/observability/correlation.py` | Correlation ID propagation across async boundaries |

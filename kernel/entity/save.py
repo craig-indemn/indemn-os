@@ -89,9 +89,9 @@ async def save_tracked_impl(entity, actor_id: str, **kwargs):
             if errors:
                 raise ValueError(f"Flexible data validation failed: {errors}")
 
-        # Compute field-level changes
+        # Compute field-level changes (D1: also emit on create — per-set-field)
         is_new = entity.id is None
-        changes = _compute_changes(entity) if not is_new else []
+        changes = _compute_changes(entity, is_new=is_new)
 
         # Auto-populate created_by on insert (Bug #27).
         if is_new and hasattr(entity, "created_by") and entity.created_by is None:
@@ -310,9 +310,13 @@ async def bulk_save_tracked(
             }
 
         # --- Phase 3: Build change records with in-memory hash chain ---
+        # Per D1: emit per-field FieldChange entries on each entity's create
+        # record. _compute_changes(entity, is_new=True) iterates the entity's
+        # serialized fields and emits one entry per non-None field.
         prev_hash = await get_previous_hash(org_id)
         change_records = []
         for entity in succeeded_entities:
+            field_changes = _compute_changes(entity, is_new=True)
             record = ChangeRecord(
                 id=ObjectId(),
                 org_id=entity.org_id,
@@ -322,7 +326,7 @@ async def bulk_save_tracked(
                 actor_id=actor_id,
                 effective_actor_id=effective_actor,
                 correlation_id=_correlation_id,
-                changes=[],
+                changes=[FieldChange(**c) for c in field_changes],
                 method=method,
                 timestamp=now,
             )
@@ -388,13 +392,47 @@ def _convert_decimals(obj):
                 _convert_decimals(item)
 
 
-def _compute_changes(entity) -> list[dict]:
-    """Compare current state against loaded state to find field-level changes."""
+_CHANGE_EXCLUDED_KEYS = ("_id", "id", "revision_id", "version", "updated_at")
+
+
+def _compute_changes(entity, is_new: bool = False) -> list[dict]:
+    """Compute field-level changes for the changes collection record.
+
+    On create (is_new=True): emit one FieldChange per set field with a non-None
+    value. Per Session-35 D1: drop default-omission entirely — every field with
+    a value gets a record, including default-valued ones. Storage cost ~2x on
+    the changes collection accepted for clarity + completeness; this is the
+    substrate that lets sub-piece 12 reconstruct entity state at trace.end_time.
+
+    On update (is_new=False): diff current state against `_loaded_state`,
+    emitting FieldChange per field whose value changed. Existing behavior.
+
+    Polymorphic field pairs (e.g. Touchpoint.source_entity_id +
+    source_entity_type) emit as 2 separate FieldChanges in the SAME ChangeRecord
+    (one record per create per D1 + D9 atomicity). The atomicity is inherent
+    in the create path — every set field on the same entity ends up in the
+    same ChangeRecord.
+
+    The heartbeat fast-path on Attention + Runtime updates short-circuits
+    before reaching _compute_changes (see _is_heartbeat_only at line 423) — D8
+    carveout preserves the noise-suppression for heartbeat-only state churn.
+    """
     current = _serialize_entity(entity)
+
+    if is_new:
+        changes = []
+        for key, value in current.items():
+            if key in _CHANGE_EXCLUDED_KEYS:
+                continue
+            if value is None:
+                continue
+            changes.append({"field": key, "old_value": None, "new_value": value})
+        return changes
+
     loaded = entity._loaded_state
     changes = []
     for key in set(list(current.keys()) + list(loaded.keys())):
-        if key in ("_id", "id", "revision_id", "version", "updated_at"):
+        if key in _CHANGE_EXCLUDED_KEYS:
             continue
         old_val = loaded.get(key)
         new_val = current.get(key)
@@ -459,12 +497,382 @@ async def _save_heartbeat_only(entity):
     )
 
 
+async def bulk_update_tracked(
+    entities: list,
+    sets: dict,
+    actor_id: str = None,
+    correlation_id: str = None,
+    method: str = None,
+    method_metadata: dict = None,
+) -> dict:
+    """Bulk-update entities with per-entity audit records — mirrors bulk_save_tracked shape.
+
+    Per Session-35 Decision D4 (consolidated plan Stage A5): the prior
+    "Silent update — bypasses save_tracked()" shortcut in BulkExecuteWorkflow
+    is replaced with audit-emitting bulk update. Per D24: same audit shape
+    for create, update, delete, cascade — per-entity ChangeRecord via
+    in-memory hash-chain (mirror `bulk_save_tracked` lines 312-337 pattern).
+
+    Each entity's update is uniform — the SAME `sets` dict is applied to all.
+    Per-entity FieldChange captures old_value from current entity state
+    (via `getattr`), new_value from sets[field].
+
+    AUDIT emission: YES (D-A scope expansion per D4).
+    EVENT emission: preserved as silent. Watches do NOT fire on bulk updates.
+    The original "Silent update" comment's intent (no event fan-out per
+    bulk-update entity) is honored — D4 expanded D-A's AUDIT scope to cover
+    this path; the event-emission concern is orthogonal to audit completeness
+    and is not in D1-D26 scope.
+
+    Implementation:
+      1. Build one ChangeRecord per entity, hash-chained in memory.
+      2. Single `insert_many` for audit records.
+      3. Single `update_many` for entity updates (applies `sets` + version bump).
+
+    Returns: {"succeeded": int, "errored": int, "errors": list,
+              "updated_ids": list, "duration_ms": float}.
+    """
+    if not entities or not sets:
+        return {"succeeded": 0, "errored": 0, "errors": [], "updated_ids": []}
+
+    import time
+
+    from kernel.changes.collection import ChangeRecord, FieldChange
+    from kernel.changes.hash_chain import compute_hash, get_previous_hash
+    from kernel.context import current_actor_id
+
+    _actor_id = actor_id or current_actor_id.get()
+    _correlation_id = correlation_id or current_correlation_id.get() or str(uuid4())
+    effective_actor = current_effective_actor_id.get()
+    now = datetime.now(timezone.utc)
+
+    with create_span(
+        "entity.bulk_update_tracked",
+        entity_type=type(entities[0]).__name__,
+        batch_size=len(entities),
+    ):
+        t0 = time.monotonic()
+        entity_type_name = type(entities[0]).__name__
+        collection = entities[0].get_motor_collection()
+        org_id = entities[0].org_id
+        entity_ids = [e.id for e in entities]
+
+        # Build per-entity audit records with sequential in-memory hash chain
+        prev_hash = await get_previous_hash(org_id)
+        change_records = []
+        for entity in entities:
+            field_changes = []
+            for field_name, new_value in sets.items():
+                old_value = getattr(entity, field_name, None)
+                field_changes.append(
+                    {"field": field_name, "old_value": old_value, "new_value": new_value}
+                )
+
+            record = ChangeRecord(
+                id=ObjectId(),
+                org_id=entity.org_id,
+                entity_type=entity_type_name,
+                entity_id=entity.id,
+                change_type="update",
+                actor_id=_actor_id,
+                effective_actor_id=effective_actor,
+                correlation_id=_correlation_id,
+                changes=[FieldChange(**c) for c in field_changes],
+                method=method,
+                method_metadata=method_metadata,
+                timestamp=now,
+            )
+            record.previous_hash = prev_hash
+            record.current_hash = compute_hash(record)
+            prev_hash = record.current_hash
+            change_records.append(record)
+
+        # Single insert_many for audit records
+        changes_coll = ChangeRecord.get_motor_collection()
+        change_docs = [r.model_dump(by_alias=True) for r in change_records]
+        if change_docs:
+            await changes_coll.insert_many(change_docs)
+
+        # Single update_many for entity updates ($set sets + version bump)
+        result = await collection.update_many(
+            {"_id": {"$in": entity_ids}},
+            {"$set": sets, "$inc": {"version": 1}},
+        )
+        updated_count = result.modified_count
+
+        duration_ms = (time.monotonic() - t0) * 1000
+        updated_ids = [str(e.id) for e in entities]
+
+        return {
+            "succeeded": updated_count,
+            "errored": 0,
+            "errors": [],
+            "updated_ids": updated_ids,
+            "duration_ms": round(duration_ms, 1),
+        }
+
+
+async def delete_tracked(
+    entity,
+    actor_id: str = None,
+    correlation_id: str = None,
+    session=None,
+) -> ObjectId:
+    """Write a delete audit ChangeRecord, then delete the entity.
+
+    Per Session-35 Decision D-C (consolidated plan Stage A3): every delete
+    emits a ChangeRecord with `change_type=delete` + a pre-delete state
+    snapshot. FieldChanges capture each non-None field at the moment of
+    delete (old_value=current value, new_value=None) so reconstruction can
+    rebuild the entity's last-known state from the changes collection.
+
+    Hash-chained per the existing `get_previous_hash` pattern. The audit
+    record is written BEFORE `delete_one` so a crash between audit + delete
+    leaves the record present (rebuilds will see it as soft-deleted, never
+    as silently-missing).
+
+    Cascade nullification of inbound refs (other entities pointing TO this
+    one) remains the caller's responsibility. The kernel layer
+    `cascade_nullify_references` runs separately and writes its own audit
+    records via the `_emit_cascade_audit` primitive (Stage A4 + D5).
+
+    actor_id defaults to `current_actor_id.get()` matching `entity.save_tracked`.
+    Returns the audit ChangeRecord's `_id`.
+    """
+    if entity.id is None:
+        raise ValueError("Cannot delete entity without id")
+
+    from kernel.changes.collection import ChangeRecord, FieldChange
+    from kernel.changes.hash_chain import compute_hash, get_previous_hash
+    from kernel.context import current_actor_id
+
+    _actor_id = actor_id or current_actor_id.get()
+    _correlation_id = correlation_id or current_correlation_id.get() or str(uuid4())
+    effective_actor = current_effective_actor_id.get()
+
+    with create_span(
+        "entity.delete_tracked",
+        entity_type=type(entity).__name__,
+        entity_id=str(entity.id),
+    ):
+        # Pre-delete state snapshot as FieldChanges (old_value=current, new_value=None)
+        current = _serialize_entity(entity)
+        field_changes = []
+        for key, value in current.items():
+            if key in _CHANGE_EXCLUDED_KEYS:
+                continue
+            if value is None:
+                continue
+            field_changes.append({"field": key, "old_value": value, "new_value": None})
+
+        record = ChangeRecord(
+            id=ObjectId(),
+            org_id=entity.org_id,
+            entity_type=type(entity).__name__,
+            entity_id=entity.id,
+            change_type="delete",
+            actor_id=_actor_id,
+            effective_actor_id=effective_actor,
+            correlation_id=_correlation_id,
+            changes=[FieldChange(**c) for c in field_changes],
+            timestamp=datetime.now(timezone.utc),
+        )
+        record.previous_hash = await get_previous_hash(entity.org_id, session)
+        record.current_hash = compute_hash(record)
+        await record.insert(session=session)
+
+        await entity.get_motor_collection().delete_one(
+            {"_id": entity.id}, session=session
+        )
+
+        return record.id
+
+
+async def bulk_delete_tracked(
+    entities: list,
+    actor_id: str = None,
+    correlation_id: str = None,
+) -> dict:
+    """Bulk-delete entities with per-entity audit records — mirrors bulk_save_tracked shape.
+
+    For each entity:
+      1. Compute pre-delete FieldChanges (each non-None field's value → old_value, new_value=None)
+      2. Build a ChangeRecord with change_type="delete"
+      3. Hash-chain in memory (sequential per the existing pattern)
+    Then:
+      4. Single insert_many for audit records
+      5. Single delete_many for entity removal
+
+    Per Session-35 D-C: every delete emits audit; per D24-aligned shape:
+    per-entity ChangeRecord via in-memory hash-chain.
+
+    Cascade nullification of inbound refs remains the caller's responsibility
+    (handled by `cascade_nullify_references` which Stage A4 refactors to
+    emit per-entity cascade audit records via `_emit_cascade_audit`).
+
+    actor_id defaults to `current_actor_id.get()`.
+    Returns: {"succeeded": int, "errored": int, "errors": list, "deleted_ids": list, "duration_ms": float}.
+    """
+    if not entities:
+        return {"succeeded": 0, "errored": 0, "errors": [], "deleted_ids": []}
+
+    import time
+
+    from kernel.changes.collection import ChangeRecord, FieldChange
+    from kernel.changes.hash_chain import compute_hash, get_previous_hash
+    from kernel.context import current_actor_id
+
+    _actor_id = actor_id or current_actor_id.get()
+    _correlation_id = correlation_id or current_correlation_id.get() or str(uuid4())
+    effective_actor = current_effective_actor_id.get()
+    now = datetime.now(timezone.utc)
+
+    with create_span(
+        "entity.bulk_delete_tracked",
+        entity_type=type(entities[0]).__name__,
+        batch_size=len(entities),
+    ):
+        t0 = time.monotonic()
+        entity_type_name = type(entities[0]).__name__
+        collection = entities[0].get_motor_collection()
+        org_id = entities[0].org_id
+        entity_ids = [e.id for e in entities]
+
+        # Build delete audit records with sequential in-memory hash chain
+        prev_hash = await get_previous_hash(org_id)
+        change_records = []
+        for entity in entities:
+            current = _serialize_entity(entity)
+            field_changes = []
+            for key, value in current.items():
+                if key in _CHANGE_EXCLUDED_KEYS:
+                    continue
+                if value is None:
+                    continue
+                field_changes.append({"field": key, "old_value": value, "new_value": None})
+
+            record = ChangeRecord(
+                id=ObjectId(),
+                org_id=entity.org_id,
+                entity_type=entity_type_name,
+                entity_id=entity.id,
+                change_type="delete",
+                actor_id=_actor_id,
+                effective_actor_id=effective_actor,
+                correlation_id=_correlation_id,
+                changes=[FieldChange(**c) for c in field_changes],
+                timestamp=now,
+            )
+            record.previous_hash = prev_hash
+            record.current_hash = compute_hash(record)
+            prev_hash = record.current_hash
+            change_records.append(record)
+
+        # Single insert_many for audit records
+        changes_coll = ChangeRecord.get_motor_collection()
+        change_docs = [r.model_dump(by_alias=True) for r in change_records]
+        if change_docs:
+            await changes_coll.insert_many(change_docs)
+
+        # Single delete_many for entity removal
+        result = await collection.delete_many({"_id": {"$in": entity_ids}})
+        deleted_count = result.deleted_count
+
+        duration_ms = (time.monotonic() - t0) * 1000
+        deleted_ids = [str(e.id) for e in entities]
+
+        return {
+            "succeeded": deleted_count,
+            "errored": 0,
+            "errors": [],
+            "deleted_ids": deleted_ids,
+            "duration_ms": round(duration_ms, 1),
+        }
+
+
+async def _emit_cascade_audit(
+    affected_entity_id: ObjectId,
+    affected_entity_type: str,
+    fields_changed: list,
+    deleted_target_type: str,
+    deleted_target_id,
+    actor_id: str = None,
+    correlation_id: str = None,
+    org_id: ObjectId = None,
+    session=None,
+) -> ObjectId:
+    """Emit one cascade_nullify audit ChangeRecord for an affected entity.
+
+    Per Session-35 Decision D5 (consolidated plan Stage A4): each affected
+    entity gets its own ChangeRecord with `change_type=cascade_nullify`,
+    `method=relationship_target_deleted`, and `method_metadata` capturing
+    `deleted_entity_type`, `deleted_entity_id`, `affected_field_names`.
+
+    Per D9 polymorphic pair atomicity: the `fields_changed` parameter accepts
+    a list so a single ChangeRecord can carry BOTH halves of a polymorphic
+    ref clear (id-field + type-field). Atomicity at the record level — if
+    the record commits, both fields are recorded as cleared together.
+
+    `fields_changed` items may be `FieldChange` instances or `dict` shapes
+    `{"field": ..., "old_value": ..., "new_value": ...}` — both accepted for
+    callsite ergonomics.
+
+    Hash chain: reads `get_previous_hash(org_id, session)`, computes
+    `current_hash`, inserts. Returns the record's `_id`.
+
+    Used by `cascade_nullify_references` once per affected entity. Stage B
+    (sub-piece 13 B2) extends this for list-typed + polymorphic refs.
+    """
+    from kernel.changes.collection import ChangeRecord, FieldChange
+    from kernel.changes.hash_chain import compute_hash, get_previous_hash
+    from kernel.context import current_actor_id
+
+    _actor_id = actor_id or current_actor_id.get()
+    _correlation_id = correlation_id or current_correlation_id.get() or str(uuid4())
+    effective_actor = current_effective_actor_id.get()
+
+    fcs = [fc if isinstance(fc, FieldChange) else FieldChange(**fc) for fc in fields_changed]
+
+    record = ChangeRecord(
+        id=ObjectId(),
+        org_id=org_id,
+        entity_type=affected_entity_type,
+        entity_id=affected_entity_id,
+        change_type="cascade_nullify",
+        actor_id=_actor_id,
+        effective_actor_id=effective_actor,
+        correlation_id=_correlation_id,
+        changes=fcs,
+        method="relationship_target_deleted",
+        method_metadata={
+            "deleted_entity_type": deleted_target_type,
+            "deleted_entity_id": str(deleted_target_id),
+            "affected_field_names": [fc.field for fc in fcs],
+        },
+        timestamp=datetime.now(timezone.utc),
+    )
+    record.previous_hash = await get_previous_hash(org_id, session)
+    record.current_hash = compute_hash(record)
+    await record.insert(session=session)
+    return record.id
+
+
 async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int:
     """Nullify relationship fields on other entities that reference a deleted entity.
 
-    Scans all EntityDefinitions for fields where is_relationship=True and
-    relationship_target matches the deleted entity's type. For each, runs
-    update_many to set matching references to null.
+    Scans all EntityDefinitions for fields where `is_relationship=True` and
+    `relationship_target` matches the deleted entity's type. For each affected
+    entity, emits a cascade_nullify audit ChangeRecord via `_emit_cascade_audit`
+    (per Session-35 D5: per-entity record + D9-ready polymorphic pair signature)
+    THEN nullifies the field on that entity.
+
+    Stage A4 replaces the previous `update_many` shortcut (which wrote no audit
+    and had a latent `log.info` typo bug at the modified_count > 0 log line).
+    Per-entity emission gives sub-piece 12 reconstruction the granularity it
+    needs at trace.end_time.
+
+    Scope: SCALAR refs only. List-typed + polymorphic refs are Stage B B2
+    scope (sub-piece 13 cascade extension via D-D).
 
     Returns total number of documents updated across all collections.
     """
@@ -486,19 +894,42 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
                 continue
 
             collection = entity_cls.get_motor_collection()
-            result = await collection.update_many(
+
+            # Read each affected entity (scalar refs; Stage B B2 extends for
+            # list-typed + polymorphic refs).
+            affected_docs = await collection.find(
                 {"org_id": org_id, field_name: entity_id},
-                {"$set": {field_name: None}},
-            )
-            if result.modified_count > 0:
-                log.info(
+                {"_id": 1, field_name: 1},
+            ).to_list(length=None)
+
+            for doc in affected_docs:
+                # Emit per-affected-entity audit record FIRST (D5)
+                await _emit_cascade_audit(
+                    affected_entity_id=doc["_id"],
+                    affected_entity_type=defn.name,
+                    fields_changed=[
+                        {"field": field_name, "old_value": doc[field_name], "new_value": None}
+                    ],
+                    deleted_target_type=entity_type,
+                    deleted_target_id=entity_id,
+                    org_id=org_id,
+                )
+
+                # Nullify the field on this affected entity
+                await collection.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {field_name: None}},
+                )
+                total_updated += 1
+
+            if affected_docs:
+                logger.info(
                     "cascade_nullify: %s.%s — nullified %d refs to deleted %s %s",
                     defn.name,
                     field_name,
-                    result.modified_count,
+                    len(affected_docs),
                     entity_type,
                     entity_id,
                 )
-                total_updated += result.modified_count
 
     return total_updated
