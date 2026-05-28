@@ -1,5 +1,6 @@
 # Voice frontdoor — Starlette HTTP server for POST /sessions.
 # Part of AI-407 Phase 2B (Option C two-services model per design §10.3 + §15.2).
+# AI-409 — Bug B CORS middleware shipped 2026-05-29; this comment is a cache buster.
 #
 # Build context expectation: repo root (so harnesses/_base/ + harnesses/voice-frontdoor/
 # both resolve). Build with:
