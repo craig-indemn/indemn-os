@@ -61,6 +61,11 @@ routes = [
 # with a Bearer token in the Authorization header, not cookies — which
 # also keeps `*` compatible (browsers reject `*` with credentialed
 # requests per CORS spec).
+#
+# If the SDK adds custom request headers (tracing/correlation, custom
+# auth schemes, etc.) beyond `Authorization` + `Content-Type`, extend
+# `allow_headers` here too — otherwise the browser will block the
+# preflight before the POST fires.
 middleware = [
     Middleware(
         CORSMiddleware,

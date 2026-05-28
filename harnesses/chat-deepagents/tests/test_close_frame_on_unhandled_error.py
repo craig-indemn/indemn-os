@@ -108,6 +108,11 @@ def test_close_swallows_secondary_failure():
     the close call inside the catch-all must not propagate — otherwise
     the handler crashes the worker on top of the original error. The
     fix wraps the close call in try/except.
+
+    The pre-fix code never reached close()/send_json() in the catch-all
+    at all (it just logged), so this test must also assert close + send
+    were actually attempted — otherwise it would pass equally under the
+    pre-fix code (per code-reviewer S2).
     """
     ws = _mock_websocket()
     ws.receive_json = AsyncMock(side_effect=ValueError("first"))
@@ -118,3 +123,10 @@ def test_close_swallows_secondary_failure():
 
     # Should NOT raise — both inner try/except blocks swallow.
     _run(harness_main.websocket_handler(ws))
+
+    # AND both close + send_json should have been attempted (otherwise
+    # the pre-fix code's silent log-and-drop would also satisfy "did not
+    # raise"). These assertions pin the regression: the fix attempts
+    # both calls even when they're guaranteed to fail.
+    assert ws.close.called, "close should have been attempted despite side_effect"
+    assert ws.send_json.called, "send_json should have been attempted despite side_effect"
