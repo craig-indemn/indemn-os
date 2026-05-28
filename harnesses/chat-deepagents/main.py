@@ -616,6 +616,26 @@ async def websocket_handler(websocket: WebSocket):
         log.warning("WebSocket connect timeout")
     except Exception as e:
         log.error("WebSocket error: %s", e, exc_info=True)
+        # AI-409 smoke fix: send a proper WS close frame so the SDK reads
+        # a clean failure (1011 internal_error per RFC 6455) instead of
+        # a 1006 abnormal closure. Catches any unexpected exception
+        # escaping the explicit handlers above — KeyError (missing env
+        # var), TypeError, AttributeError, etc. Best-effort: if the WS
+        # is already closed or the transport is dead, both calls no-op.
+        try:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "content": "internal server error",
+                    "code": "internal_error",
+                }
+            )
+        except Exception:
+            pass
+        try:
+            await websocket.close(code=1011, reason="internal_error")
+        except Exception:
+            pass
     finally:
         if session:
             await session.close()
