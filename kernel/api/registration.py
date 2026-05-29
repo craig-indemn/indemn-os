@@ -794,6 +794,14 @@ def _register_bulk_route(router, entity_name: str):
         check_permission(actor, entity_name, "write")
         spec["entity_type"] = entity_name
         spec["org_id"] = str(current_org_id.get())
+        # Propagate the auth context's actor_id through the workflow spec so
+        # process_bulk_batch + preview_bulk_operation can restore the
+        # current_actor_id contextvar at activity entry. Without this,
+        # bulk_delete_tracked + bulk_update_tracked + entity.save_tracked()
+        # all see current_actor_id.get() == None inside the activity → fail
+        # Pydantic validation on ChangeRecord(actor_id: str). Session 36 Stage A
+        # bug surfaced live during A8 deploy verification on bulk-delete.
+        spec["actor_id"] = str(actor.id)
 
         # Validate filter_query at the API boundary so callers get 400 with
         # field-level error detail BEFORE the workflow is even started, instead

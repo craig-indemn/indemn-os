@@ -208,6 +208,18 @@ class BulkOperationSpec:
     # P1.1 wipe of old eval records. Workflow layer never reads match_all
     # (the gate is API-side); presence here is just to accept the kwarg.
     match_all: bool = False
+    # Session 36 Stage A follow-on: the API auth context's actor_id is needed
+    # by bulk_delete_tracked + bulk_update_tracked (and the per-entity loop's
+    # entity.save_tracked() calls) to write ChangeRecord(actor_id=...). Temporal
+    # activities run in a fresh contextvar scope, so current_actor_id.get()
+    # returns None unless we propagate. The API layer sets this from actor.id;
+    # process_bulk_batch + preview_bulk_operation restore the contextvar at
+    # activity entry alongside org_id. Pre-Stage-A this was silently broken
+    # for bulk-transition / bulk-method / bulk-create / bulk-update (any path
+    # that hit ChangeRecord construction), but only surfaced now because
+    # Stage A's bulk_delete_tracked is the first widely-used path to actually
+    # write a ChangeRecord from a Temporal activity.
+    actor_id: Optional[str] = None
 
 
 @dataclass

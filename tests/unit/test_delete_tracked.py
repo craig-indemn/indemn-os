@@ -526,6 +526,58 @@ def test_activities_bulk_workflow_delete_outside_transaction():
     assert delete_label_pos < non_delete_label_pos
 
 
+def test_activities_restores_actor_id_contextvar_from_spec():
+    """Source pin: process_bulk_batch + preview_bulk_operation restore current_actor_id from spec.
+
+    Session-36 Stage A live deploy surfaced a pre-existing latent gap: Temporal
+    activities run in a fresh contextvar scope, so `current_actor_id.get()`
+    returns None inside the activity even though the API auth middleware set
+    it before workflow start. bulk_delete_tracked / bulk_update_tracked /
+    entity.save_tracked() all dereference current_actor_id when building
+    ChangeRecord, which then fails Pydantic validation (`actor_id: str`).
+
+    Fix: propagate actor_id through BulkOperationSpec (workflows.py), set it
+    in the API spec_dict (registration.py start_bulk), and restore the
+    contextvar at activity entry alongside org_id (activities.py).
+
+    Pin: the restore code is present in BOTH process_bulk_batch and
+    preview_bulk_operation, alongside the existing org_id restore.
+    """
+    from kernel.temporal import activities
+
+    pbb = inspect.getsource(activities.process_bulk_batch)
+    pbo = inspect.getsource(activities.preview_bulk_operation)
+
+    # Both activities import and set current_actor_id when spec.actor_id is present
+    assert "from kernel.context import current_actor_id" in pbb
+    assert "current_actor_id.set(spec.actor_id)" in pbb
+    assert "if spec.actor_id" in pbb
+
+    assert "from kernel.context import current_actor_id" in pbo
+    assert "current_actor_id.set(spec.actor_id)" in pbo
+    assert "if spec.actor_id" in pbo
+
+
+def test_workflows_bulk_operation_spec_has_actor_id_field():
+    """Source pin: BulkOperationSpec exposes actor_id (Optional[str], default None)."""
+    from kernel.temporal.workflows import BulkOperationSpec
+
+    spec = BulkOperationSpec(entity_type="Email", operation="delete", org_id="oid", actor_id="aid")
+    assert spec.actor_id == "aid"
+    # Default is None — preserves backward compat for any spec_dict missing the field
+    spec_no_actor = BulkOperationSpec(entity_type="Email", operation="delete", org_id="oid")
+    assert spec_no_actor.actor_id is None
+
+
+def test_registration_start_bulk_propagates_actor_id():
+    """Source pin: /bulk endpoint sets spec['actor_id'] from the auth-context actor.id."""
+    from kernel.api import registration
+
+    src = inspect.getsource(registration)
+    # The propagation lives in start_bulk
+    assert 'spec["actor_id"] = str(actor.id)' in src
+
+
 def test_activities_update_branch_routes_through_bulk_update_tracked():
     """Source pin: UPDATE branch routes through bulk_update_tracked (Stage A5 — D4 + D24).
 

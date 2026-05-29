@@ -184,9 +184,15 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
 
         spec = BulkOperationSpec(**spec_dict)
 
-        # Restore org_id context — Temporal activities run in a fresh context
+        # Restore org_id + actor_id context — Temporal activities run in a fresh
+        # contextvar scope, so both must be re-set from the spec for save-path
+        # code (entity.save_tracked + bulk_delete_tracked + bulk_update_tracked)
+        # to write ChangeRecord(actor_id: str) without failing Pydantic validation.
         if spec.org_id:
             current_org_id.set(ObjectId(spec.org_id))
+        if spec.actor_id:
+            from kernel.context import current_actor_id
+            current_actor_id.set(spec.actor_id)
 
         entity_cls = ENTITY_REGISTRY.get(spec.entity_type)
         if not entity_cls:
@@ -401,6 +407,13 @@ async def preview_bulk_operation(spec_dict: dict) -> dict:
     from kernel.temporal.workflows import BulkOperationSpec
 
     spec = BulkOperationSpec(**spec_dict)
+
+    # Restore org_id + actor_id context (same reason as process_bulk_batch).
+    if spec.org_id:
+        current_org_id.set(ObjectId(spec.org_id))
+    if spec.actor_id:
+        from kernel.context import current_actor_id
+        current_actor_id.set(spec.actor_id)
 
     entity_cls = ENTITY_REGISTRY.get(spec.entity_type)
     if not entity_cls:
