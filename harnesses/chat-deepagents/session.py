@@ -463,6 +463,13 @@ class ChatSession:
             runtime_id=self.runtime_id,
             deployment_id=self.deployment_id,
         )
+        # Match async-deepagents recursion budget (200 steps). LangGraph's
+        # default of 25 is too low for real customer turns where the agent
+        # needs multi-step tool exploration (`indemn company entity-resolve`
+        # → `indemn deal list` → `indemn proposal get` chains). Surfaced
+        # live 2026-05-29 chat smoke: agent hit recursion=25 mid-Alliance
+        # lookup. See async main.py:823 for the canonical pattern.
+        runnable_config["recursion_limit"] = 200
         try:
             async for event in self.agent.astream_events(
                 {"messages": messages},
