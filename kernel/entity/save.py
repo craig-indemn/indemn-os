@@ -228,7 +228,7 @@ async def bulk_save_tracked(
 
     import time
 
-    from kernel.changes.collection import ChangeRecord, FieldChange
+    from kernel.changes.collection import ChangeRecord
     from kernel.changes.hash_chain import compute_hash, get_previous_hash
 
     _correlation_id = correlation_id or current_correlation_id.get() or str(uuid4())
@@ -491,7 +491,7 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
                 {"$set": {field_name: None}},
             )
             if result.modified_count > 0:
-                log.info(
+                logger.info(
                     "cascade_nullify: %s.%s — nullified %d refs to deleted %s %s",
                     defn.name,
                     field_name,

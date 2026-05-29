@@ -12,7 +12,7 @@ livekit.agents.llm.LLM to LiveKit's AgentSession. The adapter:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -222,7 +222,6 @@ class TestDeepagentsLLMShape:
         streamed assistant tokens. Post-AI-407 Task 2.20: astream_events
         replaces ainvoke for token-level TTS streaming."""
         from livekit.agents.llm import ChatContext
-
         from llm_adapter import DeepagentsLLM
 
         astream_calls = []
@@ -313,7 +312,6 @@ class TestEventQueueDrain:
         prepended to the agent's input messages. Post-AI-407 Task 2.20:
         astream_events captures the input via the first call argument."""
         from livekit.agents.llm import ChatContext
-
         from llm_adapter import DeepagentsLLM
 
         captured_messages: list = []
@@ -364,7 +362,6 @@ class TestEventQueueDrain:
         """No drain message when no events queued. Post-AI-407 Task 2.20:
         astream_events replaces ainvoke."""
         from livekit.agents.llm import ChatContext
-
         from llm_adapter import DeepagentsLLM
 
         captured_messages: list = []

@@ -17,10 +17,7 @@ These tests pin:
 - API server-side rejects invalid entity_id with 400
 """
 
-import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-
 
 # --- CLI side ---
 

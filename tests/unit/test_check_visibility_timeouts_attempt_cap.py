@@ -19,12 +19,10 @@ sweep) plus a behavior test against an in-memory simulation of the two
 update_many calls.
 """
 
-import inspect
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Shape pins — survive code style changes

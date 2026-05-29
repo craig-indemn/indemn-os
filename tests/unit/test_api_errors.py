@@ -17,16 +17,14 @@ specific handler), so a ValueError still returns 400 rather than the 500
 catch-all.
 """
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from kernel.api.errors import register_error_handlers
 from kernel.entity.save import VersionConflictError
 from kernel.entity.state_machine import StateMachineError, TransitionValidationError
 from kernel.integration.adapter import AdapterValidationError
-
 
 # --- Test app builder ---
 

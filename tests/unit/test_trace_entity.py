@@ -1,6 +1,5 @@
 """Tests for Trace kernel entity — field definitions, state machine, class attributes."""
 
-import inspect
 from typing import get_args, get_type_hints
 
 from kernel_entities.trace import Trace

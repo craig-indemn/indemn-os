@@ -22,14 +22,14 @@ from kernel.api.auth_routes import auth_router
 from kernel.api.bootstrap import bootstrap_router
 from kernel.api.bulk import bulk_router
 from kernel.api.deployment_routes import deployment_router
+from kernel.api.diagnose_routes import diagnose_router
 from kernel.api.direct_invoke import invoke_router
 from kernel.api.errors import register_error_handlers
+from kernel.api.eval_routes import eval_router
 from kernel.api.events import events_router
 from kernel.api.health import health_router
 from kernel.api.human_review import review_router
 from kernel.api.integration_routes import integration_mgmt_router
-from kernel.api.diagnose_routes import diagnose_router
-from kernel.api.eval_routes import eval_router
 from kernel.api.interaction import interaction_router
 from kernel.api.lookup_routes import lookup_router
 from kernel.api.meta import meta_router

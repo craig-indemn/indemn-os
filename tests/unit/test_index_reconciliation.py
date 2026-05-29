@@ -25,7 +25,6 @@ from kernel.entity.indexes import (
     reconcile_indexes,
 )
 
-
 # --- Fixtures ---
 
 

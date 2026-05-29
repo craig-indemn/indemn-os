@@ -62,18 +62,15 @@ _cli_stub.CLIError = _StubCLIError
 _cli_stub.indemn = lambda *a, **kw: None  # tests will monkeypatch
 sys.modules["harness_common.cli"] = _cli_stub
 
-import pytest  # noqa: E402
-
-from indemn_os.types import AgentExecutionInput, AgentExecutionResult  # noqa: E402
-
 # Now safe to import the module under test
 import cron_runner  # noqa: E402
+import pytest  # noqa: E402
 from cron_runner import (  # noqa: E402
     CronSkillConfigError,
     parse_command_from_skill,
     run_cron_skill,
 )
-
+from indemn_os.types import AgentExecutionInput, AgentExecutionResult  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Parser — `## Command` section extraction
@@ -594,7 +591,6 @@ def test_process_with_associate_heartbeats_cron_runner_branch():
     activity. The 8m15s `Activity Heartbeat timeout` failure on workflow
     msg-69f81d4a1f2c3ee82ecb65bf is the observed symptom this guards
     against."""
-    import inspect
 
     # Read main.py source — the harness package isn't importable in this
     # test venv (deepagents stubs etc.), so source inspection of the file

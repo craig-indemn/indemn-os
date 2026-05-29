@@ -233,7 +233,7 @@ async def _create_lk_room_and_dispatch(
     """
     # Lazy import — LiveKit SDK is heavy + adds boot time; only load
     # when the helper is actually invoked (most tests stub the helper).
-    from livekit.api import LiveKitAPI, AccessToken, VideoGrants
+    from livekit.api import AccessToken, LiveKitAPI, VideoGrants
     from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
     from livekit.protocol.room import CreateRoomRequest
 

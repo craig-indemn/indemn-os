@@ -20,7 +20,9 @@ def main():
     from indemn_os.audit_commands import audit_app
     from indemn_os.auth_commands import auth_app
     from indemn_os.bulk_monitor import bulk_app
+    from indemn_os.diagnose_commands import diagnose_app
     from indemn_os.entity_commands import entity_app
+    from indemn_os.eval_commands import eval_app
     from indemn_os.events_commands import events_app
     from indemn_os.init_commands import init_app
     from indemn_os.integration_commands import integration_app
@@ -28,7 +30,6 @@ def main():
     from indemn_os.lookup_commands import lookup_app
     from indemn_os.org_commands import org_app
     from indemn_os.platform_commands import platform_app
-    from indemn_os.diagnose_commands import diagnose_app
     from indemn_os.queue_commands import queue_app
     from indemn_os.report_commands import report_app
     from indemn_os.role_commands import role_app as role_mgmt_app
@@ -36,7 +37,6 @@ def main():
     from indemn_os.runtime_commands import runtime_app
     from indemn_os.skill_commands import skill_app
     from indemn_os.trace_commands import trace_app
-    from indemn_os.eval_commands import eval_app
 
     app.add_typer(init_app, name="init")
     app.add_typer(auth_app, name="auth")

@@ -8,9 +8,7 @@ frontdoor wrappers (`harnesses/voice-frontdoor/harness/jwt_auth.py`,
 re-export — their tests sit in the respective harness's `tests/` dir.
 """
 
-import os
 import time
-from unittest.mock import patch
 
 import jwt as pyjwt
 import pytest
@@ -22,7 +20,6 @@ from harness_common.jwt_auth import (
     JWT_LEEWAY_SECONDS,
     verify_jwt,
 )
-
 
 # -----------------------------------------------------------------------------
 # Fixtures (HS256 + RS256 key material)

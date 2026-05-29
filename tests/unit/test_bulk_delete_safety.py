@@ -23,7 +23,6 @@ bulk-delete with a single-_id filter so the kernel-side audit + watch
 evaluation paths still run.
 """
 
-import inspect
 from pathlib import Path
 
 # Bug #4 — boundary check shape pin (the actual integration is one

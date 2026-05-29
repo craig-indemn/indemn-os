@@ -43,16 +43,16 @@ if str(HARNESSES_BASE_DIR) not in sys.path:
 # Real langchain_core.messages — isinstance() needs the real types.
 # Pre-loaded so any test that needs HumanMessage/SystemMessage/AIMessage gets
 # the real classes regardless of stub ordering.
+from harness_common.cli import CLIError  # noqa: E402,F401
+from harness_common.sanitize import sanitize_dynamic_params  # noqa: E402,F401
+
+# Real harness_common modules — installed via uv workspace.
+from harness_common.thread_id import derive_checkpointer_thread_id  # noqa: E402,F401
 from langchain_core.messages import (  # noqa: E402,F401
     AIMessage,
     HumanMessage,
     SystemMessage,
 )
-
-# Real harness_common modules — installed via uv workspace.
-from harness_common.thread_id import derive_checkpointer_thread_id  # noqa: E402,F401
-from harness_common.sanitize import sanitize_dynamic_params  # noqa: E402,F401
-from harness_common.cli import CLIError  # noqa: E402,F401
 
 # Stub modules NOT in the local .venv:
 # - `harness.*` package: the Docker /app/harness/ path; locally session.py + main.py

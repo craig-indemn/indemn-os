@@ -18,6 +18,7 @@ existing clean entity names (Email -> emails) stay clean.
 """
 
 from indemn_os.entity_commands import _default_collection_name as _user_default
+
 from kernel.cli.entity_commands import _default_collection_name as _kernel_default
 
 

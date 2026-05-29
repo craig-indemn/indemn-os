@@ -40,7 +40,7 @@ Google Workspace adapter) and ship together.
 """
 
 import inspect
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -49,7 +49,6 @@ from kernel.integration.adapters.google_workspace import (
     GoogleWorkspaceAdapter,
     _PerUserErrorTracker,
 )
-
 
 # --- Bug #5: capability CLI command signature ---
 

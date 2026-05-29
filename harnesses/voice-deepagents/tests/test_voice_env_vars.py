@@ -17,9 +17,7 @@ acts_as resolution (§5.6):
 Module path imports + heavy-dep stubs come from `tests/conftest.py`.
 """
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 
 class TestEffectiveActorIdResolution:

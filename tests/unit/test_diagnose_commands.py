@@ -8,8 +8,6 @@ Tests verify:
 
 import inspect
 
-import pytest
-
 
 class TestDiagnoseCommandShapes:
     """Pin CLI command existence and structure."""

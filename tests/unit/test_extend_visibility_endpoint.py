@@ -10,13 +10,11 @@ Tests pin the endpoint's shape via source inspection (route registration
 test setup.
 """
 
-import inspect
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Shape pins
@@ -163,7 +161,6 @@ async def test_extend_visibility_pending_raises_400():
     """Pending message (not claimed) cannot have visibility extended —
     nothing to extend. Must raise 400."""
     from bson import ObjectId
-
     from fastapi import HTTPException
 
     from kernel.api import queue_routes
@@ -186,7 +183,6 @@ async def test_extend_visibility_pending_raises_400():
 async def test_extend_visibility_missing_raises_404():
     """Missing message returns 404."""
     from bson import ObjectId
-
     from fastapi import HTTPException
 
     from kernel.api import queue_routes

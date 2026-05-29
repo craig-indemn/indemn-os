@@ -17,7 +17,6 @@ refactor doesn't reintroduce it.
 
 from pathlib import Path
 
-
 _MAIN_PY = (
     Path(__file__).resolve().parents[2]
     / "harnesses"

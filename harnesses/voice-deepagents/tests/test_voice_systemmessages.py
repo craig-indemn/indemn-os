@@ -14,16 +14,14 @@ checkpointer state as an AIMessage so resumed sessions don't re-greet.
 Module path imports + heavy-dep stubs come from `tests/conftest.py`.
 """
 
-from unittest.mock import MagicMock, AsyncMock
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 
 class TestComposeInitialMessages:
     def test_compose_returns_two_systemmessages(self):
         """Phase 4: two SystemMessages — <skill> + <deployment_context>."""
-        from session import VoiceSession
         from langchain_core.messages import SystemMessage
+        from session import VoiceSession
 
         msgs = VoiceSession.compose_initial_messages(
             skill_content="step 1: greet the user",
@@ -82,8 +80,8 @@ class TestSanitizeBeforeCompose:
         so embedded \\n\\n[NEW INSTRUCTION] cannot inject pseudo-SystemMessage
         blocks into the agent's input.
         """
-        from session import VoiceSession
         from harness_common.sanitize import sanitize_dynamic_params
+        from session import VoiceSession
 
         # Simulate what _build_deployment_context does internally
         dynamic = {
@@ -183,8 +181,8 @@ class TestGreetingPersistedToCheckpointer:
     async def test_persist_greeting_calls_aupdate_state(self):
         """persist_greeting_to_state writes the greeting as an AIMessage to the
         agent's state under thread_id = interaction_id."""
-        from session import VoiceSession
         from langchain_core.messages import AIMessage
+        from session import VoiceSession
 
         # Create session with mocked checkpointer + agent
         session = VoiceSession(

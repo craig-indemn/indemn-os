@@ -22,10 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_base"))
 
 # Real langchain_core (Phase 4 uses real SystemMessage type)
-from langchain_core.messages import SystemMessage  # noqa: E402,F401
-
 # Real harness_common.thread_id (build_runnable_config uses derive_checkpointer_thread_id)
 from harness_common.thread_id import derive_checkpointer_thread_id  # noqa: E402,F401
+from langchain_core.messages import SystemMessage  # noqa: E402,F401
 
 for mod in [
     "deepagents",

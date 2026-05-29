@@ -17,11 +17,8 @@ correlation_id (batch/retroactive) or a fresh cascade cid set as contextvar
 before save_tracked (prospective). Batch grouping moves to `causation_id`.
 """
 
-import inspect
 import sys
 from pathlib import Path
-
-import pytest
 
 HARNESS_DIR = Path(__file__).resolve().parents[2] / "harnesses" / "async-deepagents"
 if str(HARNESS_DIR) not in sys.path:

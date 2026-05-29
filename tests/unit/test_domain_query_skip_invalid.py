@@ -25,7 +25,6 @@ from pydantic import BaseModel
 
 from kernel.entity.base import _DomainQuery
 
-
 # --- Minimal entity classes for testing ---
 
 

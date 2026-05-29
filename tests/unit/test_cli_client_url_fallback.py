@@ -17,10 +17,8 @@ These tests pin all three tiers for both fields plus the precedence ordering.
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-
 from indemn_os.client import CLIClient
 
 

@@ -443,8 +443,8 @@ def client_with_jwt(valid_jwt):
     """TestClient + a default Authorization header with a valid JWT for
     act_test. Tests can override by passing headers={"Authorization": ...}
     on individual requests."""
-    from starlette.testclient import TestClient
     from harness.app import app
+    from starlette.testclient import TestClient
 
     client = TestClient(app, headers={"Authorization": f"Bearer {valid_jwt('act_test')}"})
     return client

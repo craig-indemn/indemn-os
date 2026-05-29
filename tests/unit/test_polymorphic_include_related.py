@@ -11,8 +11,6 @@ output shape when a polymorphic ref is populated.
 
 import inspect
 
-import pytest
-
 
 class TestFieldDefinitionSchema:
     """Pin the new fields on FieldDefinition."""

@@ -29,7 +29,6 @@ from fastapi import HTTPException
 
 from kernel.api.registration import _parse_list_filter
 
-
 # --- Fixtures ---
 
 

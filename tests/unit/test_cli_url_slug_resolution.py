@@ -16,7 +16,8 @@ without test-environment overhead.
 
 import inspect
 
-from indemn_os import bulk_commands, main as indemn_main
+from indemn_os import bulk_commands
+from indemn_os import main as indemn_main
 
 
 def test_main_register_entity_commands_uses_meta_collection():

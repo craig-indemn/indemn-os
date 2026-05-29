@@ -17,7 +17,6 @@ from kernel.auth.middleware import get_current_actor
 from kernel.context import current_correlation_id, current_org_id
 from kernel.db import ENTITY_REGISTRY, get_database
 from kernel.message.schema import Message
-
 from kernel.watch.evaluator import describe_condition, evaluate_condition
 
 logger = logging.getLogger(__name__)

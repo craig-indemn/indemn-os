@@ -30,8 +30,8 @@ import pytest
 
 @pytest.fixture
 def client():
-    from starlette.testclient import TestClient
     from harness.app import app
+    from starlette.testclient import TestClient
     return TestClient(app)
 
 

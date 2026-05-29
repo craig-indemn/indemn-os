@@ -25,13 +25,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_base"))
 
 # langchain_core real — needed for langsmith metadata to be inspectable.
-from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402,F401
-
 # Import REAL harness_common.thread_id BEFORE stubbing other submodules — this
 # registers the real package in sys.modules so main.py's
 # `from harness_common.thread_id import derive_checkpointer_thread_id` gets
 # the actual implementation (the test validates real §13.3 derivation logic).
 from harness_common.thread_id import derive_checkpointer_thread_id  # noqa: E402,F401
+from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402,F401
 
 for mod in [
     "deepagents",

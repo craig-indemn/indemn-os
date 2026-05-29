@@ -27,11 +27,8 @@ inspection of the surrounding code.
 
 from contextvars import copy_context
 
-import pytest
-
 from kernel.context import current_effective_actor_id
 from kernel.entity.save import _resolve_created_by
-
 
 # --- The resolver ---
 

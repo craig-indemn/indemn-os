@@ -11,14 +11,12 @@ Meet `start_time<="{until}"` AND-combined). Replace `**params` with
 `**unknown_params` and raise `AdapterValidationError` listing what's supported.
 """
 
-from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from kernel.integration.adapter import AdapterValidationError
 from kernel.integration.adapters.google_workspace import GoogleWorkspaceAdapter
-
 
 # --- Helpers ---
 

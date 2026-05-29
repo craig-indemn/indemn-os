@@ -49,7 +49,6 @@ from bson import ObjectId
 
 from kernel.message.emit import _build_related_entities
 
-
 # --- Fixtures: tiny stand-ins that look like entities + EntityDefinitions ---
 
 

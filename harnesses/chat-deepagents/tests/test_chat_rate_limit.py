@@ -45,13 +45,14 @@ sys.modules["harness.session"] = _harness_session_stub
 if isinstance(sys.modules.get("harness_common.cli"), MagicMock):
     del sys.modules["harness_common.cli"]
 import harness_common.cli  # noqa: E402,F401
+
 if isinstance(sys.modules.get("harness_common.jwt_auth"), MagicMock):
     del sys.modules["harness_common.jwt_auth"]
 import harness_common.jwt_auth  # noqa: E402,F401
+
 if isinstance(sys.modules.get("harness_common.rate_limit"), MagicMock):
     del sys.modules["harness_common.rate_limit"]
 import harness_common.rate_limit  # noqa: E402,F401
-
 import main as harness_main  # noqa: E402
 
 

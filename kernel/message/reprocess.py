@@ -32,7 +32,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from kernel.context import current_actor_id, current_org_id
+from kernel.context import current_actor_id
 from kernel.message.mongodb_bus import MongoDBMessageBus
 from kernel.message.schema import Message
 from kernel.observability.tracing import create_span

@@ -13,7 +13,7 @@ the agent's final spoken response flow to TTS.
 Module path imports + heavy-dep stubs come from `tests/conftest.py`.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 

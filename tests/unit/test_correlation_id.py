@@ -27,7 +27,6 @@ integration tests against a live MongoDB; here we keep it unit-level.
 import os
 from unittest.mock import patch
 
-
 # --- CLI client header propagation ---
 
 

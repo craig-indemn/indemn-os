@@ -59,12 +59,11 @@ for mod in [
 if isinstance(sys.modules.get("harness_common.cli"), MagicMock):
     del sys.modules["harness_common.cli"]
 import harness_common.cli  # noqa: E402,F401
+
 if isinstance(sys.modules.get("harness_common.sanitize"), MagicMock):
     del sys.modules["harness_common.sanitize"]
 import harness_common.sanitize  # noqa: E402,F401
-
 from session import ChatSession  # noqa: E402
-
 
 # -----------------------------------------------------------------------------
 # Test helpers

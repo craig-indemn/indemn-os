@@ -24,15 +24,15 @@ auto-skips). Path A is exercised manually in Task 2.38's E2E smoke.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 
 @pytest.fixture
 def client():
-    from starlette.testclient import TestClient
     from harness.app import app
+    from starlette.testclient import TestClient
     return TestClient(app)
 
 

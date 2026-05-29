@@ -79,7 +79,6 @@ sys.modules["harness_common.runtime"].RUNTIME_ID = "test-runtime"
 
 from main import _load_message_context  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Synthetic kernel-internal entity_types (Bug #41 fix): skip the indemn CLI
 # load, return a trigger descriptor.

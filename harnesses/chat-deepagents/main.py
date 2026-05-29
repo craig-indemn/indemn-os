@@ -34,7 +34,6 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-
 # AI-408 Task 3.4: audience pinned per surface. A JWT minted for voice
 # (audience="runtime-voice-frontdoor") MUST NOT validate against chat.
 # HS256 mode ignores this (OS doesn't set aud); RS256 mode enforces it.

@@ -30,7 +30,6 @@ from kernel.capability.entity_resolve import (
     entity_resolve,
 )
 
-
 # --- Normalizer tests ---
 
 

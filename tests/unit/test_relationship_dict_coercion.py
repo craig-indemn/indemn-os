@@ -26,7 +26,6 @@ from fastapi import HTTPException
 
 from kernel.api.registration import _resolve_relationship_dict_inputs
 
-
 # --- Fixtures ---
 
 

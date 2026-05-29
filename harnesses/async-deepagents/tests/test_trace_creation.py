@@ -1,9 +1,8 @@
 """Tests for trace creation helpers — serialization, child_runs, token aggregation."""
 
-import json
 from types import SimpleNamespace
 
-from trace_helpers import serialize_messages, derive_child_runs, aggregate_tokens
+from trace_helpers import aggregate_tokens, derive_child_runs, serialize_messages
 
 
 def _ai_msg(content="", tool_calls=None, usage_metadata=None):

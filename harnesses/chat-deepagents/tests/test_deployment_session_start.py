@@ -40,7 +40,6 @@ sys.modules["harness.session"] = _harness_session_stub
 if isinstance(sys.modules.get("harness_common.cli"), MagicMock):
     del sys.modules["harness_common.cli"]
 import harness_common.cli  # noqa: E402,F401  — real import
-
 import main as harness_main  # noqa: E402
 
 

@@ -17,7 +17,6 @@ guaranteeing route + meta agreement.
 """
 
 import inspect
-import re
 
 import kernel.api.meta as meta_module
 

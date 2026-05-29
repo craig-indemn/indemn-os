@@ -46,7 +46,6 @@ cleanly.
 """
 
 import inspect
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -54,7 +53,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from bson import ObjectId
 from temporalio.exceptions import WorkflowAlreadyStartedError
-
 
 # ---------------------------------------------------------------------------
 # Shape pins: structural assertions that survive code style changes

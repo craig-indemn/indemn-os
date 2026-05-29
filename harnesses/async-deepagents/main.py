@@ -23,16 +23,21 @@ from datetime import datetime, timedelta, timezone
 
 from harness.agent import build_agent
 from harness.cron_runner import run_cron_skill
+from harness.trace_helpers import (
+    aggregate_tokens,
+    derive_child_runs,
+    serialize_messages,
+    serialize_run_tree,
+)
 from harness_common.cli import CLIError, indemn
-from harness.trace_helpers import serialize_messages, serialize_run_tree, derive_child_runs, aggregate_tokens
+from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
 from harness_common.thread_id import derive_checkpointer_thread_id
+from indemn_os.types import AgentExecutionInput, AgentExecutionResult
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.mongodb import MongoDBSaver
 from motor.motor_asyncio import AsyncIOMotorClient
-from harness_common.runtime import RUNTIME_ID, heartbeat_loop, register_instance
-from indemn_os.types import AgentExecutionInput, AgentExecutionResult
 from temporalio import activity
 from temporalio.client import Client
 from temporalio.contrib.opentelemetry import TracingInterceptor
@@ -1028,8 +1033,8 @@ async def main():
     # Increase thread pool for high concurrency — deepagents uses asyncio.to_thread
     # for filesystem ops (skill loading, backend ls/read_file). Default pool (5 threads
     # per CPU) starves at 50+ concurrent agents.
-    from concurrent.futures import ThreadPoolExecutor
     import asyncio as _asyncio
+    from concurrent.futures import ThreadPoolExecutor
     _asyncio.get_event_loop().set_default_executor(ThreadPoolExecutor(max_workers=500))
 
     _setup_gcp_credentials()

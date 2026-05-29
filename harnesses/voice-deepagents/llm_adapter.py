@@ -35,8 +35,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import json
-
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from livekit.agents import APIConnectOptions
 from livekit.agents.llm import (

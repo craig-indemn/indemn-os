@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Real langchain_core for isinstance() checks
-from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
+from langchain_core.messages import SystemMessage  # noqa: E402
 
 for mod in [
     "deepagents",

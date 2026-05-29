@@ -19,8 +19,6 @@ These tests pin:
 
 import inspect
 
-import pytest
-
 import kernel.api.context_profile as context_profile_module
 import kernel.api.serialize as serialize_module
 from kernel.api.context_profile import (
@@ -31,7 +29,6 @@ from kernel.api.context_profile import (
     is_valid_profile,
 )
 from kernel.api.serialize import serialize_for_profile
-
 
 # ----- Profile table -----
 

@@ -13,7 +13,6 @@ Fixtures pinned:
   actor_id in parameter_schema)
 """
 
-import pytest
 
 
 def test_test_private_key_is_rsa(_test_private_key):

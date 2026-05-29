@@ -594,8 +594,8 @@ async def check_cascade_completion():
         if not org_id:
             continue
 
-        from kernel_entities.role import Role
         from kernel_entities.actor import Actor
+        from kernel_entities.role import Role
 
         evaluator_role = await Role.get_motor_collection().find_one(
             {"org_id": org_id, "name": "evaluator"}

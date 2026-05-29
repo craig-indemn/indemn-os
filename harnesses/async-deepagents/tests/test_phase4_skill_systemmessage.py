@@ -20,11 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_base"))
 # langchain_core is a real dep of the harness — leave it real so SystemMessage
 # / HumanMessage are actual types (isinstance() needs that). Import BEFORE
 # stubbing the other deps so sys.modules has the real langchain_core.
-from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
-
 # Import real harness_common.thread_id before stubbing other submodules so the
 # real package + module land in sys.modules (main.py uses derive_checkpointer_thread_id).
 from harness_common.thread_id import derive_checkpointer_thread_id  # noqa: E402,F401
+from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 
 # Stub the other heavy runtime deps that aren't installed in the test env.
 for mod in [

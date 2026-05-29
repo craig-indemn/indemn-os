@@ -16,7 +16,7 @@ remain in test_list_filter_parser.py (which now exercises the operator
 path through the same shared parser).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Optional
 
@@ -25,7 +25,6 @@ from bson import ObjectId
 from fastapi import HTTPException
 
 from kernel.api._filter_safelist import parse_filter
-
 
 # --- Fixtures ---
 

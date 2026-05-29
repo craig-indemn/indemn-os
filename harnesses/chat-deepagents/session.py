@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import subprocess
+import uuid
+from types import SimpleNamespace
 
 from harness.agent import build_agent
 from harness_common.attention import attention_heartbeat_loop, close_attention, open_attention
@@ -23,8 +25,6 @@ from harness_common.sanitize import sanitize_dynamic_params
 from harness_common.thread_id import derive_checkpointer_thread_id
 from langchain_core.messages import SystemMessage
 from starlette.websockets import WebSocket
-from types import SimpleNamespace
-import uuid
 
 log = logging.getLogger(__name__)
 

@@ -23,11 +23,8 @@ tests against a live MongoDB; here we keep it unit-level.
 import os
 from unittest.mock import patch
 
-import pytest
-
 from kernel.changes.collection import ChangeRecord
 from kernel.context import current_effective_actor_id
-
 
 # --- Contextvar ---
 

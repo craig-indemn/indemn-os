@@ -147,7 +147,7 @@ async def main():
     if sales_actor.status == "provisioned":
         sales_actor.transition_to("active")
         await sales_actor.save_tracked(actor_id=ACTOR_ID, method="transition")
-        print(f"  actor: TRANSITIONED Sales Assistant provisioned → active")
+        print("  actor: TRANSITIONED Sales Assistant provisioned → active")
 
     # 5) SurfaceConfigs
     chat_sc = await _find_by_name(SurfaceConfig, org_id, "Indemn Sales — prompt-kit chat")

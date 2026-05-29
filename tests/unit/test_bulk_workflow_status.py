@@ -22,18 +22,15 @@ extracted from the workflow:
 
 from datetime import datetime
 from types import SimpleNamespace
-from typing import Optional
 
 import pytest
 from bson import ObjectId
-from fastapi import HTTPException
 
 from kernel.temporal.activities import (
     PermanentProcessingError,
     _coerce_bulk_filter,
 )
 from kernel.temporal.workflows import BulkResult, summarize_bulk_status
-
 
 # --- Status summarization (Bug #24) ---
 

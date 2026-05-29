@@ -19,7 +19,6 @@ in test_diagnose_commands.py separately).
 
 from pathlib import Path
 
-
 _DIAGNOSE_ROUTES = (
     Path(__file__).resolve().parents[2]
     / "kernel" / "api" / "diagnose_routes.py"

@@ -13,9 +13,6 @@ These tests pin the CLI behavior. The server-side exclude param is
 already covered by the eval_routes test suite indirectly.
 """
 
-import sys
-from pathlib import Path
-from unittest.mock import MagicMock
 
 
 def test_summary_flag_adds_exclude_param(monkeypatch):

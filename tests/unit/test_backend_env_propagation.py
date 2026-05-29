@@ -19,7 +19,6 @@ Fix: the backend env dict now mirrors the cli.py whitelist. These tests pin
 that whitelist so the two propagation paths stay in sync.
 """
 
-import os
 import sys
 import types
 from pathlib import Path

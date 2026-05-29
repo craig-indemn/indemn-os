@@ -29,6 +29,8 @@ from harness_common.jwt_auth import (
     JWT_ISSUER,  # re-exported for any test that imports it
     JWT_LEEWAY_SECONDS,  # re-exported for any test that imports it
     _get_public_key,  # re-exported so tests patching harness.jwt_auth._get_public_key keep working
+)
+from harness_common.jwt_auth import (
     verify_jwt as _verify_shared,
 )
 

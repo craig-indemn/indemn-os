@@ -20,8 +20,6 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-from typer.testing import CliRunner
-
 from indemn_os.actor_commands import actor_app
 from indemn_os.entity_commands import entity_app
 from indemn_os.eval_commands import eval_app
@@ -31,7 +29,7 @@ from indemn_os.role_commands import role_app
 from indemn_os.runtime_commands import runtime_app
 from indemn_os.skill_commands import skill_app
 from indemn_os.trace_commands import trace_app
-
+from typer.testing import CliRunner
 
 # Each tuple: (app, module path where CLIClient is imported, arg for `get`)
 KERNEL_ENTITY_APPS = [

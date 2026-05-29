@@ -28,18 +28,17 @@ if str(HARNESSES_BASE_DIR) not in sys.path:
     sys.path.insert(0, str(HARNESSES_BASE_DIR))
 
 # Real langchain_core.messages — isinstance() needs the real types.
-from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402,F401
-
-# Real harness_common.thread_id — Phase 4 tests + the session.py module use
-# derive_checkpointer_thread_id. Pre-loading here makes the real package land
-# in sys.modules before any test's MagicMock setdefault would conflict.
-from harness_common.thread_id import derive_checkpointer_thread_id  # noqa: E402,F401
-
 # Stub the heavy runtime deps that session.py + agent.py import at module load
 # (deepagents, harness.agent, harness_common submodules, langchain, starlette,
 # langgraph checkpointer libs, motor). Per-file stubs would duplicate this; the
 # conftest centralizes so all chat tests benefit + ordering issues don't recur.
 from unittest.mock import MagicMock  # noqa: E402
+
+# Real harness_common.thread_id — Phase 4 tests + the session.py module use
+# derive_checkpointer_thread_id. Pre-loading here makes the real package land
+# in sys.modules before any test's MagicMock setdefault would conflict.
+from harness_common.thread_id import derive_checkpointer_thread_id  # noqa: E402,F401
+from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402,F401
 
 for mod in [
     "deepagents",

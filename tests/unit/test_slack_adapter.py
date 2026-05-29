@@ -5,7 +5,7 @@ paginated via cursor, dedup by composite (channel_id, slack_ts) external_ref.
 File attachments → linked Document entities.
 """
 
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import patch
 
 import pytest
 

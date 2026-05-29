@@ -9,9 +9,7 @@ across batch, watch evaluation fires per entity, empty list returns zeros,
 created_by auto-population, OTEL span attributes, dedup via E11000 silent skip.
 """
 
-import hashlib
 import inspect
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

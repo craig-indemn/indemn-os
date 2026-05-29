@@ -15,10 +15,7 @@ the Beanie Document machinery that's not relevant to the rendering logic.
 
 from types import SimpleNamespace
 
-import pytest
-
 from kernel.skill.generator import generate_entity_skill
-
 
 # --- Helpers ---
 

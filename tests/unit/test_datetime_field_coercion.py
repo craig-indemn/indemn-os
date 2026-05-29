@@ -53,7 +53,6 @@ from fastapi import HTTPException
 
 from kernel.api.registration import _coerce_datetime_fields
 
-
 # --- Test fixtures: minimal entity_cls stand-in with model_fields ---
 
 
