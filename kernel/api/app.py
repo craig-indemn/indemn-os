@@ -116,6 +116,21 @@ def create_app() -> FastAPI:
         asyncio.create_task(watch_revocations())
         logger.info("Revocation cache bootstrapped, watcher started")
 
+        # Pre-warm audit-completeness boundary cache (Session-35 Decision D2:
+        # "Computed at kernel startup, cached in process"). Without this, the
+        # first caller to `get_audit_completeness_boundary()` would trigger
+        # the aggregation query, and the cache lifetime would be from-first-call
+        # not from-startup. Stage C eval reconstruction (sub-piece 12 D-J)
+        # depends on the boundary being set at startup so dispatcher decisions
+        # are stable from the moment the process accepts traffic.
+        from kernel.changes.boundary import get_audit_completeness_boundary
+
+        boundary = await get_audit_completeness_boundary()
+        logger.info(
+            "Audit-completeness boundary derived at startup: %s",
+            boundary.isoformat() if boundary else "null (pre-Stage-A — no qualifying records)",
+        )
+
     @app.on_event("shutdown")
     async def shutdown():
         """Graceful shutdown: close connections."""

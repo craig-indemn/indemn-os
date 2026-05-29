@@ -41,6 +41,19 @@ async def main():
     init_tracing()
     await init_database()
 
+    # Pre-warm audit-completeness boundary cache (Session-35 Decision D2:
+    # "Computed at kernel startup, cached in process"). Activities running
+    # in this worker (process_bulk_batch, etc.) may consult the boundary;
+    # deriving at startup ensures the cache is populated before the first
+    # workflow dispatches.
+    from kernel.changes.boundary import get_audit_completeness_boundary
+
+    boundary = await get_audit_completeness_boundary()
+    logger.info(
+        "Audit-completeness boundary derived at startup: %s",
+        boundary.isoformat() if boundary else "null (pre-Stage-A — no qualifying records)",
+    )
+
     client = await get_temporal_client()
     if not client:
         logger.error("Temporal client not available. Set TEMPORAL_ADDRESS.")

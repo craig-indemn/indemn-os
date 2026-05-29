@@ -25,6 +25,14 @@ Concurrency note: cache is per-process. Multiple kernel processes (e.g.,
 indemn-api + indemn-temporal-worker + indemn-runtime-async) each derive
 the boundary independently at startup. They will converge to the same value
 since they all read the same source-of-truth collection.
+
+**Startup pre-warming (Session-36 Dev#2, D2 strict reading)**: long-lived
+processes (indemn-api FastAPI lifespan startup at `kernel/api/app.py`;
+indemn-temporal-worker `main()` at `kernel/temporal/worker.py`) call
+`get_audit_completeness_boundary()` after `init_database()` to populate
+the cache before serving traffic. CLI processes (short-lived) skip the
+pre-warm and rely on lazy-on-first-call. Either way, the value is stable
+within a single process lifetime.
 """
 
 from datetime import datetime

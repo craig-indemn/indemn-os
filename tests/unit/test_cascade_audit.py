@@ -359,19 +359,37 @@ def test_emit_cascade_audit_signature():
     assert "actor_id" in params
 
 
-def test_cascade_nullify_references_uses_emit_cascade_audit_per_entity():
-    """Source pin: cascade_nullify_references calls _emit_cascade_audit per affected entity.
+def test_cascade_nullify_references_uses_in_memory_batched_pattern():
+    """Source pin: cascade_nullify_references uses in-memory batched pattern per D5 strict.
 
-    Replaces the prior `update_many` shortcut that wrote NO audit (and had a
-    latent `log.info` typo bug — `log` was never defined, only `logger`).
+    Per Session-36 Dev#1 (D5 strict reading): cascade_nullify_references mirrors
+    `bulk_save_tracked` lines 312-337 — builds all audit records in memory with
+    hash chain, single insert_many for audits, per-(collection, field) batched
+    update_many for nullifications. Earlier A4 implementation called
+    `_emit_cascade_audit` per affected entity (N inserts + N update_ones)
+    which deviated from D5.
+
+    `_emit_cascade_audit` still exists as a single-record API for ad-hoc
+    callers (and Stage B B2 polymorphic cascade).
     """
     from kernel.entity import save
 
     src = inspect.getsource(save.cascade_nullify_references)
-    # Helper called inside the loop
-    assert "await _emit_cascade_audit(" in src
-    # update_many shortcut is gone
+    # In-memory chain construction
+    assert "audit_records" in src
+    assert "ChangeRecord(" in src  # inline construction, not via helper
+    assert "compute_hash(record)" in src
+    # Single insert_many at end
+    assert "changes_coll.insert_many(change_docs)" in src
+    # Batched per-(collection, field) update_many
+    assert "nullify_ops" in src
+    assert "collection.update_many" in src
+    # update_one per-doc shortcut is gone
+    assert "collection.update_one" not in src
+    # Old pre-A4 update_many({org_id, field_name: entity_id}) shortcut is gone
     assert "update_many(\n                {\"org_id\": org_id, field_name: entity_id}" not in src
+    # Old per-entity _emit_cascade_audit-in-the-loop pattern is gone
+    assert "await _emit_cascade_audit(" not in src
 
 
 def test_cascade_nullify_references_uses_logger_not_undefined_log():
@@ -390,12 +408,14 @@ def test_cascade_nullify_references_uses_logger_not_undefined_log():
 
 
 @pytest.mark.asyncio
-async def test_cascade_nullify_references_emits_per_entity_via_helper(mock_cascade_deps):
-    """End-to-end: cascade_nullify_references with N affected entities → N _emit_cascade_audit calls + N update_one calls."""
+async def test_cascade_nullify_references_batched_insert_and_update(mock_cascade_deps):
+    """End-to-end: N affected entities → 1 insert_many for N audits + 1 update_many per (collection, field).
+
+    Per Dev#1 (D5 strict reading): mirrors bulk_save_tracked lines 312-337.
+    """
     from kernel.entity import save
 
-    # Mock EntityDefinition.find().to_list() to return one defn with one
-    # relationship_target field pointing at "Touchpoint"
+    # Mock EntityDefinition with one relationship_target field
     defn = MagicMock()
     defn.name = "Task"
     field_def = MagicMock()
@@ -403,28 +423,34 @@ async def test_cascade_nullify_references_emits_per_entity_via_helper(mock_casca
     field_def.relationship_target = "Touchpoint"
     defn.fields = {"touchpoint": field_def}
 
-    # Mock ENTITY_REGISTRY
-    entity_cls = MagicMock()
+    # Mock the affected entities and the entity class
     affected_ids = [ObjectId(), ObjectId(), ObjectId()]
     deleted_tp_id = ObjectId("bbbb11112222333344445555")
     affected_docs = [
         {"_id": aid, "touchpoint": deleted_tp_id} for aid in affected_ids
     ]
 
-    # find() returns a query that has to_list returning affected_docs
     find_query = MagicMock()
     find_query.to_list = AsyncMock(return_value=affected_docs)
+    entity_update_many = AsyncMock(return_value=MagicMock(modified_count=3))
     collection = MagicMock(
         find=MagicMock(return_value=find_query),
-        update_one=AsyncMock(),
+        update_many=entity_update_many,
     )
+    entity_cls = MagicMock()
     entity_cls.get_motor_collection = MagicMock(return_value=collection)
 
-    emit_calls = []
+    # Capture audit records constructed and the insert_many calls
+    audit_kwargs_seen: list = []
+    audit_insert_many = AsyncMock()
 
-    async def fake_emit(**kwargs):
-        emit_calls.append(kwargs)
-        return ObjectId()
+    def cr_factory(**kwargs):
+        audit_kwargs_seen.append(kwargs)
+        m = MagicMock()
+        m.model_dump = lambda by_alias=False: kwargs
+        for k, v in kwargs.items():
+            setattr(m, k, v)
+        return m
 
     with patch(
         "kernel.entity.definition.EntityDefinition.find",
@@ -432,12 +458,22 @@ async def test_cascade_nullify_references_emits_per_entity_via_helper(mock_casca
         "kernel.db.ENTITY_REGISTRY",
         {"Task": entity_cls},
     ), patch(
-        "kernel.entity.save._emit_cascade_audit",
-        new=fake_emit,
+        "kernel.changes.collection.ChangeRecord",
+    ) as MockCR, patch(
+        "kernel.changes.hash_chain.get_previous_hash",
+        new=AsyncMock(return_value="genesis"),
+    ), patch(
+        "kernel.changes.hash_chain.compute_hash",
+        side_effect=lambda r: f"hash-{id(r)}",
     ):
         find_defs_query = MagicMock()
         find_defs_query.to_list = AsyncMock(return_value=[defn])
         mock_find_defs.return_value = find_defs_query
+
+        MockCR.get_motor_collection = MagicMock(
+            return_value=MagicMock(insert_many=audit_insert_many)
+        )
+        MockCR.side_effect = cr_factory
 
         org_id = ObjectId("ccc11112222333344445555c")
         total = await save.cascade_nullify_references(
@@ -446,21 +482,103 @@ async def test_cascade_nullify_references_emits_per_entity_via_helper(mock_casca
             org_id=org_id,
         )
 
-    # 3 affected entities → 3 audit emissions + 3 update_one calls
+    # 3 affected entities → total_affected=3
     assert total == 3
-    assert len(emit_calls) == 3
-    assert collection.update_one.await_count == 3
 
-    # Each emit captures the right metadata
-    for i, call in enumerate(emit_calls):
-        assert call["affected_entity_type"] == "Task"
-        assert call["affected_entity_id"] == affected_ids[i]
-        assert call["deleted_target_type"] == "Touchpoint"
-        assert call["deleted_target_id"] == deleted_tp_id
-        assert call["org_id"] == org_id
-        # fields_changed is a list with one FieldChange (scalar ref)
-        assert len(call["fields_changed"]) == 1
-        fc = call["fields_changed"][0]
-        assert fc["field"] == "touchpoint"
-        assert fc["old_value"] == deleted_tp_id
-        assert fc["new_value"] is None
+    # ONE insert_many flushes all 3 audit records (D5 strict in-memory batched)
+    audit_insert_many.assert_called_once()
+    docs = audit_insert_many.call_args[0][0]
+    assert len(docs) == 3
+
+    # ONE update_many per (collection, field) — single update_many for the Task.touchpoint group
+    entity_update_many.assert_called_once()
+    filter_doc, update_doc = entity_update_many.call_args[0]
+    assert "_id" in filter_doc
+    assert "$in" in filter_doc["_id"]
+    assert set(filter_doc["_id"]["$in"]) == set(affected_ids)
+    assert update_doc == {"$set": {"touchpoint": None}}
+
+    # Audit records have the right shape per affected entity
+    assert len(audit_kwargs_seen) == 3
+    for i, kwargs in enumerate(audit_kwargs_seen):
+        assert kwargs["change_type"] == "cascade_nullify"
+        assert kwargs["method"] == "relationship_target_deleted"
+        assert kwargs["entity_type"] == "Task"
+        assert kwargs["entity_id"] == affected_ids[i]
+        assert kwargs["method_metadata"]["deleted_entity_type"] == "Touchpoint"
+        assert kwargs["method_metadata"]["deleted_entity_id"] == str(deleted_tp_id)
+        assert kwargs["method_metadata"]["affected_field_names"] == ["touchpoint"]
+
+
+@pytest.mark.asyncio
+async def test_cascade_nullify_references_hash_chain_sequential(mock_cascade_deps):
+    """In-memory hash chain: each cascade audit record chains from prior record."""
+    from kernel.entity import save
+
+    defn = MagicMock()
+    defn.name = "Task"
+    field_def = MagicMock()
+    field_def.is_relationship = True
+    field_def.relationship_target = "Touchpoint"
+    defn.fields = {"touchpoint": field_def}
+
+    affected_ids = [ObjectId(), ObjectId(), ObjectId(), ObjectId()]
+    deleted_tp_id = ObjectId("bbbb11112222333344445555")
+    affected_docs = [{"_id": aid, "touchpoint": deleted_tp_id} for aid in affected_ids]
+
+    find_query = MagicMock()
+    find_query.to_list = AsyncMock(return_value=affected_docs)
+    collection = MagicMock(
+        find=MagicMock(return_value=find_query),
+        update_many=AsyncMock(return_value=MagicMock(modified_count=4)),
+    )
+    entity_cls = MagicMock()
+    entity_cls.get_motor_collection = MagicMock(return_value=collection)
+
+    hash_calls = []
+
+    def tracking_compute_hash(record):
+        h = f"hash-{len(hash_calls)}"
+        hash_calls.append({"prev": record.previous_hash, "computed": h})
+        return h
+
+    def cr_factory(**kwargs):
+        m = MagicMock()
+        m.model_dump = lambda by_alias=False: kwargs
+        for k, v in kwargs.items():
+            setattr(m, k, v)
+        return m
+
+    with patch(
+        "kernel.entity.definition.EntityDefinition.find",
+    ) as mock_find_defs, patch(
+        "kernel.db.ENTITY_REGISTRY",
+        {"Task": entity_cls},
+    ), patch(
+        "kernel.changes.collection.ChangeRecord",
+    ) as MockCR, patch(
+        "kernel.changes.hash_chain.get_previous_hash",
+        new=AsyncMock(return_value="genesis"),
+    ), patch(
+        "kernel.changes.hash_chain.compute_hash",
+        side_effect=tracking_compute_hash,
+    ):
+        find_defs_query = MagicMock()
+        find_defs_query.to_list = AsyncMock(return_value=[defn])
+        mock_find_defs.return_value = find_defs_query
+        MockCR.get_motor_collection = MagicMock(
+            return_value=MagicMock(insert_many=AsyncMock())
+        )
+        MockCR.side_effect = cr_factory
+
+        await save.cascade_nullify_references(
+            entity_type="Touchpoint",
+            entity_id=deleted_tp_id,
+            org_id=ObjectId(),
+        )
+
+    # Sequential chain
+    assert hash_calls[0]["prev"] == "genesis"
+    assert hash_calls[1]["prev"] == "hash-0"
+    assert hash_calls[2]["prev"] == "hash-1"
+    assert hash_calls[3]["prev"] == "hash-2"

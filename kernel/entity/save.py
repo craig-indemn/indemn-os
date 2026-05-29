@@ -517,12 +517,25 @@ async def bulk_update_tracked(
     Per-entity FieldChange captures old_value from current entity state
     (via `getattr`), new_value from sets[field].
 
-    AUDIT emission: YES (D-A scope expansion per D4).
-    EVENT emission: preserved as silent. Watches do NOT fire on bulk updates.
-    The original "Silent update" comment's intent (no event fan-out per
-    bulk-update entity) is honored — D4 expanded D-A's AUDIT scope to cover
-    this path; the event-emission concern is orthogonal to audit completeness
-    and is not in D1-D26 scope.
+    AUDIT emission: YES (D-A scope expansion per D4 + D24).
+    EVENT emission: NO (resolved Session-36 Dev#3 as audit-only).
+
+    Rationale for the audit-only resolution (locked Session 36):
+      - bulk-update is typically an administrative or migration operation
+        (operator bulk-changing state across many entities); operators
+        expect this to be silent (no watch fan-out)
+      - bulk-delete via `bulk_delete_tracked` is also silent (symmetric)
+      - bulk-create via `bulk_save_tracked` IS noisy (events emitted
+        per-entity) — that's the ingestion path where downstream cascade
+        SHOULD fire; bulk-update is the inverse case (admin/migration,
+        not ingestion)
+      - Per-update event emission is available via the per-entity loop with
+        `entity.save_tracked(method=...)` for callers who want it
+      - D4 expanded D-A's AUDIT scope; the event-emission concern is
+        orthogonal and explicitly NOT in D1-D26
+      - The original "Silent update — bypasses save_tracked()" intent
+        captured exactly this design: silent on events, defective on audit;
+        Stage A keeps the silent-events intent and fixes the audit defect
 
     Implementation:
       1. Build one ChangeRecord per entity, hash-chained in memory.
@@ -862,25 +875,47 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
 
     Scans all EntityDefinitions for fields where `is_relationship=True` and
     `relationship_target` matches the deleted entity's type. For each affected
-    entity, emits a cascade_nullify audit ChangeRecord via `_emit_cascade_audit`
-    (per Session-35 D5: per-entity record + D9-ready polymorphic pair signature)
-    THEN nullifies the field on that entity.
+    entity, builds a `cascade_nullify` audit ChangeRecord (per Session-35 D5).
 
-    Stage A4 replaces the previous `update_many` shortcut (which wrote no audit
-    and had a latent `log.info` typo bug at the modified_count > 0 log line).
-    Per-entity emission gives sub-piece 12 reconstruction the granularity it
-    needs at trace.end_time.
+    **Per Session-36 Dev#1: STRICT D5 in-memory batched implementation** (mirror
+    `bulk_save_tracked` lines 312-337 pattern):
+      1. Build ALL audit records in memory with sequential hash chain.
+      2. Single `insert_many` flushes audits to the changes collection.
+      3. Per-(collection, field) batched `update_many` nullifies the references.
+
+    Earlier Session-36 A4 implementation called `_emit_cascade_audit` per
+    affected entity (N inserts + N update_ones), which deviated from D5's
+    "in-memory batched" specification. Fixed here. `_emit_cascade_audit` still
+    exists as a single-record API for ad-hoc callers (and future Stage B B2
+    polymorphic cascade per D9 atomicity).
+
+    Replaces the previous `update_many` shortcut (which wrote no audit and had
+    a latent `log.info` typo bug at the modified_count > 0 log line). Per-entity
+    audit records give sub-piece 12 reconstruction the granularity it needs at
+    trace.end_time.
 
     Scope: SCALAR refs only. List-typed + polymorphic refs are Stage B B2
     scope (sub-piece 13 cascade extension via D-D).
 
     Returns total number of documents updated across all collections.
     """
+    from kernel.changes.collection import ChangeRecord, FieldChange
+    from kernel.changes.hash_chain import compute_hash, get_previous_hash
+    from kernel.context import current_actor_id
     from kernel.db import ENTITY_REGISTRY
     from kernel.entity.definition import EntityDefinition
 
     definitions = await EntityDefinition.find({"org_id": org_id}).to_list()
-    total_updated = 0
+
+    actor_id = current_actor_id.get()
+    _correlation_id = current_correlation_id.get() or str(uuid4())
+    effective_actor = current_effective_actor_id.get()
+    now = datetime.now(timezone.utc)
+
+    audit_records: list = []  # in-memory chain (D5 mirror of bulk_save_tracked)
+    nullify_ops: list = []  # per-(collection, defn_name, field, ids) batched updates
+    total_affected = 0
+    prev_hash = await get_previous_hash(org_id)
 
     for defn in definitions:
         for field_name, field_def in defn.fields.items():
@@ -895,41 +930,73 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
 
             collection = entity_cls.get_motor_collection()
 
-            # Read each affected entity (scalar refs; Stage B B2 extends for
+            # Read affected entities (scalar refs; Stage B B2 extends for
             # list-typed + polymorphic refs).
             affected_docs = await collection.find(
                 {"org_id": org_id, field_name: entity_id},
                 {"_id": 1, field_name: 1},
             ).to_list(length=None)
 
+            if not affected_docs:
+                continue
+
+            # Build per-affected-entity audit records with in-memory hash chain
+            # (mirror bulk_save_tracked lines 312-337 per D5).
             for doc in affected_docs:
-                # Emit per-affected-entity audit record FIRST (D5)
-                await _emit_cascade_audit(
-                    affected_entity_id=doc["_id"],
-                    affected_entity_type=defn.name,
-                    fields_changed=[
-                        {"field": field_name, "old_value": doc[field_name], "new_value": None}
-                    ],
-                    deleted_target_type=entity_type,
-                    deleted_target_id=entity_id,
+                record = ChangeRecord(
+                    id=ObjectId(),
                     org_id=org_id,
+                    entity_type=defn.name,
+                    entity_id=doc["_id"],
+                    change_type="cascade_nullify",
+                    actor_id=actor_id,
+                    effective_actor_id=effective_actor,
+                    correlation_id=_correlation_id,
+                    changes=[
+                        FieldChange(
+                            field=field_name,
+                            old_value=doc[field_name],
+                            new_value=None,
+                        )
+                    ],
+                    method="relationship_target_deleted",
+                    method_metadata={
+                        "deleted_entity_type": entity_type,
+                        "deleted_entity_id": str(entity_id),
+                        "affected_field_names": [field_name],
+                    },
+                    timestamp=now,
                 )
+                record.previous_hash = prev_hash
+                record.current_hash = compute_hash(record)
+                prev_hash = record.current_hash
+                audit_records.append(record)
 
-                # Nullify the field on this affected entity
-                await collection.update_one(
-                    {"_id": doc["_id"]},
-                    {"$set": {field_name: None}},
-                )
-                total_updated += 1
+            # Queue per-(collection, field) batched update_many
+            affected_ids = [doc["_id"] for doc in affected_docs]
+            nullify_ops.append((collection, defn.name, field_name, affected_ids))
+            total_affected += len(affected_docs)
 
-            if affected_docs:
-                logger.info(
-                    "cascade_nullify: %s.%s — nullified %d refs to deleted %s %s",
-                    defn.name,
-                    field_name,
-                    len(affected_docs),
-                    entity_type,
-                    entity_id,
-                )
+    # Single insert_many for ALL cascade audit records (D5 in-memory batched)
+    if audit_records:
+        changes_coll = ChangeRecord.get_motor_collection()
+        change_docs = [r.model_dump(by_alias=True) for r in audit_records]
+        await changes_coll.insert_many(change_docs)
 
-    return total_updated
+    # Per-(collection, field) batched update_many for nullifications
+    for collection, defn_name, field_name, affected_ids in nullify_ops:
+        result = await collection.update_many(
+            {"_id": {"$in": affected_ids}},
+            {"$set": {field_name: None}},
+        )
+        if result.modified_count > 0:
+            logger.info(
+                "cascade_nullify: %s.%s — nullified %d refs to deleted %s %s",
+                defn_name,
+                field_name,
+                result.modified_count,
+                entity_type,
+                entity_id,
+            )
+
+    return total_affected

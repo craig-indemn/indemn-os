@@ -313,8 +313,13 @@ async def process_bulk_batch(spec_dict: dict, offset: int) -> dict:
         # bulk_update_tracked which emits per-entity ChangeRecord via in-memory
         # hash chain (D24: same audit shape for create + update + delete + cascade;
         # mirror bulk_save_tracked lines 312-337).
-        # Watch events remain silent for bulk updates (D4's scope is audit-only;
-        # event emission is orthogonal to audit completeness and not pinned in D1-D26).
+        #
+        # Watch event emission: NO (locked Session-36 Dev#3 as audit-only).
+        # bulk-update is administrative / migration (operator expects silent);
+        # bulk-delete via bulk_delete_tracked is also silent (symmetric);
+        # bulk-create via bulk_save_tracked IS noisy (ingestion path SHOULD
+        # trigger downstream associates). See bulk_update_tracked docstring
+        # for full rationale.
         if spec.operation == "update":
             if entities and spec.sets:
                 from kernel.entity.save import bulk_update_tracked

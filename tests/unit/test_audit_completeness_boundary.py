@@ -191,3 +191,38 @@ def test_audit_completeness_boundary_cli_command_registered():
     src = inspect.getsource(audit_commands)
     assert "completeness-boundary" in src
     assert "/api/_platform/audit/completeness-boundary" in src
+
+
+def test_boundary_startup_hook_in_api_app():
+    """Dev#2 (D2 strict reading): indemn-api startup pre-warms boundary cache.
+
+    The FastAPI startup event at `kernel/api/app.py::startup` calls
+    `get_audit_completeness_boundary()` after `init_database()` so the cache
+    is populated before serving traffic. Without this, the first caller would
+    pay the aggregation-query cost and the cache lifetime would start from
+    first-call rather than from-startup.
+    """
+    from kernel.api import app as api_app
+
+    src = inspect.getsource(api_app)
+    assert "get_audit_completeness_boundary" in src
+    # The pre-warm import is inside the startup function
+    assert "from kernel.changes.boundary import get_audit_completeness_boundary" in src
+    # The startup log includes the derived boundary value
+    assert "Audit-completeness boundary derived at startup" in src
+
+
+def test_boundary_startup_hook_in_temporal_worker():
+    """Dev#2 (D2 strict reading): indemn-temporal-worker main() pre-warms boundary cache.
+
+    Activities in this worker (process_bulk_batch via bulk_save_tracked /
+    bulk_delete_tracked / bulk_update_tracked) may consult the boundary;
+    deriving at startup ensures the cache is populated before workflows
+    dispatch.
+    """
+    from kernel.temporal import worker
+
+    src = inspect.getsource(worker)
+    assert "get_audit_completeness_boundary" in src
+    assert "from kernel.changes.boundary import get_audit_completeness_boundary" in src
+    assert "Audit-completeness boundary derived at startup" in src
