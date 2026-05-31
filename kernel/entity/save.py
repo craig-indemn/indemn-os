@@ -894,8 +894,17 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
     audit records give sub-piece 12 reconstruction the granularity it needs at
     trace.end_time.
 
-    Scope: SCALAR refs only. List-typed + polymorphic refs are Stage B B2
-    scope (sub-piece 13 cascade extension via D-D).
+    Scope (Stage B B2): DOMAIN-source scalar + list-typed + polymorphic refs.
+    - Scalar: `$set: None` (existing).
+    - List-typed (D28): `$pull` the dead id from the list; FieldChange
+      old_value=full original list, new_value=list minus the dead id (symmetric
+      with how `_compute_changes` records list-field UPDATES at save.py:439).
+    - Polymorphic (D9): clears the id-field + its target_type_field together in
+      ONE ChangeRecord with 2 FieldChanges; scanned for ANY deleted entity_type
+      (dynamic target, matched by the globally-unique dead id).
+    Kernel-entity-as-SOURCE cascade (e.g. Trace.entity_id) is intentionally OUT
+    per D29 — such refs are preserved as historical (like D17 EvaluationResult);
+    the D7 kernel `_relationship_field_targets` ClassVar lands in Session 38 / B5.
 
     Returns total number of documents updated across all collections.
     """
@@ -919,10 +928,24 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
 
     for defn in definitions:
         for field_name, field_def in defn.fields.items():
-            if not field_def.is_relationship:
+            # Classify the field. Polymorphic fields (is_polymorphic_relationship)
+            # carry is_relationship=False and have a DYNAMIC target named per-doc by
+            # `target_type_field` — so they are scanned for ANY deleted entity_type,
+            # matched by the globally-unique dead id. Scalar/list fields are scanned
+            # only when their fixed relationship_target == the deleted entity_type.
+            is_poly = field_def.is_polymorphic_relationship is True
+            if not (field_def.is_relationship or is_poly):
                 continue
-            if field_def.relationship_target != entity_type:
-                continue
+
+            if is_poly:
+                kind = "polymorphic"
+                type_field = field_def.target_type_field
+                projection = {"_id": 1, field_name: 1, type_field: 1}
+            else:
+                if field_def.relationship_target != entity_type:
+                    continue
+                kind = "list" if field_def.type == "list" else "scalar"
+                projection = {"_id": 1, field_name: 1}
 
             entity_cls = ENTITY_REGISTRY.get(defn.name)
             if entity_cls is None:
@@ -930,11 +953,11 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
 
             collection = entity_cls.get_motor_collection()
 
-            # Read affected entities (scalar refs; Stage B B2 extends for
-            # list-typed + polymorphic refs).
+            # `{field: dead_id}` matches scalar equality, list membership, AND the
+            # polymorphic id-field; the projection pulls the field(s) we audit.
             affected_docs = await collection.find(
                 {"org_id": org_id, field_name: entity_id},
-                {"_id": 1, field_name: 1},
+                projection,
             ).to_list(length=None)
 
             if not affected_docs:
@@ -943,6 +966,27 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
             # Build per-affected-entity audit records with in-memory hash chain
             # (mirror bulk_save_tracked lines 312-337 per D5).
             for doc in affected_docs:
+                if kind == "list":
+                    # D28: $pull the dead id; FieldChange old=full list, new=list minus id.
+                    old_list = doc.get(field_name) or []
+                    new_list = [x for x in old_list if x != entity_id]
+                    field_changes = [
+                        FieldChange(field=field_name, old_value=old_list, new_value=new_list)
+                    ]
+                    affected_field_names = [field_name]
+                elif kind == "polymorphic":
+                    # D9: clear id-field + type-field together in ONE record (2 FieldChanges).
+                    field_changes = [
+                        FieldChange(field=field_name, old_value=doc.get(field_name), new_value=None),
+                        FieldChange(field=type_field, old_value=doc.get(type_field), new_value=None),
+                    ]
+                    affected_field_names = [field_name, type_field]
+                else:  # scalar
+                    field_changes = [
+                        FieldChange(field=field_name, old_value=doc[field_name], new_value=None)
+                    ]
+                    affected_field_names = [field_name]
+
                 record = ChangeRecord(
                     id=ObjectId(),
                     org_id=org_id,
@@ -952,18 +996,12 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
                     actor_id=actor_id,
                     effective_actor_id=effective_actor,
                     correlation_id=_correlation_id,
-                    changes=[
-                        FieldChange(
-                            field=field_name,
-                            old_value=doc[field_name],
-                            new_value=None,
-                        )
-                    ],
+                    changes=field_changes,
                     method="relationship_target_deleted",
                     method_metadata={
                         "deleted_entity_type": entity_type,
                         "deleted_entity_id": str(entity_id),
-                        "affected_field_names": [field_name],
+                        "affected_field_names": affected_field_names,
                     },
                     timestamp=now,
                 )
@@ -972,9 +1010,15 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
                 prev_hash = record.current_hash
                 audit_records.append(record)
 
-            # Queue per-(collection, field) batched update_many
+            # Queue the per-(collection, field) batched update with the right operator.
             affected_ids = [doc["_id"] for doc in affected_docs]
-            nullify_ops.append((collection, defn.name, field_name, affected_ids))
+            if kind == "list":
+                update_doc = {"$pull": {field_name: entity_id}}
+            elif kind == "polymorphic":
+                update_doc = {"$set": {field_name: None, type_field: None}}
+            else:
+                update_doc = {"$set": {field_name: None}}
+            nullify_ops.append((collection, defn.name, field_name, affected_ids, update_doc))
             total_affected += len(affected_docs)
 
     # Single insert_many for ALL cascade audit records (D5 in-memory batched)
@@ -983,15 +1027,17 @@ async def cascade_nullify_references(entity_type: str, entity_id, org_id) -> int
         change_docs = [r.model_dump(by_alias=True) for r in audit_records]
         await changes_coll.insert_many(change_docs)
 
-    # Per-(collection, field) batched update_many for nullifications
-    for collection, defn_name, field_name, affected_ids in nullify_ops:
+    # Per-(collection, field) batched update for nullifications. The operator
+    # varies by field kind: $set:None (scalar), $pull (list, D28), $set both
+    # halves to None (polymorphic, D9).
+    for collection, defn_name, field_name, affected_ids, update_doc in nullify_ops:
         result = await collection.update_many(
             {"_id": {"$in": affected_ids}},
-            {"$set": {field_name: None}},
+            update_doc,
         )
         if result.modified_count > 0:
             logger.info(
-                "cascade_nullify: %s.%s — nullified %d refs to deleted %s %s",
+                "cascade_nullify: %s.%s — updated %d refs to deleted %s %s",
                 defn_name,
                 field_name,
                 result.modified_count,
